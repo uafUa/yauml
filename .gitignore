@@ -1,0 +1,18 @@
+# CMake build trees
+/build/
+/out/
+/cmake-build-*/
+
+# Qt Creator and IDE state
+CMakeLists.txt.user*
+/.idea/
+/.vscode/
+
+# Generated files
+compile_commands.json
+*.qmlc
+*.jsc
+
+# Platform artifacts
+.DS_Store
+Thumbs.db
