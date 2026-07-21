@@ -100,6 +100,18 @@ Item {
     Menu {
         id: connectorMenu
         title: qsTr("Relationship")
+        MenuItem { text: qsTr("Add bend point here"); onTriggered: canvas.addBendPointAtContextPosition() }
+        MenuItem {
+            text: qsTr("Remove bend point")
+            enabled: canvas.bendPointSelected
+            onTriggered: canvas.removeSelectedBendPoint()
+        }
+        MenuItem {
+            text: qsTr("Clear bend points")
+            enabled: canvas.selectedConnectorHasBendPoints
+            onTriggered: canvas.clearSelectedConnectorBendPoints()
+        }
+        MenuSeparator {}
         MenuItem { text: qsTr("Reconnect source…"); onTriggered: canvas.reconnectSource() }
         MenuItem { text: qsTr("Reconnect target…"); onTriggered: canvas.reconnectTarget() }
         MenuSeparator {}
@@ -121,7 +133,9 @@ Item {
         context: Qt.WindowShortcut
         enabled: root.visible && !editor.visible
                  && (canvas.selectedNodeCount > 0 || canvas.connectorSelected)
-        onActivated: canvas.connectorSelected
+        onActivated: canvas.bendPointSelected
+                     ? canvas.removeSelectedBendPoint()
+                     : canvas.connectorSelected
                      ? canvas.deleteSelectedConnector()
                      : canvas.removeSelectedPresentations()
     }

@@ -234,6 +234,25 @@ private:
   ConnectorAnchor m_after;
 };
 
+class UpdateConnectorBendPointsCommand final : public ProjectCommand {
+public:
+  UpdateConnectorBendPointsCommand(ProjectController *controller,
+                                   QString diagramId, QString connectorId,
+                                   QList<ConnectorBendPoint> before,
+                                   QList<ConnectorBendPoint> after,
+                                   const QString &description);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, const QList<ConnectorBendPoint> &bendPoints);
+
+  QString m_diagramId;
+  QString m_connectorId;
+  QList<ConnectorBendPoint> m_before;
+  QList<ConnectorBendPoint> m_after;
+};
+
 enum class ElementTextProperty { Name, Attribute, Operation, Literal };
 
 class EditElementTextCommand final : public ProjectCommand {

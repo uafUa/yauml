@@ -430,6 +430,30 @@ void MoveConnectorAnchorCommand::apply(ProjectData &project,
   }
 }
 
+UpdateConnectorBendPointsCommand::UpdateConnectorBendPointsCommand(
+    ProjectController *controller, QString diagramId, QString connectorId,
+    QList<ConnectorBendPoint> before, QList<ConnectorBendPoint> after,
+    const QString &description)
+    : ProjectCommand(controller, description),
+      m_diagramId(std::move(diagramId)), m_connectorId(std::move(connectorId)),
+      m_before(std::move(before)), m_after(std::move(after)) {}
+
+void UpdateConnectorBendPointsCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void UpdateConnectorBendPointsCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void UpdateConnectorBendPointsCommand::apply(
+    ProjectData &project, const QList<ConnectorBendPoint> &bendPoints) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    if (auto *connector = findConnector(*diagram, m_connectorId))
+      connector->bendPoints = bendPoints;
+  }
+}
+
 EditElementTextCommand::EditElementTextCommand(ProjectController *controller,
                                                QString elementId,
                                                ElementTextProperty property,

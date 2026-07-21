@@ -609,6 +609,74 @@ void ProjectController::updateConnectorAnchor(const QString &diagramId,
       this, diagramId, connectorId, source, before, after));
 }
 
+void ProjectController::insertConnectorBendPoint(const QString &diagramId,
+                                                 const QString &connectorId,
+                                                 int index, qreal x, qreal y) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *connector =
+      diagram ? findConnector(*diagram, connectorId) : nullptr;
+  if (!connector || index < 0 || index > connector->bendPoints.size() ||
+      !std::isfinite(x) || !std::isfinite(y))
+    return;
+  auto bendPoints = connector->bendPoints;
+  bendPoints.insert(index, {{x, y}, {}});
+  updateConnectorBendPoints(diagramId, connectorId, std::move(bendPoints),
+                            QStringLiteral("Add connector bend point"));
+}
+
+void ProjectController::moveConnectorBendPoint(const QString &diagramId,
+                                               const QString &connectorId,
+                                               int index, qreal x, qreal y) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *connector =
+      diagram ? findConnector(*diagram, connectorId) : nullptr;
+  if (!connector || index < 0 || index >= connector->bendPoints.size() ||
+      !std::isfinite(x) || !std::isfinite(y))
+    return;
+  auto bendPoints = connector->bendPoints;
+  bendPoints[index].position = {x, y};
+  updateConnectorBendPoints(diagramId, connectorId, std::move(bendPoints),
+                            QStringLiteral("Move connector bend point"));
+}
+
+void ProjectController::removeConnectorBendPoint(const QString &diagramId,
+                                                 const QString &connectorId,
+                                                 int index) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *connector =
+      diagram ? findConnector(*diagram, connectorId) : nullptr;
+  if (!connector || index < 0 || index >= connector->bendPoints.size())
+    return;
+  auto bendPoints = connector->bendPoints;
+  bendPoints.removeAt(index);
+  updateConnectorBendPoints(diagramId, connectorId, std::move(bendPoints),
+                            QStringLiteral("Remove connector bend point"));
+}
+
+void ProjectController::clearConnectorBendPoints(const QString &diagramId,
+                                                 const QString &connectorId) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *connector =
+      diagram ? findConnector(*diagram, connectorId) : nullptr;
+  if (!connector || connector->bendPoints.isEmpty())
+    return;
+  updateConnectorBendPoints(diagramId, connectorId, {},
+                            QStringLiteral("Clear connector bend points"));
+}
+
+void ProjectController::updateConnectorBendPoints(
+    const QString &diagramId, const QString &connectorId,
+    QList<ConnectorBendPoint> bendPoints, const QString &description) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *connector =
+      diagram ? findConnector(*diagram, connectorId) : nullptr;
+  if (!connector || connector->bendPoints == bendPoints)
+    return;
+  pushCommand(std::make_unique<UpdateConnectorBendPointsCommand>(
+      this, diagramId, connectorId, connector->bendPoints,
+      std::move(bendPoints), description));
+}
+
 void ProjectController::editText(const QString &objectId, const QString &field,
                                  int index, const QString &value) {
   const QString trimmed = value.trimmed();

@@ -1,6 +1,6 @@
 # uuml Productization Plan
 
-Status: command foundation and Phase 3.1–3.2 implemented; Phase 3.3 is next
+Status: command foundation and Phase 3.1–3.3 implemented; Phase 3.4 is next
 
 The product owner accepted the MVP on 2026-07-21. This plan turns the broader
 architecture roadmap into bounded, testable delivery tranches. MVP audit notes
@@ -53,12 +53,17 @@ history memory grow with total project size rather than the size of each edit.
 - Context creation retains the clicked diagram position, while explicit
   diagram and relationship deletion APIs avoid focus-derived targets.
 
-### 3.3 Connector editing
+### 3.3 Connector editing — implemented
 
-- Add persisted bend points and full connector editing.
-- Preserve endpoint and bend-point state through move, resize, save, and
-  undo/redo.
-- Add geometry and command-cycle regression tests.
+- Connector presentations own ordered, persisted bend points with retained
+  unknown fields for forward-compatible files.
+- Context menus and connector double-click add bend points; selected bend
+  handles support direct drag, Delete, individual removal, and route clearing.
+- Polyline-aware rendering, arrowheads, labels, hit testing, and fit-to-content
+  follow edited routes.
+- Endpoint and bend-point state is preserved through node move/resize,
+  reconnect, save/load, and command undo/redo, with core and canvas regression
+  tests.
 
 ### 3.4 Arrangement tools
 

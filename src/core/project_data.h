@@ -2,6 +2,7 @@
 
 #include <QJsonObject>
 #include <QList>
+#include <QPointF>
 #include <QRectF>
 #include <QString>
 #include <QStringList>
@@ -62,11 +63,19 @@ struct ConnectorAnchor {
   bool operator==(const ConnectorAnchor &) const = default;
 };
 
+struct ConnectorBendPoint {
+  QPointF position;
+  QJsonObject extra;
+
+  bool operator==(const ConnectorBendPoint &) const = default;
+};
+
 struct ConnectorPresentation {
   QString id;
   QString relationshipId;
   ConnectorAnchor sourceAnchor;
   ConnectorAnchor targetAnchor;
+  QList<ConnectorBendPoint> bendPoints;
   QJsonObject extra;
 
   bool operator==(const ConnectorPresentation &) const = default;

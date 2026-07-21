@@ -9,6 +9,8 @@
 #include <QSaveFile>
 #include <QSet>
 #include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace uuml {
 namespace {
@@ -117,6 +119,36 @@ ConnectorAnchor readAnchor(const QJsonValue &value, const QString &name,
   return anchor;
 }
 
+QJsonObject bendPointToJson(const ConnectorBendPoint &bendPoint) {
+  QJsonObject object = bendPoint.extra;
+  object.insert(QStringLiteral("x"), bendPoint.position.x());
+  object.insert(QStringLiteral("y"), bendPoint.position.y());
+  return object;
+}
+
+ConnectorBendPoint readBendPoint(const QJsonValue &value,
+                                 const QString &connectorId,
+                                 QList<Diagnostic> &diagnostics) {
+  ConnectorBendPoint bendPoint;
+  const qreal invalidCoordinate = std::numeric_limits<qreal>::quiet_NaN();
+  if (!value.isObject()) {
+    diagnostics.append(error(QStringLiteral("validation"),
+                             QStringLiteral("Connector bend point must be an "
+                                            "object"),
+                             connectorId));
+    bendPoint.position = {invalidCoordinate, invalidCoordinate};
+    return bendPoint;
+  }
+
+  const QJsonObject object = value.toObject();
+  bendPoint.position = {
+      object.value(QStringLiteral("x")).toDouble(invalidCoordinate),
+      object.value(QStringLiteral("y")).toDouble(invalidCoordinate)};
+  bendPoint.extra =
+      withoutKeys(object, {QStringLiteral("x"), QStringLiteral("y")});
+  return bendPoint;
+}
+
 QJsonObject elementToJson(const ModelElement &element) {
   QJsonObject object = element.extra;
   object.insert(QStringLiteral("id"), element.id);
@@ -172,6 +204,14 @@ QJsonObject connectorToJson(const ConnectorPresentation &connector) {
                   anchorToJson(connector.targetAnchor));
   else
     object.remove(QStringLiteral("targetAnchor"));
+  if (!connector.bendPoints.isEmpty()) {
+    QJsonArray bendPoints;
+    for (const auto &bendPoint : connector.bendPoints)
+      bendPoints.append(bendPointToJson(bendPoint));
+    object.insert(QStringLiteral("bendPoints"), bendPoints);
+  } else {
+    object.remove(QStringLiteral("bendPoints"));
+  }
   return object;
 }
 
@@ -462,10 +502,23 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
       connector.targetAnchor = readAnchor(
           connectorObject.value(QStringLiteral("targetAnchor")),
           QStringLiteral("target"), connector.id, outcome.diagnostics);
+      const QJsonValue bendPointsValue =
+          connectorObject.value(QStringLiteral("bendPoints"));
+      if (!bendPointsValue.isUndefined() && !bendPointsValue.isArray()) {
+        outcome.diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("Connector bendPoints must be an array"),
+                  connector.id));
+      } else {
+        for (const auto &bendPointValue : bendPointsValue.toArray())
+          connector.bendPoints.append(
+              readBendPoint(bendPointValue, connector.id, outcome.diagnostics));
+      }
       connector.extra = withoutKeys(
           connectorObject,
           {QStringLiteral("id"), QStringLiteral("relationshipId"),
-           QStringLiteral("sourceAnchor"), QStringLiteral("targetAnchor")});
+           QStringLiteral("sourceAnchor"), QStringLiteral("targetAnchor"),
+           QStringLiteral("bendPoints")});
       diagram.connectors.append(connector);
     }
     diagram.extra = withoutKeys(
@@ -671,6 +724,15 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
       };
       checkAnchor(connector.sourceAnchor, QStringLiteral("source"));
       checkAnchor(connector.targetAnchor, QStringLiteral("target"));
+      for (const auto &bendPoint : connector.bendPoints) {
+        if (!std::isfinite(bendPoint.position.x()) ||
+            !std::isfinite(bendPoint.position.y()))
+          diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral("Connector bend point coordinates must be "
+                                   "finite"),
+                    connector.id));
+      }
     }
   }
   return diagnostics;

@@ -24,6 +24,10 @@ class DiagramCanvas : public QQuickItem {
                  canvasSelectionChanged)
   Q_PROPERTY(bool connectorSelected READ connectorSelected NOTIFY
                  canvasSelectionChanged)
+  Q_PROPERTY(bool bendPointSelected READ bendPointSelected NOTIFY
+                 canvasSelectionChanged)
+  Q_PROPERTY(bool selectedConnectorHasBendPoints READ
+                 selectedConnectorHasBendPoints NOTIFY canvasSelectionChanged)
   Q_PROPERTY(QString reconnectPrompt READ reconnectPrompt NOTIFY
                  canvasSelectionChanged)
 
@@ -37,6 +41,8 @@ public:
   qreal zoom() const;
   int selectedNodeCount() const;
   bool connectorSelected() const;
+  bool bendPointSelected() const;
+  bool selectedConnectorHasBendPoints() const;
   QString reconnectPrompt() const;
 
   Q_INVOKABLE void fitToContent();
@@ -46,6 +52,9 @@ public:
   Q_INVOKABLE void reconnectSource();
   Q_INVOKABLE void reconnectTarget();
   Q_INVOKABLE void cancelReconnect();
+  Q_INVOKABLE void addBendPointAtContextPosition();
+  Q_INVOKABLE void removeSelectedBendPoint();
+  Q_INVOKABLE void clearSelectedConnectorBendPoints();
   Q_INVOKABLE void removeSelectedPresentations();
   Q_INVOKABLE void deleteSelectedConnector();
   Q_INVOKABLE void clearCanvasSelection();
@@ -80,12 +89,14 @@ private:
     Pan,
     Lasso,
     MoveSourcePort,
-    MoveTargetPort
+    MoveTargetPort,
+    MoveBendPoint
   };
   enum class ReconnectEndpoint { None, Source, Target };
   struct ConnectorEndpoints {
     QPointF source;
     QPointF target;
+    QVector<QPointF> bendPoints;
     bool valid = false;
   };
   struct TextHit {
@@ -111,8 +122,14 @@ private:
   QRectF endpointNodeRect(const ConnectorPresentation &connector,
                           bool source) const;
   bool hitSelectedPort(const QPointF &scenePoint, bool &source) const;
+  int hitBendPoint(const ConnectorPresentation &connector,
+                   const QPointF &scenePoint) const;
+  int nearestConnectorSegment(const ConnectorPresentation &connector,
+                              const QPointF &scenePoint) const;
   void updatePortPreview(const QPointF &scenePoint);
   void commitPortPreview();
+  void updateBendPointPreview(const QPointF &scenePoint);
+  void commitBendPointPreview();
   void commitGeometryPreview();
   void updateLassoSelection(const QPointF &scenePoint);
   void finishLassoSelection();
@@ -143,6 +160,7 @@ private:
   QSet<QString> m_lassoBaseNodes;
   QStringList m_lassoBaseNodeOrder;
   QString m_lassoBaseConnector;
+  int m_lassoBaseBendPoint = -1;
   ReconnectEndpoint m_lassoBaseReconnectEndpoint = ReconnectEndpoint::None;
   Qt::KeyboardModifiers m_lassoModifiers = Qt::NoModifier;
   bool m_lassoActive = false;
@@ -151,6 +169,10 @@ private:
   QHash<QString, QRectF> m_previewGeometry;
   ConnectorAnchor m_portPreview;
   bool m_portPreviewActive = false;
+  QList<ConnectorBendPoint> m_bendPointPreview;
+  int m_selectedBendPoint = -1;
+  int m_contextSegment = -1;
+  bool m_bendPointPreviewActive = false;
   bool m_sceneDirty = true;
   // Selection-only changes rebuild colored geometry but can retain the
   // expensive text atlases. Model and geometry changes set both dirty flags.

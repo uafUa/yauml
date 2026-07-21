@@ -69,6 +69,7 @@ private slots:
   void lassoSelectsAndMovesMultipleNodesAsOneCommand();
   void lassoModifiersAddAndToggleSelection();
   void contextCreationUsesTheClickedDiagramAndPosition();
+  void connectorBendPointCanBeAddedMovedAndRemoved();
 };
 
 void DiagramCanvasTests::lassoSelectsAndMovesMultipleNodesAsOneCommand() {
@@ -131,6 +132,53 @@ void DiagramCanvasTests::contextCreationUsesTheClickedDiagramAndPosition() {
   // (670, 370). Context creation centers the standard node at that point.
   QCOMPARE(diagram.nodes.first().geometry, QRectF(560.0, 310.0, 220.0, 120.0));
   QCOMPARE(canvas.selectedNodeCount(), 1);
+}
+
+void DiagramCanvasTests::connectorBendPointCanBeAddedMovedAndRemoved() {
+  ProjectController controller;
+  populate(controller, 2);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+  const QString connectorId = controller.createRelationship(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("association"));
+  QVERIFY(!connectorId.isEmpty());
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  QSignalSpy menuRequests(&canvas, &DiagramCanvas::contextMenuRequested);
+
+  // Node edges are at scene x=270 and x=300. The default pan adds 30 pixels,
+  // so this right-click targets the connector midpoint in view coordinates.
+  canvas.rightClick({315, 140});
+  QCOMPARE(menuRequests.constLast().at(0).toString(),
+           QStringLiteral("connector"));
+  canvas.addBendPointAtContextPosition();
+  const auto connector = [&]() {
+    return findConnector(controller.data().diagrams.first(), connectorId);
+  };
+  QCOMPARE(connector()->bendPoints.size(), 1);
+  QCOMPARE(connector()->bendPoints.first().position, QPointF(285.0, 110.0));
+  QVERIFY(canvas.bendPointSelected());
+
+  canvas.drag({315, 140}, {315, 200});
+  QCOMPARE(connector()->bendPoints.first().position, QPointF(285.0, 170.0));
+  QCOMPARE(controller.undoText(), QStringLiteral("Move connector bend point"));
+  controller.undo();
+  QCOMPARE(connector()->bendPoints.first().position, QPointF(285.0, 110.0));
+  controller.redo();
+  QCOMPARE(connector()->bendPoints.first().position, QPointF(285.0, 170.0));
+
+  // Hit testing follows both polyline segments rather than the obsolete direct
+  // line between endpoints.
+  canvas.rightClick({307.5, 170});
+  QCOMPARE(menuRequests.constLast().at(0).toString(),
+           QStringLiteral("connector"));
+  canvas.rightClick({315, 200});
+  QVERIFY(canvas.bendPointSelected());
+  canvas.removeSelectedBendPoint();
+  QVERIFY(connector()->bendPoints.isEmpty());
+  controller.undo();
+  QCOMPARE(connector()->bendPoints.first().position, QPointF(285.0, 170.0));
 }
 
 QTEST_MAIN(DiagramCanvasTests)

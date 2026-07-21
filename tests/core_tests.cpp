@@ -55,6 +55,7 @@ private slots:
   void relationshipAndDiagramDeletionUndoRedo();
   void relationshipTypesAndPresentationRemoval();
   void connectorAnchorUndoRedo();
+  void connectorBendPointsUndoRedo();
   void multipleDiagramWorkspace();
   void detachedWindowModelAndGeometryRemainStable();
   void closingAllDetachedWindowsReturnsTheirDiagrams();
@@ -116,6 +117,11 @@ void CoreTests::deterministicRoundTrip() {
                                       true);
   connector.targetAnchor.side = ConnectorSide::Bottom;
   connector.targetAnchor.offset = 0.75;
+  ConnectorBendPoint bendPoint;
+  bendPoint.position = {180.5, 95.25};
+  bendPoint.extra.insert(QStringLiteral("futureBendField"),
+                         QStringLiteral("retained"));
+  connector.bendPoints.append(bendPoint);
   project.diagrams[0].connectors.append(connector);
 
   const auto firstSave = ProjectSerializer::save(temporary.path(), project);
@@ -438,6 +444,76 @@ void CoreTests::connectorAnchorUndoRedo() {
   controller.redo();
   QVERIFY(connector()->sourceAnchor.side == ConnectorSide::Right);
   QCOMPARE(connector()->sourceAnchor.offset, 0.25);
+}
+
+void CoreTests::connectorBendPointsUndoRedo() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  controller.addElement(QStringLiteral("class"), diagramId);
+  controller.addElement(QStringLiteral("class"), diagramId);
+  const auto nodes = controller.data().diagrams.first().nodes;
+  const QString connectorId = controller.createRelationship(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("association"));
+  QVERIFY(!connectorId.isEmpty());
+  const auto connector = [&]() {
+    return findConnector(controller.data().diagrams.first(), connectorId);
+  };
+
+  controller.insertConnectorBendPoint(diagramId, connectorId, 0, 285.0, 210.0);
+  QCOMPARE(connector()->bendPoints.size(), 1);
+  QCOMPARE(connector()->bendPoints.first().position, QPointF(285.0, 210.0));
+  QCOMPARE(controller.undoText(), QStringLiteral("Add connector bend point"));
+
+  controller.insertConnectorBendPoint(diagramId, connectorId, 1, 340.0, 250.0);
+  const auto twoBends = connector()->bendPoints;
+  QCOMPARE(twoBends.size(), 2);
+  controller.undo();
+  QCOMPARE(connector()->bendPoints.size(), 1);
+  controller.redo();
+  QCOMPARE(connector()->bendPoints, twoBends);
+
+  controller.moveConnectorBendPoint(diagramId, connectorId, 0, 270.0, 180.0);
+  QCOMPARE(connector()->bendPoints.first().position, QPointF(270.0, 180.0));
+  controller.undo();
+  QCOMPARE(connector()->bendPoints, twoBends);
+  controller.redo();
+  const auto movedBends = connector()->bendPoints;
+
+  controller.removeConnectorBendPoint(diagramId, connectorId, 1);
+  QCOMPARE(connector()->bendPoints.size(), 1);
+  controller.undo();
+  QCOMPARE(connector()->bendPoints, movedBends);
+
+  controller.clearConnectorBendPoints(diagramId, connectorId);
+  QVERIFY(connector()->bendPoints.isEmpty());
+  controller.undo();
+  QCOMPARE(connector()->bendPoints, movedBends);
+
+  // Bend points use diagram coordinates. Moving or resizing either endpoint
+  // must not rewrite the connector's manually arranged route.
+  const QRectF sourceGeometry = nodes.first().geometry;
+  controller.updateNodeGeometry(
+      diagramId, nodes.first().id, sourceGeometry.x() + 40.0,
+      sourceGeometry.y() + 25.0, sourceGeometry.width() + 10.0,
+      sourceGeometry.height());
+  QCOMPARE(connector()->bendPoints, movedBends);
+  controller.undo();
+  QCOMPARE(connector()->bendPoints, movedBends);
+
+  const QString thirdElement =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const auto &currentNodes = controller.data().diagrams.first().nodes;
+  const auto thirdNode =
+      std::find_if(currentNodes.cbegin(), currentNodes.cend(),
+                   [&](const NodePresentation &node) {
+                     return node.elementId == thirdElement;
+                   });
+  QVERIFY(thirdNode != currentNodes.cend());
+  controller.reconnectRelationship(diagramId, connectorId, thirdNode->id,
+                                   false);
+  QCOMPARE(connector()->bendPoints, movedBends);
+  controller.undo();
+  QCOMPARE(connector()->bendPoints, movedBends);
 }
 
 void CoreTests::relationshipTypesAndPresentationRemoval() {

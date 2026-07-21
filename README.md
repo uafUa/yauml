@@ -15,7 +15,8 @@ The MVP includes:
 - an error-triggered structured log pop-up;
 - undo and redo for model and presentation mutations;
 - automatic connector presentation when both relationship endpoints are placed,
-  with edge attachment and draggable, persisted perimeter ports;
+  with edge attachment, draggable perimeter ports, and persisted editable bend
+  points;
 - deterministic, directory-based JSON5 persistence with validation, unknown-field
   retention, and interrupted-save recovery;
 - a headless `validate` command using the same core as the GUI.
@@ -102,6 +103,9 @@ Validate a project without opening the GUI:
 - Drag any selected element to move the complete selection as one undoable
   command. Press `Delete` to remove selected presentations from the diagram;
   deleting a selected connector removes its relationship.
+- Right-click a connector segment and choose `Add bend point here`, or
+  double-click a segment. Drag a selected bend handle to shape the route;
+  `Delete` removes the selected bend before it removes the relationship.
 - Use `Ctrl+0` to fit the active diagram. Element creation shortcuts are
   `Ctrl+Shift+P/C/S/E`; relationship shortcuts are `Ctrl+Alt+D/G/A`.
 

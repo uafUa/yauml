@@ -102,6 +102,17 @@ public:
                                          const QString &connectorId,
                                          bool source, const QString &side,
                                          qreal offset);
+  Q_INVOKABLE void insertConnectorBendPoint(const QString &diagramId,
+                                            const QString &connectorId,
+                                            int index, qreal x, qreal y);
+  Q_INVOKABLE void moveConnectorBendPoint(const QString &diagramId,
+                                          const QString &connectorId, int index,
+                                          qreal x, qreal y);
+  Q_INVOKABLE void removeConnectorBendPoint(const QString &diagramId,
+                                            const QString &connectorId,
+                                            int index);
+  Q_INVOKABLE void clearConnectorBendPoints(const QString &diagramId,
+                                            const QString &connectorId);
   Q_INVOKABLE void editText(const QString &objectId, const QString &field,
                             int index, const QString &value);
 
@@ -128,6 +139,10 @@ private:
   QString normalizedLocalPath(const QUrl &url) const;
   ModelElement *selectedElement(ProjectData &project) const;
   const ModelElement *selectedElement() const;
+  void updateConnectorBendPoints(const QString &diagramId,
+                                 const QString &connectorId,
+                                 QList<ConnectorBendPoint> bendPoints,
+                                 const QString &description);
 
   ProjectData m_data;
   QString m_projectPath;
