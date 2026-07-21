@@ -1,6 +1,7 @@
 #include "core/workspace_controller.h"
 
 #include "core/project_controller.h"
+#include "ui/ui_theme.h"
 
 #include <QCoreApplication>
 #include <QCursor>
@@ -218,12 +219,13 @@ void WorkspaceController::startDiagramDrag(const QString &diagramId) {
   QPixmap ghost(190, 34);
   ghost.fill(Qt::transparent);
   {
+    const auto &palette = ui::uiPalette();
     QPainter painter(&ghost);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QColor(QStringLiteral("#8aa9cc")));
-    painter.setBrush(QColor(QStringLiteral("#e2efff")));
+    painter.setPen(palette.dragGhostBorder);
+    painter.setBrush(palette.dragGhostFill);
     painter.drawRoundedRect(ghost.rect().adjusted(0, 0, -1, -1), 5, 5);
-    painter.setPen(QColor(QStringLiteral("#203548")));
+    painter.setPen(palette.dragGhostText);
     painter.drawText(ghost.rect().adjusted(10, 0, -10, 0),
                      Qt::AlignVCenter | Qt::AlignLeft,
                      m_project->diagramName(diagramId));
@@ -234,10 +236,11 @@ void WorkspaceController::startDiagramDrag(const QString &diagramId) {
   QPixmap detachCursor(24, 24);
   detachCursor.fill(Qt::transparent);
   {
+    const auto &palette = ui::uiPalette();
     QPainter painter(&detachCursor);
     painter.setRenderHint(QPainter::Antialiasing);
-    painter.setPen(QPen(QColor(QStringLiteral("#1769d2")), 2));
-    painter.setBrush(QColor(QStringLiteral("#e2efff")));
+    painter.setPen(QPen(palette.accent, 2));
+    painter.setBrush(palette.dragGhostFill);
     painter.drawRoundedRect(QRect(2, 2, 19, 19), 4, 4);
     painter.drawLine(8, 16, 17, 7);
     painter.drawLine(11, 7, 17, 7);

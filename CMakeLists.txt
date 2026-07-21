@@ -13,6 +13,19 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Test)
 qt_standard_project_setup(REQUIRES 6.8)
 
+add_library(uuml_theme STATIC
+    src/ui/ui_theme.cpp
+    src/ui/ui_theme.h
+)
+target_include_directories(uuml_theme PUBLIC src)
+target_link_libraries(uuml_theme PUBLIC Qt6::Core Qt6::Gui)
+
+if(MSVC)
+    target_compile_options(uuml_theme PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(uuml_theme PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 add_library(uuml_core STATIC
     src/core/diagnostic_model.cpp
     src/core/diagnostic_model.h
@@ -35,7 +48,7 @@ add_library(uuml_core STATIC
 )
 
 target_include_directories(uuml_core PUBLIC src)
-target_link_libraries(uuml_core PUBLIC Qt6::Core Qt6::Gui)
+target_link_libraries(uuml_core PUBLIC uuml_theme Qt6::Core Qt6::Gui)
 
 add_library(uuml_ui_support STATIC
     src/ui/text_occlusion.cpp
@@ -183,6 +196,10 @@ if(BUILD_TESTING)
         COMMAND uuml validate
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/performance.uuml)
     add_test(NAME uuml_ui_smoke COMMAND uuml --smoke-test)
+    add_test(NAME uuml_color_literal_guard
+        COMMAND ${CMAKE_COMMAND}
+            -DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
+            -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_color_literals.cmake)
     if(WIN32)
         set_tests_properties(uuml_canvas_tests uuml_ui_smoke PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_QUICK_BACKEND=software")

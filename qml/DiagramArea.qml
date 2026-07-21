@@ -14,8 +14,8 @@ Rectangle {
     property string currentDiagramId: diagramIds.length > 0 ? diagramIds[0] : ""
     readonly property bool containsActiveDiagram:
         diagramIds.indexOf(workspaceController.activeDiagramId) >= 0
-    color: "#f4f6f8"
-    border.color: "#1769d2"
+    color: uiTheme.windowBackground
+    border.color: uiTheme.accent
     border.width: containsActiveDiagram ? 2 : 0
 
     function diagramIdFromDrop(drop) {
@@ -77,8 +77,8 @@ Rectangle {
             id: tabStrip
             Layout.fillWidth: true
             Layout.preferredHeight: 38
-            color: "#e7ecf1"
-            border.color: "#c5ced7"
+            color: uiTheme.tabStrip
+            border.color: uiTheme.tabStripBorder
 
             Flickable {
                 id: tabsFlickable
@@ -102,9 +102,9 @@ Rectangle {
                             width: Math.max(150, tabLabel.implicitWidth + 48)
                             height: tabsRow.height
                             color: workspaceController.activeDiagramId === diagramId
-                                   ? "#d9eaff"
-                                   : root.currentDiagramId === diagramId ? "#ffffff" : "#dfe5eb"
-                            border.color: "#b9c4ce"
+                                   ? uiTheme.activeTab
+                                   : root.currentDiagramId === diagramId ? uiTheme.surface : uiTheme.inactiveTab
+                            border.color: uiTheme.controlBorder
 
                             Label {
                                 id: tabLabel
@@ -222,7 +222,7 @@ Rectangle {
         anchors.centerIn: parent
         visible: root.diagramIds.length === 0
         text: qsTr("Drag a diagram tab here")
-        color: "#687684"
+        color: uiTheme.emptyStateText
         font.pixelSize: 18
     }
 }

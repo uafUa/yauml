@@ -167,7 +167,7 @@ ApplicationWindow {
                 Rectangle {
                     Layout.fillWidth: true
                     Layout.preferredHeight: 42
-                    color: "#e8edf2"
+                    color: uiTheme.panelHeader
                     RowLayout {
                         anchors.fill: parent
                         spacing: 4
@@ -232,8 +232,8 @@ ApplicationWindow {
                                          : objectId === projectController.selectedId
                                            && kind === projectController.selectedKind)
                         background: Rectangle {
-                            color: treeDelegate.highlighted ? "#1769d2"
-                                 : treeDelegate.hovered ? "#edf3f8" : "transparent"
+                            color: treeDelegate.highlighted ? uiTheme.accent
+                                 : treeDelegate.hovered ? uiTheme.hoverBackground : "transparent"
                         }
                         onClicked: {
                             if (kind !== "root")
@@ -282,13 +282,13 @@ ApplicationWindow {
                         padding: 10
                         text: qsTr("Selected element properties")
                         font.bold: true
-                        background: Rectangle { color: "#e8edf2" }
+                        background: Rectangle { color: uiTheme.panelHeader }
                     }
                     Label {
                         Layout.leftMargin: 10
                         text: projectController.selectedKind.length > 0
                               ? projectController.selectedType : qsTr("Nothing selected")
-                        color: "#64717d"
+                        color: uiTheme.mutedText
                     }
                     Label { Layout.leftMargin: 10; text: qsTr("Name"); visible: projectController.selectedKind.length > 0 }
                     TextField {
@@ -312,7 +312,7 @@ ApplicationWindow {
                         visible: projectController.selectedKind === "element" && (projectController.selectedType === "class" || projectController.selectedType === "struct")
                         text: projectController.selectedAttributes
                         wrapMode: TextEdit.NoWrap
-                        background: Rectangle { color: "white"; border.color: "#b9c4ce"; radius: 3 }
+                        background: Rectangle { color: uiTheme.surface; border.color: uiTheme.controlBorder; radius: 3 }
                     }
                     RowLayout {
                         Layout.alignment: Qt.AlignRight
@@ -339,7 +339,7 @@ ApplicationWindow {
                         visible: projectController.selectedKind === "element" && (projectController.selectedType === "class" || projectController.selectedType === "struct")
                         text: projectController.selectedOperations
                         wrapMode: TextEdit.NoWrap
-                        background: Rectangle { color: "white"; border.color: "#b9c4ce"; radius: 3 }
+                        background: Rectangle { color: uiTheme.surface; border.color: uiTheme.controlBorder; radius: 3 }
                     }
                     RowLayout {
                         Layout.alignment: Qt.AlignRight
@@ -366,7 +366,7 @@ ApplicationWindow {
                         visible: projectController.selectedKind === "element" && projectController.selectedType === "enumeration"
                         text: projectController.selectedLiterals
                         wrapMode: TextEdit.NoWrap
-                        background: Rectangle { color: "white"; border.color: "#b9c4ce"; radius: 3 }
+                        background: Rectangle { color: uiTheme.surface; border.color: uiTheme.controlBorder; radius: 3 }
                     }
                     RowLayout {
                         Layout.alignment: Qt.AlignRight
@@ -440,8 +440,8 @@ ApplicationWindow {
         padding: 0
 
         background: Rectangle {
-            color: "#ffffff"
-            border.color: "#8f9ba6"
+            color: uiTheme.surface
+            border.color: uiTheme.overlayBorder
             radius: 5
         }
 
@@ -473,9 +473,9 @@ ApplicationWindow {
                     required property date timestamp
                     width: ListView.view.width
                     height: Math.max(34, logText.implicitHeight + 12)
-                    color: severity === "error" ? "#fff0f0"
-                         : severity === "warning" ? "#fff8e5"
-                         : index % 2 ? "#f7f9fb" : "#ffffff"
+                    color: severity === "error" ? uiTheme.errorRow
+                         : severity === "warning" ? uiTheme.warningRow
+                         : index % 2 ? uiTheme.alternateRow : uiTheme.surface
                     Label {
                         id: logText
                         anchors.left: parent.left
@@ -485,7 +485,7 @@ ApplicationWindow {
                         text: timestamp.toLocaleTimeString(Qt.locale(), "HH:mm:ss")
                               + "  [" + severity.toUpperCase() + "/" + category + "]  " + message
                         wrapMode: Text.Wrap
-                        color: "#263238"
+                        color: uiTheme.bodyText
                     }
                 }
             }

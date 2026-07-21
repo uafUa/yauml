@@ -2,6 +2,7 @@
 #include "core/project_serializer.h"
 #include "core/workspace_controller.h"
 #include "ui/diagram_canvas.h"
+#include "ui/ui_theme.h"
 
 #include <QCoreApplication>
 #include <QFileInfo>
@@ -69,6 +70,7 @@ int main(int argc, char *argv[]) {
 
   uuml::ProjectController project;
   uuml::WorkspaceController workspace(&project, true);
+  uuml::ui::UiTheme uiTheme;
   if (application.arguments().size() > 1) {
     const QString candidate = application.arguments().at(1);
     if (!candidate.startsWith(u'-'))
@@ -81,6 +83,8 @@ int main(int argc, char *argv[]) {
                                            &project);
   engine.rootContext()->setContextProperty(
       QStringLiteral("workspaceController"), &workspace);
+  engine.rootContext()->setContextProperty(QStringLiteral("uiTheme"),
+                                           &uiTheme);
   QObject::connect(
       &engine, &QQmlApplicationEngine::objectCreationFailed, &application,
       [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);

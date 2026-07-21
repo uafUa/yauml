@@ -3,6 +3,7 @@
 #include "core/project_controller.h"
 #include "ui/text_occlusion.h"
 #include "ui/triangle_batch.h"
+#include "ui/ui_theme.h"
 
 #include <QFontInfo>
 #include <QGuiApplication>
@@ -185,18 +186,18 @@ ConnectorAnchor anchorAtPerimeterPoint(const QRectF &rect,
   return anchor;
 }
 
-QColor elementColor(ElementType type) {
+const QColor &elementColor(ElementType type, const ui::UiPalette &palette) {
   switch (type) {
   case ElementType::Package:
-    return QColor(QStringLiteral("#fff1c2"));
+    return palette.packageFill;
   case ElementType::Class:
-    return QColor(QStringLiteral("#f8fbff"));
+    return palette.classFill;
   case ElementType::Struct:
-    return QColor(QStringLiteral("#eefaf1"));
+    return palette.structFill;
   case ElementType::Enumeration:
-    return QColor(QStringLiteral("#f7efff"));
+    return palette.enumerationFill;
   }
-  return Qt::white;
+  return palette.surface;
 }
 
 void appendVertex(QVector<QSGGeometry::ColoredPoint2D> &vertices,
@@ -415,7 +416,7 @@ QSGGeometryNode *buildGridGeometry(const QSizeF &viewportSize,
 
   const qreal pixelWidth = 1.0 / devicePixelRatio;
   const qreal halfPixel = pixelWidth / 2.0;
-  const QColor color(QStringLiteral("#dce2e8"));
+  const QColor &color = ui::uiPalette().canvasGrid;
   vertices.reserve(static_cast<qsizetype>(
       std::max<qint64>(0, lastColumn - firstColumn + 1) * 6 +
       std::max<qint64>(0, lastRow - firstRow + 1) * 6));
@@ -667,7 +668,7 @@ public:
     }
     QVector<QSGGeometry::ColoredPoint2D> vertices;
     appendRect(vertices, QRectF(QPointF(), size),
-               QColor(QStringLiteral("#f4f6f8")));
+               ui::uiPalette().windowBackground);
     m_background = createColoredNode(vertices);
     insertChildNodeBefore(m_background, m_grid ? static_cast<QSGNode *>(m_grid)
                                                : m_transform);
@@ -744,18 +745,19 @@ private:
 
 QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
                             int detail) {
+  const auto &palette = ui::uiPalette();
   QVector<QSGGeometry::ColoredPoint2D> vertices;
   vertices.reserve(snapshot.nodes.size() * 48 +
                    snapshot.connectors.size() * 64);
 
   if (snapshot.lassoVisible)
-    appendRect(vertices, snapshot.lassoRect, QColor(23, 105, 210, 28));
+    appendRect(vertices, snapshot.lassoRect, palette.selectionOverlay);
 
   for (const auto &connector : snapshot.connectors) {
     if (connector.points.size() < 2)
       continue;
-    const QColor color(connector.selected ? QStringLiteral("#1769d2")
-                                          : QStringLiteral("#52606d"));
+    const QColor &color =
+        connector.selected ? palette.accent : palette.connector;
     const qreal lineWidth = (connector.selected ? 3.0 : 1.5) / zoom;
     for (qsizetype index = 1; index < connector.points.size(); ++index) {
       const QPointF start = connector.points.at(index - 1);
@@ -781,7 +783,7 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
             end + unit * (12.0 / zoom) - normal * (5.0 / zoom);
         if (connector.type == RelationshipType::Generalization) {
           appendAntialiasedTriangle(vertices, end, first, second, 1.0 / zoom,
-                                    Qt::white);
+                                    palette.surface);
           appendAntialiasedLine(vertices, end, first, 1.5 / zoom, 1.0 / zoom,
                                 color);
           appendAntialiasedLine(vertices, end, second, 1.5 / zoom, 1.0 / zoom,
@@ -806,11 +808,11 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
         appendRect(vertices,
                    {center.x() - outerSize / 2.0, center.y() - outerSize / 2.0,
                     outerSize, outerSize},
-                   QColor(QStringLiteral("#1769d2")));
+                   palette.accent);
         appendRect(vertices,
                    {center.x() - innerSize / 2.0, center.y() - innerSize / 2.0,
                     innerSize, innerSize},
-                   active ? QColor(QStringLiteral("#9dceff")) : Qt::white);
+                   active ? palette.activeHandleFill : palette.surface);
       };
       for (qsizetype index = 0; index < connector.points.size(); ++index) {
         const int bendPoint = index > 0 && index + 1 < connector.points.size()
@@ -823,20 +825,19 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
   }
 
   for (const auto &node : snapshot.nodes) {
-    const QColor border(node.selected ? QStringLiteral("#1769d2")
-                                      : QStringLiteral("#3f4b56"));
-    appendRect(vertices, node.rect, elementColor(node.type));
+    const QColor &border = node.selected ? palette.accent : palette.nodeBorder;
+    appendRect(vertices, node.rect, elementColor(node.type, palette));
     appendRect(
         vertices,
         {node.rect.left(), node.rect.top(), node.rect.width(), kHeaderHeight},
-        elementColor(node.type).darker(104));
+        elementColor(node.type, palette).darker(104));
     appendBorder(vertices, node.rect, (node.selected ? 3.0 : 1.2) / zoom,
                  border);
     if (detail > 0) {
       appendLine(vertices,
                  QPointF(node.rect.left(), node.rect.top() + kHeaderHeight),
                  QPointF(node.rect.right(), node.rect.top() + kHeaderHeight),
-                 1.0 / zoom, QColor(QStringLiteral("#65727e")));
+                 1.0 / zoom, palette.compartmentLine);
     }
     if (detail == 2 && node.type != ElementType::Enumeration &&
         !node.attributes.isEmpty() && !node.operations.isEmpty()) {
@@ -845,24 +846,24 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
       if (y <= node.rect.bottom())
         appendLine(vertices, QPointF(node.rect.left(), y),
                    QPointF(node.rect.right(), y), 1.0 / zoom,
-                   QColor(QStringLiteral("#c5ccd3")));
+                   palette.compartmentDivider);
     }
     if (node.selected) {
       const qreal handle = 9.0 / zoom;
       appendRect(vertices,
                  {node.rect.right() - handle, node.rect.bottom() - handle,
                   handle, handle},
-                 QColor(QStringLiteral("#1769d2")));
+                 palette.accent);
     }
   }
   if (snapshot.lassoVisible)
-    appendBorder(vertices, snapshot.lassoRect, 1.5 / zoom,
-                 QColor(QStringLiteral("#1769d2")));
+    appendBorder(vertices, snapshot.lassoRect, 1.5 / zoom, palette.accent);
   return createColoredNodeBatches(vertices);
 }
 
 QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
                                      const QRectF &coverage) {
+  const auto &palette = ui::uiPalette();
   QVector<RenderText> entries;
   if (detail == 0)
     return entries;
@@ -893,7 +894,7 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
     const QRectF target(middle.x() - 70, middle.y() - 12, 140, 24);
     if (!coverage.isValid() || coverage.intersects(target))
       appendVisibleText(target, target, connector.name, base,
-                        QColor(QStringLiteral("#263238")), Qt::AlignCenter,
+                        palette.bodyText, Qt::AlignCenter,
                         allNodeRects);
   }
 
@@ -912,7 +913,7 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
     const QRectF headerTarget(node.rect.left() + kPadding, node.rect.top(),
                               node.rect.width() - 2 * kPadding, kHeaderHeight);
     appendVisibleText(headerTarget, nodeTextClip, node.name, header,
-                      QColor(QStringLiteral("#18212a")), Qt::AlignCenter,
+                      palette.nodeTitleText, Qt::AlignCenter,
                       laterNodeRects);
     if (detail != 2)
       continue;
@@ -924,7 +925,7 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
                                 lineNumber * kLineHeight,
                             node.rect.width() - 2 * kPadding, kLineHeight);
         appendVisibleText(target, nodeTextClip, text, base,
-                          QColor(QStringLiteral("#263238")),
+                          palette.bodyText,
                           Qt::AlignVCenter | Qt::AlignLeft, laterNodeRects);
         ++lineNumber;
       }

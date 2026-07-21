@@ -54,11 +54,11 @@ Item {
         anchors.margins: 10
         padding: 6
         text: Math.round(canvas.zoom * 100) + "%"
-        color: "#425466"
+        color: uiTheme.zoomText
         background: Rectangle {
             radius: 4
-            color: "#eaf0f5"
-            border.color: "#c6d0da"
+            color: uiTheme.badgeBackground
+            border.color: uiTheme.badgeBorder
             opacity: 0.96
         }
     }
@@ -148,8 +148,8 @@ Item {
         width: reconnectMessage.implicitWidth + cancelReconnect.implicitWidth + 28
         height: 38
         radius: 5
-        color: "#fff4ce"
-        border.color: "#c89b25"
+        color: uiTheme.warningBackground
+        border.color: uiTheme.warningBorder
         z: 10
 
         RowLayout {
@@ -179,8 +179,8 @@ Item {
         rightPadding: 2
         verticalAlignment: TextInput.AlignVCenter
         background: Rectangle {
-            color: "#ffffffe8"
-            border.color: "#1769d2"
+            color: uiTheme.editorBackground
+            border.color: uiTheme.accent
             border.width: 1
         }
 
