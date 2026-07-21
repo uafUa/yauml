@@ -15,6 +15,30 @@
 
 using namespace uuml;
 
+namespace {
+
+ProjectData createGridProject(int nodeCount) {
+  ProjectData project = createStarterProject(QStringLiteral("Large model"));
+  Diagram &diagram = project.diagrams.first();
+  constexpr int columns = 30;
+  for (int index = 0; index < nodeCount; ++index) {
+    ModelElement element;
+    element.id = QStringLiteral("element-%1").arg(index);
+    element.name = QStringLiteral("Element %1").arg(index);
+    project.elements.append(element);
+
+    NodePresentation node;
+    node.id = QStringLiteral("node-%1").arg(index);
+    node.elementId = element.id;
+    node.geometry = QRectF(50.0 + (index % columns) * 250.0,
+                           50.0 + (index / columns) * 160.0, 205.0, 125.0);
+    diagram.nodes.append(node);
+  }
+  return project;
+}
+
+} // namespace
+
 class CoreTests final : public QObject {
   Q_OBJECT
 
@@ -24,6 +48,7 @@ private slots:
   void validationFindsBrokenReferences();
   void commandUndoRedo();
   void largeModelGeometryCommandUndoRedo();
+  void largeDiagramReplacementUsesFirstFreeSlot();
   void deleteElementCommandRestoresCascade();
   void reconnectRelationshipCommandUndoRedo();
   void textCommandsUndoRedo();
@@ -164,20 +189,8 @@ void CoreTests::commandUndoRedo() {
 void CoreTests::largeModelGeometryCommandUndoRedo() {
   QTemporaryDir temporary;
   QVERIFY(temporary.isValid());
-  ProjectData project = createStarterProject(QStringLiteral("Large model"));
-  Diagram &diagram = project.diagrams.first();
   constexpr int nodeCount = 600;
-  for (int index = 0; index < nodeCount; ++index) {
-    ModelElement element;
-    element.id = QStringLiteral("element-%1").arg(index);
-    element.name = QStringLiteral("Element %1").arg(index);
-    project.elements.append(element);
-    NodePresentation node;
-    node.id = QStringLiteral("node-%1").arg(index);
-    node.elementId = element.id;
-    node.geometry = QRectF(index * 10.0, index * 5.0, 180.0, 100.0);
-    diagram.nodes.append(node);
-  }
+  const ProjectData project = createGridProject(nodeCount);
   QVERIFY(ProjectSerializer::save(temporary.path(), project).ok);
 
   ProjectController controller;
@@ -195,6 +208,39 @@ void CoreTests::largeModelGeometryCommandUndoRedo() {
   QCOMPARE(controller.data(), before);
   controller.redo();
   QCOMPARE(controller.data(), after);
+}
+
+void CoreTests::largeDiagramReplacementUsesFirstFreeSlot() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(temporary.path(), createGridProject(600)).ok);
+
+  ProjectController controller;
+  QVERIFY(controller.openProject(QUrl::fromLocalFile(temporary.path())));
+  const QString diagramId = controller.data().diagrams.first().id;
+
+  // This is the performance-sample workflow: remove Component001's
+  // presentation, then double-click its project-tree row to place it again.
+  // The replacement must fill the visible hole instead of being positioned at
+  // 50 + nodeCount * 28, far beyond the diagram's content.
+  controller.removePresentations(diagramId, {QStringLiteral("node-0")});
+  controller.selectObject(QStringLiteral("element-0"),
+                          QStringLiteral("element"));
+  controller.addSelectedToDiagram(diagramId);
+  const auto &replacedDiagram = controller.data().diagrams.first();
+  const auto replaced =
+      std::find_if(replacedDiagram.nodes.cbegin(), replacedDiagram.nodes.cend(),
+                   [](const NodePresentation &candidate) {
+                     return candidate.elementId == QStringLiteral("element-0");
+                   });
+  QVERIFY(replaced != replacedDiagram.nodes.cend());
+  QCOMPARE(replaced->geometry, QRectF(50.0, 50.0, 220.0, 120.0));
+  QVERIFY(
+      std::none_of(replacedDiagram.nodes.cbegin(), replacedDiagram.nodes.cend(),
+                   [&](const NodePresentation &candidate) {
+                     return candidate.id != replaced->id &&
+                            candidate.geometry.intersects(replaced->geometry);
+                   }));
 }
 
 void CoreTests::deleteElementCommandRestoresCascade() {
@@ -343,8 +389,7 @@ void CoreTests::relationshipAndDiagramDeletionUndoRedo() {
           QStringLiteral("owns"));
 
   const ProjectData beforeRelationshipDeletion = controller.data();
-  controller.selectObject(relationshipId, QStringLiteral("relationship"));
-  controller.deleteSelected();
+  controller.deleteRelationship(relationshipId);
   QVERIFY(!findRelationship(controller.data(), relationshipId));
   QVERIFY(controller.data().diagrams.first().connectors.isEmpty());
   controller.undo();
@@ -360,8 +405,7 @@ void CoreTests::relationshipAndDiagramDeletionUndoRedo() {
   controller.redo();
 
   const ProjectData beforeDiagramDeletion = controller.data();
-  controller.selectObject(secondDiagram, QStringLiteral("diagram"));
-  controller.deleteSelected();
+  controller.deleteDiagram(secondDiagram);
   QVERIFY(!findDiagram(controller.data(), secondDiagram));
   controller.undo();
   QCOMPARE(controller.data(), beforeDiagramDeletion);
@@ -428,6 +472,9 @@ void CoreTests::relationshipTypesAndPresentationRemoval() {
   }
 
   const int relationshipCount = controller.data().relationships.size();
+  QSet<QString> relationshipIds;
+  for (const auto &relationship : controller.data().relationships)
+    relationshipIds.insert(relationship.id);
   controller.removePresentations(diagramId, {originalNodes.at(0).id});
   QCOMPARE(controller.data().elements.size(), 2);
   QCOMPARE(controller.data().relationships.size(), relationshipCount);
@@ -444,11 +491,40 @@ void CoreTests::relationshipTypesAndPresentationRemoval() {
   controller.selectObject(sourceElement, QStringLiteral("element"));
   controller.addSelectedToDiagram(diagramId);
   QCOMPARE(controller.data().diagrams.first().nodes.size(), 2);
+  QCOMPARE(controller.data().diagrams.first().connectors.size(), 3);
   QVERIFY(std::any_of(controller.data().diagrams.first().nodes.cbegin(),
                       controller.data().diagrams.first().nodes.cend(),
                       [&](const NodePresentation &node) {
                         return node.elementId == sourceElement;
                       }));
+  QSet<QString> restoredRelationshipIds;
+  for (const auto &connector : controller.data().diagrams.first().connectors) {
+    restoredRelationshipIds.insert(connector.relationshipId);
+    QVERIFY(connector.sourceAnchor.side == ConnectorSide::Automatic);
+    QVERIFY(connector.targetAnchor.side == ConnectorSide::Automatic);
+  }
+  QCOMPARE(restoredRelationshipIds, relationshipIds);
+
+  // Adding related elements to a new diagram materializes its connector
+  // presentations as soon as both semantic endpoints are present.
+  const QString secondDiagramId = controller.addDiagram();
+  controller.selectObject(sourceElement, QStringLiteral("element"));
+  controller.addSelectedToDiagram(secondDiagramId);
+  QCOMPARE(controller.data().diagrams.constLast().nodes.size(), 1);
+  QCOMPARE(controller.data().diagrams.constLast().connectors.size(), 0);
+
+  controller.selectObject(targetElement, QStringLiteral("element"));
+  controller.addSelectedToDiagram(secondDiagramId);
+  QCOMPARE(controller.data().diagrams.constLast().nodes.size(), 2);
+  QCOMPARE(controller.data().diagrams.constLast().connectors.size(), 3);
+
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.constLast().nodes.size(), 1);
+  QCOMPARE(controller.data().diagrams.constLast().connectors.size(), 0);
+  QCOMPARE(controller.data().relationships.size(), relationshipCount);
+  controller.redo();
+  QCOMPARE(controller.data().diagrams.constLast().nodes.size(), 2);
+  QCOMPARE(controller.data().diagrams.constLast().connectors.size(), 3);
 }
 
 void CoreTests::multipleDiagramWorkspace() {

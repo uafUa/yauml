@@ -51,6 +51,24 @@ set_target_properties(uuml_ui_support PROPERTIES
 target_include_directories(uuml_ui_support PUBLIC src)
 target_link_libraries(uuml_ui_support PUBLIC Qt6::Core)
 
+add_library(uuml_canvas STATIC
+    src/ui/diagram_canvas.cpp
+    src/ui/diagram_canvas.h
+)
+target_include_directories(uuml_canvas PUBLIC src)
+target_link_libraries(uuml_canvas PUBLIC
+    uuml_core
+    uuml_ui_support
+    Qt6::Gui
+    Qt6::Quick
+)
+
+if(MSVC)
+    target_compile_options(uuml_canvas PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(uuml_canvas PRIVATE -Wall -Wextra -Wpedantic)
+endif()
+
 if(MSVC)
     target_compile_options(uuml_core PRIVATE /W4 /permissive-)
 else()
@@ -71,8 +89,6 @@ add_custom_target(generate_performance_example
 
 qt_add_executable(uuml
     src/app/main.cpp
-    src/ui/diagram_canvas.cpp
-    src/ui/diagram_canvas.h
 )
 
 qt_add_qml_module(uuml
@@ -86,6 +102,7 @@ qt_add_qml_module(uuml
 )
 
 target_link_libraries(uuml PRIVATE
+    uuml_canvas
     uuml_core
     uuml_ui_support
     Qt6::Core
@@ -142,6 +159,24 @@ if(BUILD_TESTING)
         )
     endif()
     add_test(NAME uuml_core_tests COMMAND uuml_core_tests)
+    qt_add_executable(uuml_canvas_tests
+        tests/diagram_canvas_tests.cpp
+    )
+    set_target_properties(uuml_canvas_tests PROPERTIES WIN32_EXECUTABLE OFF)
+    target_link_libraries(uuml_canvas_tests PRIVATE
+        uuml_canvas
+        Qt6::Test
+    )
+    if(WIN32)
+        add_custom_command(TARGET uuml_canvas_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:Qt6::Test>"
+                "$<TARGET_FILE_DIR:uuml_canvas_tests>"
+            COMMENT "Deploying the Qt canvas-test runtime"
+            VERBATIM
+        )
+    endif()
+    add_test(NAME uuml_canvas_tests COMMAND uuml_canvas_tests)
     add_test(NAME uuml_cli_validate
         COMMAND uuml validate ${CMAKE_CURRENT_SOURCE_DIR}/examples/sample.uuml)
     add_test(NAME uuml_performance_example_validate
@@ -149,10 +184,10 @@ if(BUILD_TESTING)
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/performance.uuml)
     add_test(NAME uuml_ui_smoke COMMAND uuml --smoke-test)
     if(WIN32)
-        set_tests_properties(uuml_ui_smoke PROPERTIES
+        set_tests_properties(uuml_canvas_tests uuml_ui_smoke PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_QUICK_BACKEND=software")
     else()
-        set_tests_properties(uuml_ui_smoke PROPERTIES
+        set_tests_properties(uuml_canvas_tests uuml_ui_smoke PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
     endif()
 endif()

@@ -43,15 +43,22 @@ class AddElementToDiagramCommand final : public ProjectCommand {
 public:
   AddElementToDiagramCommand(ProjectController *controller,
                              const ProjectData &project, QString diagramId,
-                             NodePresentation presentation);
+                             NodePresentation presentation,
+                             QList<ConnectorPresentation> connectors);
 
 private:
+  struct PositionedConnector {
+    qsizetype index;
+    ConnectorPresentation value;
+  };
+
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
 
   QString m_diagramId;
   NodePresentation m_presentation;
   qsizetype m_index;
+  QList<PositionedConnector> m_connectors;
 };
 
 class RemovePresentationsCommand final : public ProjectCommand {

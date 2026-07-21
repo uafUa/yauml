@@ -17,6 +17,81 @@ namespace uuml {
 
 namespace {
 
+constexpr qreal kDefaultNodeX = 50.0;
+constexpr qreal kDefaultNodeY = 50.0;
+constexpr qreal kDefaultNodeWidth = 220.0;
+constexpr qreal kDefaultNodeHeight = 120.0;
+constexpr qreal kNodeHorizontalSpacing = 250.0;
+constexpr qreal kNodeVerticalSpacing = 160.0;
+constexpr qreal kNodeClearance = 12.0;
+constexpr int kPlacementColumns = 12;
+
+QRectF firstAvailableNodeGeometry(const Diagram &diagram) {
+  // Reusing the first open slot keeps newly placed nodes near the diagram's
+  // origin and, importantly, restores holes left by removed presentations. A
+  // node-count-based diagonal offset sends additions thousands of pixels away
+  // on large diagrams, making a successful placement appear to have failed.
+  const qsizetype candidateCount = diagram.nodes.size() + 1;
+  for (qsizetype index = 0; index < candidateCount; ++index) {
+    const int column = static_cast<int>(index % kPlacementColumns);
+    const int row = static_cast<int>(index / kPlacementColumns);
+    const QRectF candidate(kDefaultNodeX + column * kNodeHorizontalSpacing,
+                           kDefaultNodeY + row * kNodeVerticalSpacing,
+                           kDefaultNodeWidth, kDefaultNodeHeight);
+    const bool occupied =
+        std::any_of(diagram.nodes.cbegin(), diagram.nodes.cend(),
+                    [&](const NodePresentation &node) {
+                      return node.geometry
+                          .adjusted(-kNodeClearance, -kNodeClearance,
+                                    kNodeClearance, kNodeClearance)
+                          .intersects(candidate);
+                    });
+    if (!occupied)
+      return candidate;
+  }
+
+  // Very large or irregular presentations can cover several logical slots.
+  // Falling back below the current content guarantees a usable position while
+  // keeping the search above bounded by the number of existing nodes.
+  qreal contentBottom = kDefaultNodeY - kNodeVerticalSpacing;
+  for (const auto &node : diagram.nodes)
+    contentBottom = std::max(contentBottom, node.geometry.bottom());
+  return {kDefaultNodeX, contentBottom + kNodeClearance, kDefaultNodeWidth,
+          kDefaultNodeHeight};
+}
+
+QList<ConnectorPresentation>
+connectorsForNewPresentation(const ProjectData &project, const Diagram &diagram,
+                             const QString &newElementId) {
+  QSet<QString> presentedElementIds;
+  presentedElementIds.reserve(diagram.nodes.size() + 1);
+  for (const auto &node : diagram.nodes)
+    presentedElementIds.insert(node.elementId);
+  presentedElementIds.insert(newElementId);
+
+  QSet<QString> presentedRelationshipIds;
+  presentedRelationshipIds.reserve(diagram.connectors.size());
+  for (const auto &connector : diagram.connectors)
+    presentedRelationshipIds.insert(connector.relationshipId);
+
+  QList<ConnectorPresentation> connectors;
+  for (const auto &relationship : project.relationships) {
+    const bool involvesNewElement = relationship.sourceId == newElementId ||
+                                    relationship.targetId == newElementId;
+    if (!involvesNewElement ||
+        !presentedElementIds.contains(relationship.sourceId) ||
+        !presentedElementIds.contains(relationship.targetId) ||
+        presentedRelationshipIds.contains(relationship.id))
+      continue;
+
+    ConnectorPresentation connector;
+    connector.id = newId();
+    connector.relationshipId = relationship.id;
+    connectors.append(std::move(connector));
+  }
+  return connectors;
+}
+
 ConnectorAnchor edgeAnchorToward(const QRectF &rect, const QPointF &target) {
   ConnectorAnchor anchor;
   const QPointF direction = target - rect.center();
@@ -205,6 +280,13 @@ void ProjectController::redo() { m_undoStack.redo(); }
 
 QString ProjectController::addElement(const QString &type,
                                       const QString &diagramId) {
+  return addElementAt(type, diagramId, std::numeric_limits<qreal>::quiet_NaN(),
+                      std::numeric_limits<qreal>::quiet_NaN());
+}
+
+QString ProjectController::addElementAt(const QString &type,
+                                        const QString &diagramId, qreal x,
+                                        qreal y) {
   bool ok = false;
   const ElementType elementType = elementTypeFromString(type, &ok);
   if (!ok) {
@@ -238,8 +320,9 @@ QString ProjectController::addElement(const QString &type,
     NodePresentation node;
     node.id = newId();
     node.elementId = element.id;
-    const int offset = static_cast<int>(diagram->nodes.size()) * 28;
-    node.geometry = QRectF(50 + offset, 50 + offset, 220, 120);
+    node.geometry = std::isfinite(x) && std::isfinite(y)
+                        ? QRectF(x, y, kDefaultNodeWidth, kDefaultNodeHeight)
+                        : firstAvailableNodeGeometry(*diagram);
     presentation = std::move(node);
   }
   pushCommand(std::make_unique<CreateElementCommand>(
@@ -277,10 +360,10 @@ void ProjectController::addSelectedToDiagram(const QString &diagramId) {
   NodePresentation node;
   node.id = newId();
   node.elementId = elementId;
-  const int offset = static_cast<int>(diagram->nodes.size()) * 28;
-  node.geometry = QRectF(50 + offset, 50 + offset, 220, 120);
+  node.geometry = firstAvailableNodeGeometry(*diagram);
+  auto connectors = connectorsForNewPresentation(m_data, *diagram, elementId);
   pushCommand(std::make_unique<AddElementToDiagramCommand>(
-      this, m_data, diagramId, std::move(node)));
+      this, m_data, diagramId, std::move(node), std::move(connectors)));
 }
 
 void ProjectController::removePresentations(const QString &diagramId,
@@ -304,22 +387,44 @@ void ProjectController::deleteSelected() {
     return;
   const QString id = m_selectedId;
   const QString kind = m_selectedKind;
-  if (kind == QStringLiteral("diagram") && m_data.diagrams.size() <= 1) {
+  if (kind == QStringLiteral("diagram"))
+    deleteDiagram(id);
+  else if (kind == QStringLiteral("relationship"))
+    deleteRelationship(id);
+  else if (kind == QStringLiteral("element"))
+    deleteElement(id);
+}
+
+void ProjectController::deleteDiagram(const QString &diagramId) {
+  if (!findDiagram(m_data, diagramId))
+    return;
+  if (m_data.diagrams.size() <= 1) {
     m_diagnostics.addError(
         QStringLiteral("command"),
-        QStringLiteral("A project must keep at least one diagram"), id);
+        QStringLiteral("A project must keep at least one diagram"), diagramId);
     return;
   }
-  if (kind == QStringLiteral("diagram") && findDiagram(m_data, id))
-    pushCommand(std::make_unique<DeleteDiagramCommand>(this, m_data, id));
-  else if (kind == QStringLiteral("relationship") &&
-           findRelationship(m_data, id))
-    pushCommand(std::make_unique<DeleteRelationshipCommand>(this, m_data, id));
-  else if (kind == QStringLiteral("element") && findElement(m_data, id))
-    pushCommand(std::make_unique<DeleteElementCommand>(this, m_data, id));
-  else
+  pushCommand(std::make_unique<DeleteDiagramCommand>(this, m_data, diagramId));
+  if (m_selectedKind == QStringLiteral("diagram") && m_selectedId == diagramId)
+    clearSelection();
+}
+
+void ProjectController::deleteRelationship(const QString &relationshipId) {
+  if (!findRelationship(m_data, relationshipId))
     return;
-  clearSelection();
+  pushCommand(std::make_unique<DeleteRelationshipCommand>(this, m_data,
+                                                          relationshipId));
+  if (m_selectedKind == QStringLiteral("relationship") &&
+      m_selectedId == relationshipId)
+    clearSelection();
+}
+
+void ProjectController::deleteElement(const QString &elementId) {
+  if (!findElement(m_data, elementId))
+    return;
+  pushCommand(std::make_unique<DeleteElementCommand>(this, m_data, elementId));
+  if (m_selectedKind == QStringLiteral("element") && m_selectedId == elementId)
+    clearSelection();
 }
 
 void ProjectController::selectObject(const QString &id, const QString &kind) {

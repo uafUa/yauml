@@ -1,6 +1,6 @@
 # uuml Productization Plan
 
-Status: command foundation implemented; Phase 3 feature work resumes at 3.2
+Status: command foundation and Phase 3.1–3.2 implemented; Phase 3.3 is next
 
 The product owner accepted the MVP on 2026-07-21. This plan turns the broader
 architecture roadmap into bounded, testable delivery tranches. MVP audit notes
@@ -42,14 +42,16 @@ history memory grow with total project size rather than the size of each edit.
 - Debounce geometry persistence while windows are moving.
 - Ignore removed diagram IDs and recover safely when monitor geometry changes.
 
-### 3.2 Diagram context menus and command routing — after command foundation
+### 3.2 Diagram context menus and command routing — implemented
 
-- Add canvas, element, connector, and tab context menus.
-- Move element creation, relationship creation, reconnection, presentation
-  removal, fit, and diagram deletion into the appropriate menu.
-- Define shortcuts independently from menu placement.
-- Make command targets explicit rather than deriving them from whichever window
-  gains focus during a toolbar click.
+- Canvas, element, connector, and tab context menus own their applicable
+  diagram commands.
+- Element creation, relationship creation, reconnection, presentation removal,
+  fit, and diagram deletion moved out of global diagram controls.
+- Window-local shortcuts invoke the active visible `DiagramView`, independently
+  of menu placement.
+- Context creation retains the clicked diagram position, while explicit
+  diagram and relationship deletion APIs avoid focus-derived targets.
 
 ### 3.3 Connector editing
 
@@ -60,6 +62,9 @@ history memory grow with total project size rather than the size of each edit.
 
 ### 3.4 Arrangement tools
 
+- Rectangular lasso selection is implemented as the multi-object interaction
+  foundation. Plain drag replaces selection, Shift adds, and Ctrl toggles;
+  selection-only frames retain text atlases for large-diagram responsiveness.
 - Alignment, equal sizing, distribution, snapping guides, and keyboard nudging.
 - Treat a multi-object operation as one undoable transaction.
 

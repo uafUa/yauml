@@ -18,3 +18,4 @@ compile_commands.json
 # Platform artifacts
 .DS_Store
 Thumbs.db
+$testLog

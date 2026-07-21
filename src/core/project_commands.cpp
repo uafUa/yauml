@@ -89,23 +89,40 @@ void CreateDiagramCommand::revert(ProjectData &project) {
 
 AddElementToDiagramCommand::AddElementToDiagramCommand(
     ProjectController *controller, const ProjectData &project,
-    QString diagramId, NodePresentation presentation)
+    QString diagramId, NodePresentation presentation,
+    QList<ConnectorPresentation> connectors)
     : ProjectCommand(controller, QStringLiteral("Add element to diagram")),
       m_diagramId(std::move(diagramId)),
       m_presentation(std::move(presentation)) {
   const auto *diagram = findDiagram(project, m_diagramId);
   Q_ASSERT(diagram);
   m_index = diagram ? diagram->nodes.size() : -1;
+  if (diagram) {
+    qsizetype connectorIndex = diagram->connectors.size();
+    m_connectors.reserve(connectors.size());
+    for (auto &connector : connectors)
+      m_connectors.append({connectorIndex++, std::move(connector)});
+  }
 }
 
 void AddElementToDiagramCommand::execute(ProjectData &project) {
-  if (auto *diagram = findDiagram(project, m_diagramId))
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
     insertAtRecordedPosition(diagram->nodes, m_index, m_presentation);
+    for (const auto &connector : m_connectors)
+      insertAtRecordedPosition(diagram->connectors, connector.index,
+                               connector.value);
+  }
 }
 
 void AddElementToDiagramCommand::revert(ProjectData &project) {
-  if (auto *diagram = findDiagram(project, m_diagramId))
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    // Remove in reverse insertion order so every recorded index remains valid.
+    for (auto connector = m_connectors.crbegin();
+         connector != m_connectors.crend(); ++connector)
+      removeRecordedValue(diagram->connectors, connector->index,
+                          connector->value.id);
     removeRecordedValue(diagram->nodes, m_index, m_presentation.id);
+  }
 }
 
 RemovePresentationsCommand::RemovePresentationsCommand(

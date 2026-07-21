@@ -40,11 +40,14 @@ public:
   QString reconnectPrompt() const;
 
   Q_INVOKABLE void fitToContent();
+  Q_INVOKABLE void createElementAtContextPosition(const QString &type);
+  Q_INVOKABLE void createElementAtViewportCenter(const QString &type);
   Q_INVOKABLE void createRelationship(const QString &type);
   Q_INVOKABLE void reconnectSource();
   Q_INVOKABLE void reconnectTarget();
   Q_INVOKABLE void cancelReconnect();
   Q_INVOKABLE void removeSelectedPresentations();
+  Q_INVOKABLE void deleteSelectedConnector();
   Q_INVOKABLE void clearCanvasSelection();
 
 signals:
@@ -52,6 +55,7 @@ signals:
   void diagramIdChanged();
   void viewportChanged();
   void canvasSelectionChanged();
+  void contextMenuRequested(const QString &target, qreal x, qreal y);
   void editRequested(const QString &objectId, const QString &field, int index,
                      const QString &text, qreal x, qreal y, qreal width,
                      qreal height, qreal fontPixelSize, bool fontBold);
@@ -74,6 +78,7 @@ private:
     Move,
     Resize,
     Pan,
+    Lasso,
     MoveSourcePort,
     MoveTargetPort
   };
@@ -109,6 +114,12 @@ private:
   void updatePortPreview(const QPointF &scenePoint);
   void commitPortPreview();
   void commitGeometryPreview();
+  void updateLassoSelection(const QPointF &scenePoint);
+  void finishLassoSelection();
+  void cancelLassoSelection();
+  void resetLassoState();
+  void synchronizeProjectSelection();
+  void createElementAt(const QString &type, const QPointF &sceneCenter);
   void selectNode(const QString &nodeId, bool toggle);
   void selectConnector(const QString &connectorId, bool preserveNodes);
 
@@ -126,12 +137,24 @@ private:
   QPointF m_pressView;
   QPointF m_pressScene;
   QPointF m_originalPan;
+  QPointF m_lassoOrigin;
+  QPointF m_contextScenePoint;
+  QRectF m_lassoRect;
+  QSet<QString> m_lassoBaseNodes;
+  QStringList m_lassoBaseNodeOrder;
+  QString m_lassoBaseConnector;
+  ReconnectEndpoint m_lassoBaseReconnectEndpoint = ReconnectEndpoint::None;
+  Qt::KeyboardModifiers m_lassoModifiers = Qt::NoModifier;
+  bool m_lassoActive = false;
   QString m_interactionNode;
   QHash<QString, QRectF> m_originalGeometry;
   QHash<QString, QRectF> m_previewGeometry;
   ConnectorAnchor m_portPreview;
   bool m_portPreviewActive = false;
   bool m_sceneDirty = true;
+  // Selection-only changes rebuild colored geometry but can retain the
+  // expensive text atlases. Model and geometry changes set both dirty flags.
+  bool m_textDirty = true;
 };
 
 } // namespace uuml

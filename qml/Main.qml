@@ -133,24 +133,12 @@ ApplicationWindow {
             ToolButton { text: qsTr("Undo"); enabled: projectController.canUndo; onClicked: projectController.undo() }
             ToolButton { text: qsTr("Redo"); enabled: projectController.canRedo; onClicked: projectController.redo() }
             ToolSeparator {}
-            ToolButton { text: qsTr("+ Package"); onClicked: projectController.addElement("package", workspaceController.activeDiagramId) }
-            ToolButton { text: qsTr("+ Class"); onClicked: projectController.addElement("class", workspaceController.activeDiagramId) }
-            ToolButton { text: qsTr("+ Struct"); onClicked: projectController.addElement("struct", workspaceController.activeDiagramId) }
-            ToolButton { text: qsTr("+ Enum"); onClicked: projectController.addElement("enumeration", workspaceController.activeDiagramId) }
             ToolButton {
                 text: qsTr("+ Diagram")
                 onClicked: {
                     const id = projectController.addDiagram()
                     workspaceController.activeDiagramId = id
                 }
-            }
-            ToolButton {
-                text: qsTr("Place")
-                enabled: projectController.selectedKind === "element"
-                         && workspaceController.activeDiagramId.length > 0
-                onClicked: projectController.addSelectedToDiagram(workspaceController.activeDiagramId)
-                ToolTip.visible: hovered
-                ToolTip.text: qsTr("Place the selected model element on the active diagram")
             }
             Item { Layout.fillWidth: true }
             ToolButton { text: root.leftPanelVisible ? "◀" : "▶"; onClicked: root.leftPanelVisible = !root.leftPanelVisible }

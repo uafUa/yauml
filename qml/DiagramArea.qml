@@ -159,6 +159,44 @@ Rectangle {
                                     }
                                 }
                             }
+
+                            MouseArea {
+                                anchors.fill: parent
+                                acceptedButtons: Qt.RightButton
+                                onClicked: function(mouse) {
+                                    root.currentDiagramId = tab.diagramId
+                                    workspaceController.activeDiagramId = tab.diagramId
+                                    tabMenu.x = mouse.x
+                                    tabMenu.y = mouse.y
+                                    tabMenu.open()
+                                }
+                            }
+
+                            Menu {
+                                id: tabMenu
+                                MenuItem {
+                                    text: qsTr("Detach to new window")
+                                    enabled: root.hostId === workspaceController.mainHostId
+                                             || root.diagramIds.length > 1
+                                    onTriggered: {
+                                        const point = tab.mapToGlobal(tab.width / 2,
+                                                                      tab.height)
+                                        workspaceController.detachDiagram(tab.diagramId,
+                                                                          point.x,
+                                                                          point.y)
+                                    }
+                                }
+                                MenuItem {
+                                    text: qsTr("Return to main window")
+                                    visible: root.hostId !== workspaceController.mainHostId
+                                    onTriggered: workspaceController.returnDiagramToMain(tab.diagramId)
+                                }
+                                MenuSeparator {}
+                                MenuItem {
+                                    text: qsTr("Delete diagram")
+                                    onTriggered: projectController.deleteDiagram(tab.diagramId)
+                                }
+                            }
                         }
                     }
                 }

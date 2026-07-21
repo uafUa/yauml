@@ -70,11 +70,16 @@ public:
 
   Q_INVOKABLE QString addElement(const QString &type,
                                  const QString &diagramId = {});
+  Q_INVOKABLE QString addElementAt(const QString &type,
+                                   const QString &diagramId, qreal x, qreal y);
   Q_INVOKABLE QString addDiagram();
   Q_INVOKABLE void addSelectedToDiagram(const QString &diagramId);
   Q_INVOKABLE void removePresentations(const QString &diagramId,
                                        const QStringList &nodeIds);
   Q_INVOKABLE void deleteSelected();
+  Q_INVOKABLE void deleteDiagram(const QString &diagramId);
+  Q_INVOKABLE void deleteRelationship(const QString &relationshipId);
+  Q_INVOKABLE void deleteElement(const QString &elementId);
   Q_INVOKABLE void selectObject(const QString &id, const QString &kind);
   Q_INVOKABLE void clearSelection();
 

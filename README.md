@@ -14,7 +14,8 @@ The MVP includes:
 - resizable and collapsible project-tree and property panels;
 - an error-triggered structured log pop-up;
 - undo and redo for model and presentation mutations;
-- automatic connector edge attachment with draggable, persisted perimeter ports;
+- automatic connector presentation when both relationship endpoints are placed,
+  with edge attachment and draggable, persisted perimeter ports;
 - deterministic, directory-based JSON5 persistence with validation, unknown-field
   retention, and interrupted-save recovery;
 - a headless `validate` command using the same core as the GUI.
@@ -91,6 +92,18 @@ Validate a project without opening the GUI:
 ```powershell
 .\build\uuml.exe validate .\examples\sample.uuml
 ```
+
+## Diagram interaction
+
+- Drag empty diagram space to select every intersecting element. Hold `Shift`
+  to add to the current selection or `Ctrl` to toggle intersecting elements.
+- Right-click empty space, an element, a connector, or a diagram tab for the
+  commands that apply to that exact target.
+- Drag any selected element to move the complete selection as one undoable
+  command. Press `Delete` to remove selected presentations from the diagram;
+  deleting a selected connector removes its relationship.
+- Use `Ctrl+0` to fit the active diagram. Element creation shortcuts are
+  `Ctrl+Shift+P/C/S/E`; relationship shortcuts are `Ctrl+Alt+D/G/A`.
 
 Project directories contain `manifest.json5`, `model/model.json5`, and
 `diagrams/diagrams.json5`. Strict JSON is accepted because it is a valid JSON5

@@ -51,6 +51,8 @@ struct RenderConnector {
 struct SceneSnapshot {
   QVector<RenderNode> nodes;
   QVector<RenderConnector> connectors;
+  QRectF lassoRect;
+  bool lassoVisible = false;
 };
 
 struct RenderText {
@@ -708,6 +710,9 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
   vertices.reserve(snapshot.nodes.size() * 48 +
                    snapshot.connectors.size() * 64);
 
+  if (snapshot.lassoVisible)
+    appendRect(vertices, snapshot.lassoRect, QColor(23, 105, 210, 28));
+
   for (const auto &connector : snapshot.connectors) {
     const QColor color(connector.selected ? QStringLiteral("#1769d2")
                                           : QStringLiteral("#52606d"));
@@ -799,6 +804,9 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
                  QColor(QStringLiteral("#1769d2")));
     }
   }
+  if (snapshot.lassoVisible)
+    appendBorder(vertices, snapshot.lassoRect, 1.5 / zoom,
+                 QColor(QStringLiteral("#1769d2")));
   return createColoredNodeBatches(vertices);
 }
 
@@ -900,10 +908,12 @@ void DiagramCanvas::setProject(ProjectController *project) {
   if (m_project) {
     connect(m_project, &ProjectController::stateChanged, this, [this] {
       m_sceneDirty = true;
+      m_textDirty = true;
       update();
     });
   }
   m_sceneDirty = true;
+  m_textDirty = true;
   emit projectChanged();
   update();
 }
@@ -916,6 +926,7 @@ void DiagramCanvas::setDiagramId(const QString &diagramId) {
   m_diagramId = diagramId;
   clearCanvasSelection();
   m_sceneDirty = true;
+  m_textDirty = true;
   emit diagramIdChanged();
   update();
 }
@@ -1047,6 +1058,7 @@ void DiagramCanvas::updatePortPreview(const QPointF &scenePoint) {
   m_portPreview = anchorAtPerimeterPoint(rect, scenePoint);
   m_portPreviewActive = true;
   m_sceneDirty = true;
+  m_textDirty = true;
   update();
 }
 
@@ -1077,14 +1089,16 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
   const qreal rasterScale = textRasterScale(m_zoom, devicePixelRatio);
   const QRectF visibleScene =
       QRectF(toScene({0, 0}), toScene({width(), height()})).normalized();
-  const bool geometryDirty = m_sceneDirty || root->renderedDetail != detail;
+  const bool detailChanged = root->renderedDetail != detail;
+  const bool geometryDirty = m_sceneDirty || detailChanged;
   const bool scaleChanged =
       !qFuzzyCompare(rasterScale, root->renderedTextScale);
   const bool needsTextCoverage = detail > 0 && rasterScale > 1.0;
   const bool coverageExpired =
       needsTextCoverage && (!root->textCoverage.isValid() ||
                             !root->textCoverage.contains(visibleScene));
-  const bool textDirty = geometryDirty || scaleChanged || coverageExpired;
+  const bool textDirty =
+      m_textDirty || detailChanged || scaleChanged || coverageExpired;
   if (geometryDirty || textDirty) {
     SceneSnapshot snapshot;
     const auto *d = diagram();
@@ -1137,6 +1151,8 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
              connector.id == m_selectedConnector});
       }
     }
+    snapshot.lassoRect = m_lassoRect.normalized();
+    snapshot.lassoVisible = m_lassoActive && !snapshot.lassoRect.isEmpty();
     if (geometryDirty)
       root->replaceGeometry(buildSceneGeometry(snapshot, m_zoom, detail));
 
@@ -1150,9 +1166,11 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
                             visibleScene.width(), visibleScene.height());
       }
     }
-    if (textDirty && quickWindow)
+    if (textDirty && quickWindow) {
       root->updateText(buildTextEntries(snapshot, detail, textCoverage),
                        quickWindow, rasterScale);
+      m_textDirty = false;
+    }
     root->renderedDetail = detail;
     root->renderedTextScale = rasterScale;
     root->textCoverage = textCoverage;
@@ -1254,6 +1272,34 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
     event->accept();
     return;
   }
+  if (event->button() == Qt::RightButton) {
+    m_contextScenePoint = m_pressScene;
+    QString target = QStringLiteral("canvas");
+    if (const auto *node = hitNode(m_pressScene)) {
+      selectNode(node->id, false);
+      if (m_project)
+        m_project->selectObject(node->elementId, QStringLiteral("element"));
+      target = QStringLiteral("element");
+    } else if (const auto *connector = hitConnector(m_pressScene)) {
+      selectConnector(connector->id, false);
+      if (m_project)
+        m_project->selectObject(connector->relationshipId,
+                                QStringLiteral("relationship"));
+      target = QStringLiteral("connector");
+    } else {
+      clearCanvasSelection();
+      if (m_project)
+        m_project->clearSelection();
+    }
+    emit contextMenuRequested(target, event->position().x(),
+                              event->position().y());
+    event->accept();
+    return;
+  }
+  if (event->button() != Qt::LeftButton) {
+    event->ignore();
+    return;
+  }
 
   bool sourcePort = false;
   if (event->button() == Qt::LeftButton &&
@@ -1305,9 +1351,17 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
                               QStringLiteral("relationship"));
     }
   } else {
-    clearCanvasSelection();
-    if (m_project)
-      m_project->clearSelection();
+    // Defer background-click clearing until release so the same gesture can
+    // become a lasso without briefly destroying the existing selection.
+    m_interaction = Interaction::Lasso;
+    m_lassoOrigin = m_pressScene;
+    m_lassoRect = QRectF(m_pressScene, m_pressScene);
+    m_lassoBaseNodes = m_selectedNodes;
+    m_lassoBaseNodeOrder = m_selectedNodeOrder;
+    m_lassoBaseConnector = m_selectedConnector;
+    m_lassoBaseReconnectEndpoint = m_reconnectEndpoint;
+    m_lassoModifiers = event->modifiers();
+    m_lassoActive = false;
   }
   event->accept();
 }
@@ -1324,6 +1378,19 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
     updatePortPreview(toScene(event->position()));
     return;
   }
+  if (m_interaction == Interaction::Lasso) {
+    constexpr qreal kDragThreshold = 4.0;
+    if (!m_lassoActive &&
+        QLineF(m_pressView, event->position()).length() < kDragThreshold)
+      return;
+    if (!m_lassoActive) {
+      m_lassoActive = true;
+      if (m_project)
+        m_project->clearSelection();
+    }
+    updateLassoSelection(toScene(event->position()));
+    return;
+  }
   const QPointF delta = toScene(event->position()) - m_pressScene;
   if (m_interaction == Interaction::Move) {
     m_previewGeometry.clear();
@@ -1331,6 +1398,7 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
          ++it)
       m_previewGeometry.insert(it.key(), it.value().translated(delta));
     m_sceneDirty = true;
+    m_textDirty = true;
     update();
   } else if (m_interaction == Interaction::Resize) {
     m_previewGeometry.clear();
@@ -1340,12 +1408,30 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
     resized.setHeight(qMax(60.0, original.height() + delta.y()));
     m_previewGeometry.insert(m_interactionNode, resized);
     m_sceneDirty = true;
+    m_textDirty = true;
     update();
   }
 }
 
 void DiagramCanvas::mouseReleaseEvent(QMouseEvent *event) {
-  Q_UNUSED(event)
+  if (m_interaction == Interaction::Lasso) {
+    if (m_lassoActive) {
+      updateLassoSelection(toScene(event->position()));
+      finishLassoSelection();
+    } else {
+      const bool preserve = m_lassoModifiers.testFlag(Qt::ControlModifier) ||
+                            m_lassoModifiers.testFlag(Qt::ShiftModifier);
+      if (!preserve) {
+        clearCanvasSelection();
+        if (m_project)
+          m_project->clearSelection();
+      }
+      resetLassoState();
+    }
+    m_interaction = Interaction::None;
+    event->accept();
+    return;
+  }
   if (m_interaction == Interaction::Move ||
       m_interaction == Interaction::Resize)
     commitGeometryPreview();
@@ -1403,6 +1489,103 @@ void DiagramCanvas::commitGeometryPreview() {
   m_project->updateNodeGeometries(m_diagramId, values);
 }
 
+void DiagramCanvas::updateLassoSelection(const QPointF &scenePoint) {
+  const auto *d = diagram();
+  if (!d)
+    return;
+
+  m_lassoRect = QRectF(m_lassoOrigin, scenePoint).normalized();
+  QSet<QString> nextNodes;
+  QStringList nextOrder;
+  const bool toggle = m_lassoModifiers.testFlag(Qt::ControlModifier);
+  const bool add = !toggle && m_lassoModifiers.testFlag(Qt::ShiftModifier);
+  if (toggle || add) {
+    nextNodes = m_lassoBaseNodes;
+    nextOrder = m_lassoBaseNodeOrder;
+  }
+
+  for (const auto &node : d->nodes) {
+    if (!m_lassoRect.intersects(nodeGeometry(node)))
+      continue;
+    if (toggle && nextNodes.contains(node.id)) {
+      nextNodes.remove(node.id);
+      nextOrder.removeAll(node.id);
+    } else if (!nextNodes.contains(node.id)) {
+      nextNodes.insert(node.id);
+      nextOrder.append(node.id);
+    }
+  }
+
+  const bool selectionChanged = nextNodes != m_selectedNodes ||
+                                nextOrder != m_selectedNodeOrder ||
+                                !m_selectedConnector.isEmpty();
+  m_selectedNodes = std::move(nextNodes);
+  m_selectedNodeOrder = std::move(nextOrder);
+  m_selectedConnector.clear();
+  m_reconnectEndpoint = ReconnectEndpoint::None;
+  m_portPreviewActive = false;
+  m_sceneDirty = true;
+  if (selectionChanged)
+    emit canvasSelectionChanged();
+  update();
+}
+
+void DiagramCanvas::finishLassoSelection() {
+  synchronizeProjectSelection();
+  resetLassoState();
+}
+
+void DiagramCanvas::cancelLassoSelection() {
+  m_selectedNodes = m_lassoBaseNodes;
+  m_selectedNodeOrder = m_lassoBaseNodeOrder;
+  m_selectedConnector = m_lassoBaseConnector;
+  m_reconnectEndpoint = m_lassoBaseReconnectEndpoint;
+  synchronizeProjectSelection();
+  resetLassoState();
+  m_interaction = Interaction::None;
+  m_sceneDirty = true;
+  emit canvasSelectionChanged();
+  update();
+}
+
+void DiagramCanvas::resetLassoState() {
+  m_lassoOrigin = {};
+  m_lassoRect = {};
+  m_lassoBaseNodes.clear();
+  m_lassoBaseNodeOrder.clear();
+  m_lassoBaseConnector.clear();
+  m_lassoBaseReconnectEndpoint = ReconnectEndpoint::None;
+  m_lassoModifiers = Qt::NoModifier;
+  m_lassoActive = false;
+  m_sceneDirty = true;
+  update();
+}
+
+void DiagramCanvas::synchronizeProjectSelection() {
+  if (!m_project)
+    return;
+  if (!m_selectedConnector.isEmpty()) {
+    const auto *d = diagram();
+    const auto *connector =
+        d ? findConnector(*d, m_selectedConnector) : nullptr;
+    if (connector) {
+      m_project->selectObject(connector->relationshipId,
+                              QStringLiteral("relationship"));
+      return;
+    }
+  }
+  if (m_selectedNodes.size() == 1) {
+    const auto *d = diagram();
+    const QString nodeId = m_selectedNodeOrder.value(0);
+    const auto *node = d ? findNode(*d, nodeId) : nullptr;
+    if (node) {
+      m_project->selectObject(node->elementId, QStringLiteral("element"));
+      return;
+    }
+  }
+  m_project->clearSelection();
+}
+
 void DiagramCanvas::fitToContent() {
   const auto *d = diagram();
   if (!d || d->nodes.isEmpty() || width() <= 0 || height() <= 0)
@@ -1419,6 +1602,34 @@ void DiagramCanvas::fitToContent() {
   m_sceneDirty = true;
   emit viewportChanged();
   update();
+}
+
+void DiagramCanvas::createElementAtContextPosition(const QString &type) {
+  createElementAt(type, m_contextScenePoint);
+}
+
+void DiagramCanvas::createElementAtViewportCenter(const QString &type) {
+  createElementAt(type, toScene({width() / 2.0, height() / 2.0}));
+}
+
+void DiagramCanvas::createElementAt(const QString &type,
+                                    const QPointF &sceneCenter) {
+  if (!m_project)
+    return;
+  constexpr qreal kNewNodeWidth = 220.0;
+  constexpr qreal kNewNodeHeight = 120.0;
+  const QString elementId = m_project->addElementAt(
+      type, m_diagramId, sceneCenter.x() - kNewNodeWidth / 2.0,
+      sceneCenter.y() - kNewNodeHeight / 2.0);
+  const auto *d = diagram();
+  if (elementId.isEmpty() || !d)
+    return;
+  const auto node = std::find_if(d->nodes.cbegin(), d->nodes.cend(),
+                                 [&](const NodePresentation &candidate) {
+                                   return candidate.elementId == elementId;
+                                 });
+  if (node != d->nodes.cend())
+    selectNode(node->id, false);
 }
 
 void DiagramCanvas::createRelationship(const QString &type) {
@@ -1464,8 +1675,23 @@ void DiagramCanvas::removeSelectedPresentations() {
   clearCanvasSelection();
 }
 
+void DiagramCanvas::deleteSelectedConnector() {
+  if (!m_project || m_selectedConnector.isEmpty())
+    return;
+  const auto *d = diagram();
+  const auto *connector = d ? findConnector(*d, m_selectedConnector) : nullptr;
+  if (!connector)
+    return;
+  const QString relationshipId = connector->relationshipId;
+  m_project->deleteRelationship(relationshipId);
+  clearCanvasSelection();
+}
+
 void DiagramCanvas::clearCanvasSelection() {
-  if (m_selectedNodes.isEmpty() && m_selectedConnector.isEmpty())
+  const bool hadSelection =
+      !m_selectedNodes.isEmpty() || !m_selectedConnector.isEmpty();
+  resetLassoState();
+  if (!hadSelection)
     return;
   m_selectedNodes.clear();
   m_selectedNodeOrder.clear();
@@ -1514,6 +1740,11 @@ void DiagramCanvas::selectConnector(const QString &connectorId,
 }
 
 void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
+  if (event->key() == Qt::Key_Escape && m_interaction == Interaction::Lasso) {
+    cancelLassoSelection();
+    event->accept();
+    return;
+  }
   if (event->key() == Qt::Key_Escape &&
       m_reconnectEndpoint != ReconnectEndpoint::None) {
     cancelReconnect();
