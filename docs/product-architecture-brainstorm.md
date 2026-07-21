@@ -1,6 +1,7 @@
 # uuml: Product and Architecture Brainstorm
 
-Status: draft for discussion
+Status: Phase 3 productization underway; MVP accepted on 2026-07-21 in
+[`mvp-scope.md`](mvp-scope.md)
 
 ## 1. Working vision
 
@@ -18,9 +19,11 @@ The tool should feel closer to an engineering IDE than to a drawing program:
 - every model and diagram edit participates in consistent undo/redo;
 - storage can be inspected, reviewed, and merged without launching the tool.
 
-The first release is intentionally not a complete implementation of UML. It is
-a focused architecture and class-diagram tool that can grow toward broader UML
-coverage without redesigning its core.
+The product can grow toward broader UML coverage without redesigning its core.
+The first MVP is narrower than the full product described here: it proves manual
+class modeling, transactions, JSON5 persistence, a multi-diagram and multi-window
+workspace, structured logging, and shared GUI/headless services. C++
+synchronization and diagram export are post-MVP capabilities.
 
 ## 2. Primary users and use cases
 
@@ -31,7 +34,7 @@ coverage without redesigning its core.
 - Reviewers who need diagrams and model changes to be understandable in Git.
 - Small teams that want local files rather than a required modeling server.
 
-### Primary workflows
+### Product workflows
 
 1. Create packages, classes, interfaces, enumerations, and relationships.
 2. Place selected model elements on one or more diagrams.
@@ -41,9 +44,16 @@ coverage without redesigning its core.
 6. Review semantic and diagram changes as readable source-control diffs.
 7. Export diagrams as SVG, PNG, and PDF for documentation.
 
-## 3. Proposed scope
+The MVP implements only the manual modeling, diagram editing, persistence,
+validation, and Git-reviewable storage portions of these workflows. See
+[`mvp-scope.md`](mvp-scope.md) for the binding MVP boundary.
 
-### MVP semantic model
+## 3. Product scope
+
+The capabilities below describe the intended product, not the accepted MVP.
+Unless explicitly included in [`mvp-scope.md`](mvp-scope.md), they are post-MVP.
+
+### Target semantic model
 
 - Projects and packages/namespaces.
 - Classes, structs, interfaces, and enumerations.
@@ -56,7 +66,7 @@ coverage without redesigning its core.
 - User-created and source-generated elements in the same project.
 - Validation diagnostics for broken references and unsupported constructs.
 
-### MVP diagram capabilities
+### Target diagram capabilities
 
 - Package and class diagrams.
 - Multiple visual presentations of one semantic element.
@@ -71,8 +81,12 @@ coverage without redesigning its core.
 - Styles based on element type, properties, package ownership, and diagram-local
   overrides.
 - Model browser, property inspector, diagram tabs, and persistent workspace state.
+- In-place editing for every editable text value rendered on a diagram. Inspector
+  edits and in-place edits use the same validation and command path.
+- Detachable diagram tabs and standalone tabbed diagram-area windows that share
+  one project session and can be arranged across multiple monitors.
 
-### C++ synchronization
+### Post-MVP C++ synchronization
 
 - Consume `compile_commands.json` and Clang's AST rather than parsing C++ text
   heuristically.
@@ -87,7 +101,7 @@ coverage without redesigning its core.
 - Apply synchronization as one undoable transaction.
 - Never modify diagram geometry merely because source semantics changed.
 
-### Explicitly outside the MVP
+### Explicitly outside the initial product direction
 
 - Complete UML 2.x coverage.
 - Behavioral diagrams such as sequence, activity, and state-machine diagrams.
@@ -98,7 +112,8 @@ coverage without redesigning its core.
 - Binary plugin ABI stability.
 - Imports for languages other than C++.
 
-These are possible later extensions, not constraints the MVP must satisfy.
+These are possible later extensions, not constraints on the initial product
+direction.
 
 ## 4. Functional requirements
 
@@ -130,8 +145,11 @@ These are possible later extensions, not constraints the MVP must satisfy.
 
 ### Import safety
 
-- Synchronization must distinguish generated properties from user-owned
-  properties.
+- Synchronization must track authority at property level or at an equivalently
+  precise boundary. User-edited values are authoritative.
+- A conflicting source value must not overwrite a user-edited value. The
+  conflict is recorded as a structured log entry with the affected element,
+  property, user value, and proposed source value.
 - Removing a source declaration should not immediately destroy user-authored
   diagrams; stale elements should be reviewable before deletion.
 - Identity mappings must be visible and editable as project data.
@@ -202,9 +220,12 @@ Constraints and risks:
 ```text
 QML application shell
   |-- model browser / search
-  |-- diagram tabs and workspace
-  |-- property inspector
+  |-- central tabbed diagram area
+  |-- detachable tabbed diagram-area windows
+  |-- collapsible project-tree panel (left)
+  |-- collapsible inspector/subpanel area (right)
   |-- menus, commands, history, diagnostics
+  |-- error-triggered pop-up log panel
   |
 C++ application/view-model layer
   |-- project session
@@ -268,14 +289,17 @@ different position, size, compartment visibility, and style overrides.
 Use immutable UUIDv7 or equivalent opaque IDs internally. Store readable names
 alongside them. Source-generated elements additionally carry a source identity:
 
-```yaml
-id: 0196f4b8-8d1d-7f53-9f31-8e7082eeb463
-name: GrpcInputIngressBridge
-qualified_name: hps::adapters::boundary::grpc::GrpcInputIngressBridge
-source:
-  language: cpp
-  declaration: src/adapters/boundary/grpc/grpc_input_ingress_bridge.hpp
-  symbol: "clang-usr-or-normalized-symbol-key"
+```json5
+{
+  id: "0196f4b8-8d1d-7f53-9f31-8e7082eeb463",
+  name: "GrpcInputIngressBridge",
+  qualified_name: "hps::adapters::boundary::grpc::GrpcInputIngressBridge",
+  source: {
+    language: "cpp",
+    declaration: "src/adapters/boundary/grpc/grpc_input_ingress_bridge.hpp",
+    symbol: "clang-usr-or-normalized-symbol-key",
+  },
+}
 ```
 
 The Clang USR or normalized symbol key is evidence for matching, not the sole
@@ -284,24 +308,24 @@ identity changes.
 
 ## 10. Persistence decision draft
 
-### Decision: directory-based project with canonical text files
+### Decision: directory-based project with canonical JSON5 files
 
 Proposed structure:
 
 ```text
 example.uuml/
-  manifest.yaml
+  manifest.json5
   model/
-    architecture.yaml
-    application.yaml
-    adapters-grpc.yaml
+    architecture.json5
+    application.json5
+    adapters-grpc.json5
   diagrams/
-    runtime-components.yaml
-    grpc-boundary.yaml
+    runtime-components.json5
+    grpc-boundary.json5
   styles/
     default.css
   workspace/
-    shared.yaml
+    shared.json5
 ```
 
 Per-user ephemeral workspace state should normally live outside the repository,
@@ -310,9 +334,8 @@ small shared workspace file for intentional team defaults.
 
 ### Storage rules
 
-- Use a documented strict subset of YAML, or reconsider formatted JSON after a
-  parser/round-trip prototype. Human readability is required; YAML itself is not
-  yet a final commitment.
+- Use a documented JSON5 profile. Prototype comment- and unknown-field-aware
+  round trips before committing to a parser; neither may be silently discarded.
 - Emit a canonical field and collection order.
 - Partition files by package or user-selected model unit to reduce merge conflicts.
 - Store each relationship only at its canonical owner.
@@ -320,6 +343,8 @@ small shared workspace file for intentional team defaults.
 - Write changed files to temporary siblings, flush, and atomically replace.
 - Include an explicit schema version and deterministic migration pipeline.
 - Provide `uuml validate` and `uuml format` command-line operations.
+- Establish the headless import/change-set boundary from the beginning, even
+  though concrete C++ import and synchronization are post-MVP.
 - Never require users to understand internal IDs for ordinary edits, while keeping
   IDs visible enough to diagnose merges.
 
@@ -343,11 +368,37 @@ update only dirty presentations after a command.
 - Keep hit testing in C++ using a spatial index.
 - Convert pointer input into explicit interaction states such as selecting,
   dragging, resizing, reconnecting, and moving a bend point.
+- Treat in-place text editing as an explicit interaction state. Every editable
+  text value rendered on the diagram can enter that state without requiring the
+  property inspector.
+- Preserve the original text while editing. Commit through the normal validated
+  command path as one undo entry; cancel without mutating the model or history.
 - Preview gestures without committing domain commands every frame.
 - Commit one command transaction at gesture completion.
 - Keep selection handles and guides in a lightweight overlay layer.
 - Make context-menu content derive from command applicability for the current
   selection or hit target.
+
+### Workspace windows
+
+The main window owns the project tree on the left, a horizontal tabbed diagram
+area in the center, and an extensible selected-element inspector area on the
+right. Both side areas are resizable and collapsible. The structured log appears
+as a pop-up panel and opens automatically when a new error is reported without
+discarding selection or in-progress editing state.
+
+Dragging a diagram tab out of a tab bar creates a standalone diagram-area window.
+Each standalone window has a horizontal tab bar and can accept diagrams from the
+main window or other standalone windows. Moving a tab transfers its existing
+presentation and view instance; it does not clone the diagram. All windows share
+one project session and transaction history, and the main property inspector
+tracks the selection in the focused diagram. Independent top-level windows allow
+several diagrams to remain visible across multiple monitors.
+
+Window containers are workspace presentation state, not semantic model owners.
+Closing, moving, or detaching a window must never delete a diagram or change its
+stable identity. Closing a standalone diagram-area window returns all of its tabs
+to the main diagram area.
 
 ### Connector geometry
 
@@ -365,19 +416,21 @@ reversible edits, including:
 ## 12. Undo and transaction architecture
 
 The command layer is part of the domain core, not a QML convenience service.
+Each user operation is represented by a concrete polymorphic command with
+explicit execute and revert behavior.
 
 - Commands validate before mutation.
-- A transaction records all semantic and presentation changes.
+- A command retains only the semantic and presentation records or values needed
+  to execute and revert its operation.
 - Composite actions contain child commands but appear as one history entry.
 - Continuous gestures coalesce preview changes into one committed command.
 - Import and automatic layout are transactions.
 - Undo/redo emits the same model-change notifications as forward execution.
 - Failed commands roll back completely.
 
-For simple property changes, reversible deltas may be sufficient. For connector
-editing and bulk transformations, use typed before/after snapshots of all affected
-geometry and constraints. Do not serialize the complete project for each undo
-entry.
+Use typed before/after values for property and geometry commands and retain
+removed records plus their positions for structural commands. Do not copy,
+serialize, or diff the complete project to create an ordinary undo entry.
 
 ## 13. Source synchronization architecture
 
@@ -452,8 +505,8 @@ set boundaries are easier to reason about and test.
   target compilers.
 - Qt Quick, Qt Quick Controls, Qt SVG, and Qt Test.
 - Clang/LLVM tooling for C++ import.
-- A small, explicit serialization dependency selected after the YAML-versus-JSON
-  prototype.
+- A small, explicit JSON5 serialization dependency selected after the
+  deterministic, comment-aware round-trip prototype.
 - An automatic-layout engine behind an adapter; ELK or Graphviz are candidates.
 - Avoid exposing third-party types in domain interfaces.
 
@@ -471,7 +524,9 @@ selection.
   databases.
 - Diagram geometry tests for routing, alignment, distribution, snapping, and
   endpoint constraints.
-- QML integration tests for selection, menus, shortcuts, and workspace restore.
+- QML integration tests for selection, menus, shortcuts, in-place text commit and
+  cancellation, validation behavior, detachable tabs, tab movement between
+  windows, shared cross-window selection context, and workspace restore.
 - Rendered-image regression tests for a limited set of stable diagrams.
 - Performance benchmarks with generated and real large models.
 - Crash-recovery tests that interrupt writes at controlled points.
@@ -485,39 +540,50 @@ initial state -> command -> expected state -> undo -> exact initial state
 
 ## 18. Delivery phases
 
-### Phase 0: risk prototypes
+### Phase 0: MVP foundations and risk prototypes
 
 - Render and interact with a representative 2,000-node diagram.
 - Prototype C++/QML boundaries and a custom `QQuickItem` renderer.
-- Parse a real CMake compilation database with Clang.
-- Compare strict YAML and formatted JSON for readable, deterministic round trips.
+- Prototype deterministic, comment-aware JSON5 round trips.
+- Establish shared GUI/headless validation and structured diagnostics.
+- Prototype tab detachment and diagram moves between multiple top-level windows.
+- Add the resizable/collapsible side-panel layout and error-triggered log-panel
+  shell.
 - Validate Qt licensing and Windows packaging.
 
-### Phase 1: vertical slice
+### Phase 1: MVP semantic vertical slice
 
 - Project load/save and validation.
 - Packages, classes, enums, and core relationships.
-- Model browser and property inspector.
-- One class diagram with nodes and connectors.
-- Transactional editing and undo/redo.
-- SVG export.
+- Main-window project tree, extensible property subpanels, and pop-up log panel.
+- Headless validation using the same core as the GUI.
+- Transactional semantic editing and undo/redo.
 
-### Phase 2: productive manual modeling
+### Phase 2: MVP diagram vertical slice
 
-- Multi-diagram support and workspace restoration.
+- Multiple class diagrams with horizontal tabs, nodes, and connectors.
+- Selection, move, resize, pan, zoom, and basic reconnection.
+- In-place editing for every editable text value rendered on the diagram.
+- Detachable tab groups, standalone diagram-area windows, cross-window diagram
+  moves, and shared project and selection context.
+- Exact undo/redo coverage for semantic and diagram editing.
+
+### Phase 3: post-MVP manual-modeling productivity
+
+- Persisted workspace, tab-group, and detached-window restoration.
 - Full connector and bend-point editing.
 - Alignment, sizing, distribution, guides, and keyboard commands.
 - Stylesheets and presentation overrides.
-- PNG/PDF export.
+- SVG, PNG, and PDF export.
 
-### Phase 3: C++ synchronization
+### Phase 4: post-MVP C++ import and synchronization
 
 - Compilation-database discovery and AST index.
 - Source bindings and rename mappings.
 - Synchronization preview, conflict handling, and undo.
 - Nested classifiers, PIMPL types, enum literals, and implementation-file types.
 
-### Phase 4: scale and hardening
+### Phase 5: scale and hardening
 
 - Incremental loading and indexing.
 - Large-diagram virtualization and rendering optimization.
@@ -530,11 +596,18 @@ initial state -> command -> expected state -> undo -> exact initial state
 2. Semantic model separated from presentations.
 3. Command transactions as the only mutation API.
 4. Custom Qt Quick scene-graph diagram renderer.
-5. Directory-based canonical text storage.
+5. Directory-based canonical JSON5 storage.
 6. Stable opaque model IDs separated from source identity.
 7. Clang AST synchronization through compilation databases.
 8. Snapshot/change-set boundaries for background work.
 9. Windows-first, cross-platform architecture.
+10. User-edited property values are authoritative over imported values.
+11. GUI and headless tools share domain, persistence, validation, transaction,
+    and structured diagnostic services.
+12. Every editable text value rendered on a diagram supports in-place editing
+    through the same command path as the property inspector.
+13. Multiple diagrams use detachable horizontal tab groups that can share one
+    project session across independently positioned top-level windows.
 
 ## 20. Open questions
 
@@ -542,8 +615,8 @@ initial state -> command -> expected state -> undo -> exact initial state
   extensible enough for broader UML and SysML from the beginning?
 - Should structs and classes remain distinct domain types or one classifier with
   language-specific traits?
-- Is strict YAML worth its parser and canonicalization complexity, or is formatted
-  JSON the more dependable human-readable contract?
+- Which JSON5 implementation can support deterministic output without silently
+  losing comments or unknown fields?
 - How should model files be partitioned by default: package, namespace, source
   module, or explicit user choice?
 - Should source-generated relationships be editable, overridable, or only
@@ -556,8 +629,8 @@ initial state -> command -> expected state -> undo -> exact initial state
   deployment footprint?
 - Which Qt license and dependency licenses are acceptable for the intended
   distribution model?
-- Should a headless CLI ship from the first release for validate, format, import,
-  migrate, and export operations?
+- Which headless subcommands beyond `validate` must be functional in the MVP, as
+  opposed to having their core service boundaries established?
 
 ## 21. Suggested next step
 
@@ -566,9 +639,14 @@ that loads a generated model and demonstrates:
 
 - a custom Qt Quick scene-graph canvas;
 - 2,000 nodes plus connectors at interactive frame rates;
-- selection, pan, zoom, move, and one undoable bend-point edit;
+- two diagram tabs that can be detached into separate top-level windows, moved
+  between tab groups, and reattached without changing diagram identity;
+- shared selection and property-inspector context across those windows;
+- selection, pan, zoom, move, and one undoable in-place text edit;
 - model data held entirely in the C++ core;
-- deterministic save and reload of the same diagram.
+- deterministic JSON5 save and reload of the same diagram;
+- validation results flowing to the error-triggered GUI log panel and the
+  headless tool.
 
 That prototype will answer the largest architecture and performance questions
 before the storage schema and public model API become expensive to change.

@@ -1,5 +1,6 @@
 # CMake build trees
 /build/
+/build-release/
 /out/
 /cmake-build-*/
 
@@ -12,6 +13,7 @@ CMakeLists.txt.user*
 compile_commands.json
 *.qmlc
 *.jsc
+**/.uuml-recovery/
 
 # Platform artifacts
 .DS_Store

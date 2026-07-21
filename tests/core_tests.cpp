@@ -1,0 +1,662 @@
+#include "core/json5.h"
+#include "core/project_controller.h"
+#include "core/project_serializer.h"
+#include "core/workspace_controller.h"
+#include "ui/text_occlusion.h"
+#include "ui/triangle_batch.h"
+
+#include <QDir>
+#include <QFile>
+#include <QPersistentModelIndex>
+#include <QSettings>
+#include <QSignalSpy>
+#include <QTemporaryDir>
+#include <QtTest>
+
+using namespace uuml;
+
+class CoreTests final : public QObject {
+  Q_OBJECT
+
+private slots:
+  void json5Profile();
+  void deterministicRoundTrip();
+  void validationFindsBrokenReferences();
+  void commandUndoRedo();
+  void largeModelGeometryCommandUndoRedo();
+  void deleteElementCommandRestoresCascade();
+  void reconnectRelationshipCommandUndoRedo();
+  void textCommandsUndoRedo();
+  void relationshipAndDiagramDeletionUndoRedo();
+  void relationshipTypesAndPresentationRemoval();
+  void connectorAnchorUndoRedo();
+  void multipleDiagramWorkspace();
+  void detachedWindowModelAndGeometryRemainStable();
+  void closingAllDetachedWindowsReturnsTheirDiagrams();
+  void persistedWorkspaceRestoresTabGroups();
+  void interruptedSaveRecovery();
+  void fullyCoveredTextHasNoVisibleFragments();
+  void partialTextCoveragePreservesOnlyExposedArea();
+  void triangleGeometryIsSplitOnPrimitiveBoundaries();
+};
+
+void CoreTests::json5Profile() {
+  const QByteArray source = R"json5(
+        // accepted JSON5 profile
+        {
+          unquoted: 'value',
+          list: [1, 2,],
+        }
+    )json5";
+  const auto parsed = Json5::parse(source);
+  QVERIFY2(parsed, qPrintable(parsed.error));
+  QVERIFY(parsed.hadComments);
+  QCOMPARE(
+      parsed.document.object().value(QStringLiteral("unquoted")).toString(),
+      QStringLiteral("value"));
+  QCOMPARE(
+      parsed.document.object().value(QStringLiteral("list")).toArray().size(),
+      2);
+}
+
+void CoreTests::deterministicRoundTrip() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  ProjectData project = createStarterProject(QStringLiteral("Round trip"));
+  ModelElement element;
+  element.id = newId();
+  element.name = QStringLiteral("Service");
+  element.attributes = {QStringLiteral("+ port: int")};
+  element.extra.insert(QStringLiteral("futureField"), 42);
+  project.elements.append(element);
+  project.modelExtra.insert(QStringLiteral("futureRoot"),
+                            QStringLiteral("retained"));
+  NodePresentation node;
+  node.id = newId();
+  node.elementId = element.id;
+  node.geometry = {10, 20, 220, 100};
+  project.diagrams[0].nodes.append(node);
+  Relationship relationship;
+  relationship.id = newId();
+  relationship.name = QStringLiteral("self reference");
+  relationship.sourceId = element.id;
+  relationship.targetId = element.id;
+  project.relationships.append(relationship);
+  ConnectorPresentation connector;
+  connector.id = newId();
+  connector.relationshipId = relationship.id;
+  connector.sourceAnchor.side = ConnectorSide::Right;
+  connector.sourceAnchor.offset = 0.25;
+  connector.sourceAnchor.extra.insert(QStringLiteral("futureAnchorField"),
+                                      true);
+  connector.targetAnchor.side = ConnectorSide::Bottom;
+  connector.targetAnchor.offset = 0.75;
+  project.diagrams[0].connectors.append(connector);
+
+  const auto firstSave = ProjectSerializer::save(temporary.path(), project);
+  QVERIFY(firstSave.ok);
+  QVERIFY(!firstSave.unchanged);
+  const auto secondSave = ProjectSerializer::save(temporary.path(), project);
+  QVERIFY(secondSave.ok);
+  QVERIFY(secondSave.unchanged);
+
+  const auto loaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(loaded.ok);
+  QCOMPARE(loaded.project, project);
+  QCOMPARE(loaded.project.elements[0]
+               .extra.value(QStringLiteral("futureField"))
+               .toInt(),
+           42);
+}
+
+void CoreTests::validationFindsBrokenReferences() {
+  ProjectData project = createStarterProject();
+  NodePresentation node;
+  node.id = newId();
+  node.elementId = QStringLiteral("missing");
+  node.geometry = {0, 0, 100, 100};
+  project.diagrams[0].nodes.append(node);
+  const auto diagnostics = ProjectSerializer::validate(project);
+  QVERIFY(std::any_of(
+      diagnostics.cbegin(), diagnostics.cend(),
+      [](const Diagnostic &diagnostic) {
+        return diagnostic.severity == DiagnosticSeverity::Error &&
+               diagnostic.message.contains(QStringLiteral("missing element"));
+      }));
+}
+
+void CoreTests::commandUndoRedo() {
+  ProjectController controller;
+  QSignalSpy stateChanges(&controller, &ProjectController::stateChanged);
+  QVERIFY(!controller.dirty());
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString elementId =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  QCOMPARE(controller.data().elements.size(), 1);
+  QCOMPARE(controller.data().diagrams.first().nodes.size(), 1);
+  QVERIFY(controller.canUndo());
+  QCOMPARE(controller.undoText(), QStringLiteral("Create class"));
+  QVERIFY(controller.dirty());
+  QCOMPARE(stateChanges.count(), 1);
+
+  controller.undo();
+  QCOMPARE(controller.data().elements.size(), 0);
+  QCOMPARE(controller.data().diagrams.first().nodes.size(), 0);
+  QCOMPARE(controller.redoText(), QStringLiteral("Create class"));
+  QVERIFY(!controller.dirty());
+  QCOMPARE(stateChanges.count(), 2);
+  controller.redo();
+  QCOMPARE(controller.data().elements.first().id, elementId);
+  QCOMPARE(stateChanges.count(), 3);
+
+  controller.selectObject(elementId, QStringLiteral("element"));
+  controller.setSelectedName(QStringLiteral("Renamed"));
+  QCOMPARE(controller.data().elements.first().name, QStringLiteral("Renamed"));
+  controller.undo();
+  QVERIFY(controller.data().elements.first().name != QStringLiteral("Renamed"));
+
+  const QString pendingRedo = controller.redoText();
+  controller.setSelectedName(controller.selectedName());
+  QCOMPARE(controller.redoText(), pendingRedo);
+  QCOMPARE(stateChanges.count(), 5);
+}
+
+void CoreTests::largeModelGeometryCommandUndoRedo() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  ProjectData project = createStarterProject(QStringLiteral("Large model"));
+  Diagram &diagram = project.diagrams.first();
+  constexpr int nodeCount = 600;
+  for (int index = 0; index < nodeCount; ++index) {
+    ModelElement element;
+    element.id = QStringLiteral("element-%1").arg(index);
+    element.name = QStringLiteral("Element %1").arg(index);
+    project.elements.append(element);
+    NodePresentation node;
+    node.id = QStringLiteral("node-%1").arg(index);
+    node.elementId = element.id;
+    node.geometry = QRectF(index * 10.0, index * 5.0, 180.0, 100.0);
+    diagram.nodes.append(node);
+  }
+  QVERIFY(ProjectSerializer::save(temporary.path(), project).ok);
+
+  ProjectController controller;
+  QVERIFY(controller.openProject(QUrl::fromLocalFile(temporary.path())));
+  const ProjectData before = controller.data();
+  const auto &node = before.diagrams.first().nodes.at(317);
+  controller.updateNodeGeometry(
+      before.diagrams.first().id, node.id, node.geometry.x() + 25.0,
+      node.geometry.y() - 12.0, node.geometry.width(), node.geometry.height());
+  ProjectData after = before;
+  after.diagrams.first().nodes[317].geometry.translate(25.0, -12.0);
+  QCOMPARE(controller.data(), after);
+
+  controller.undo();
+  QCOMPARE(controller.data(), before);
+  controller.redo();
+  QCOMPARE(controller.data(), after);
+}
+
+void CoreTests::deleteElementCommandRestoresCascade() {
+  ProjectController controller;
+  const QString firstDiagram = controller.data().diagrams.first().id;
+  const QString firstElement =
+      controller.addElement(QStringLiteral("class"), firstDiagram);
+  const QString secondElement =
+      controller.addElement(QStringLiteral("class"), firstDiagram);
+  auto nodes = controller.data().diagrams.first().nodes;
+  controller.createRelationship(firstDiagram, nodes.at(0).id, nodes.at(1).id,
+                                QStringLiteral("dependency"));
+
+  const QString secondDiagram = controller.addDiagram();
+  controller.selectObject(firstElement, QStringLiteral("element"));
+  controller.addSelectedToDiagram(secondDiagram);
+  controller.selectObject(secondElement, QStringLiteral("element"));
+  controller.addSelectedToDiagram(secondDiagram);
+  nodes = controller.data().diagrams.at(1).nodes;
+  controller.createRelationship(secondDiagram, nodes.at(0).id, nodes.at(1).id,
+                                QStringLiteral("association"));
+
+  const ProjectData beforeDeletion = controller.data();
+  controller.selectObject(firstElement, QStringLiteral("element"));
+  controller.deleteSelected();
+  QVERIFY(!findElement(controller.data(), firstElement));
+  QCOMPARE(controller.data().relationships.size(), 0);
+  for (const auto &diagram : controller.data().diagrams) {
+    QVERIFY(std::none_of(diagram.nodes.cbegin(), diagram.nodes.cend(),
+                         [&](const NodePresentation &node) {
+                           return node.elementId == firstElement;
+                         }));
+    QCOMPARE(diagram.connectors.size(), 0);
+  }
+
+  controller.undo();
+  QCOMPARE(controller.data(), beforeDeletion);
+  controller.redo();
+  QVERIFY(!findElement(controller.data(), firstElement));
+}
+
+void CoreTests::reconnectRelationshipCommandUndoRedo() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  controller.addElement(QStringLiteral("class"), diagramId);
+  controller.addElement(QStringLiteral("class"), diagramId);
+  controller.addElement(QStringLiteral("class"), diagramId);
+  const auto nodes = controller.data().diagrams.first().nodes;
+  const QString connectorId = controller.createRelationship(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("dependency"));
+  const auto *connector =
+      findConnector(controller.data().diagrams.first(), connectorId);
+  QVERIFY(connector);
+  const QString relationshipId = connector->relationshipId;
+  const Relationship beforeRelationship =
+      *findRelationship(controller.data(), relationshipId);
+  const ConnectorAnchor beforeAnchor = connector->sourceAnchor;
+
+  controller.reconnectRelationship(diagramId, connectorId, nodes.at(2).id,
+                                   true);
+  QCOMPARE(findRelationship(controller.data(), relationshipId)->sourceId,
+           nodes.at(2).elementId);
+  connector = findConnector(controller.data().diagrams.first(), connectorId);
+  QVERIFY(connector->sourceAnchor.side == ConnectorSide::Automatic);
+  QCOMPARE(connector->sourceAnchor.offset, 0.5);
+
+  controller.undo();
+  QCOMPARE(*findRelationship(controller.data(), relationshipId),
+           beforeRelationship);
+  connector = findConnector(controller.data().diagrams.first(), connectorId);
+  QCOMPARE(connector->sourceAnchor, beforeAnchor);
+  controller.redo();
+  QCOMPARE(findRelationship(controller.data(), relationshipId)->sourceId,
+           nodes.at(2).elementId);
+}
+
+void CoreTests::textCommandsUndoRedo() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString elementId =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  controller.selectObject(elementId, QStringLiteral("element"));
+
+  const QStringList originalAttributes =
+      findElement(controller.data(), elementId)->attributes;
+  controller.setSelectedAttributes(
+      QStringLiteral("+ first: int\n+ second: int"));
+  QCOMPARE(findElement(controller.data(), elementId)->attributes.size(), 2);
+  controller.undo();
+  QCOMPARE(findElement(controller.data(), elementId)->attributes,
+           originalAttributes);
+  controller.redo();
+
+  controller.editText(elementId, QStringLiteral("attribute"), 1,
+                      QStringLiteral("+ renamed: int"));
+  QCOMPARE(findElement(controller.data(), elementId)->attributes.at(1),
+           QStringLiteral("+ renamed: int"));
+  controller.undo();
+  QCOMPARE(findElement(controller.data(), elementId)->attributes.at(1),
+           QStringLiteral("+ second: int"));
+
+  const QStringList originalOperations =
+      findElement(controller.data(), elementId)->operations;
+  controller.setSelectedOperations(QStringLiteral("+ start(): void"));
+  QCOMPARE(findElement(controller.data(), elementId)->operations,
+           QStringList{QStringLiteral("+ start(): void")});
+  controller.undo();
+  QCOMPARE(findElement(controller.data(), elementId)->operations,
+           originalOperations);
+
+  controller.setSelectedLiterals(QStringLiteral("First\nSecond"));
+  QCOMPARE(findElement(controller.data(), elementId)->enumLiterals,
+           QStringList({QStringLiteral("First"), QStringLiteral("Second")}));
+  controller.undo();
+  QVERIFY(findElement(controller.data(), elementId)->enumLiterals.isEmpty());
+
+  const QString originalDiagramName = controller.diagramName(diagramId);
+  controller.renameDiagram(diagramId, QStringLiteral("Renamed diagram"));
+  QCOMPARE(controller.diagramName(diagramId),
+           QStringLiteral("Renamed diagram"));
+  controller.undo();
+  QCOMPARE(controller.diagramName(diagramId), originalDiagramName);
+}
+
+void CoreTests::relationshipAndDiagramDeletionUndoRedo() {
+  ProjectController controller;
+  const QString firstDiagram = controller.data().diagrams.first().id;
+  const QString firstElement =
+      controller.addElement(QStringLiteral("class"), firstDiagram);
+  controller.addElement(QStringLiteral("class"), firstDiagram);
+  const auto nodes = controller.data().diagrams.first().nodes;
+  const QString connectorId = controller.createRelationship(
+      firstDiagram, nodes.at(0).id, nodes.at(1).id,
+      QStringLiteral("association"));
+  const auto *connector =
+      findConnector(controller.data().diagrams.first(), connectorId);
+  QVERIFY(connector);
+  const QString relationshipId = connector->relationshipId;
+
+  controller.editText(relationshipId, QStringLiteral("name"), -1,
+                      QStringLiteral("owns"));
+  QCOMPARE(findRelationship(controller.data(), relationshipId)->name,
+           QStringLiteral("owns"));
+  controller.undo();
+  QVERIFY(findRelationship(controller.data(), relationshipId)->name !=
+          QStringLiteral("owns"));
+
+  const ProjectData beforeRelationshipDeletion = controller.data();
+  controller.selectObject(relationshipId, QStringLiteral("relationship"));
+  controller.deleteSelected();
+  QVERIFY(!findRelationship(controller.data(), relationshipId));
+  QVERIFY(controller.data().diagrams.first().connectors.isEmpty());
+  controller.undo();
+  QCOMPARE(controller.data(), beforeRelationshipDeletion);
+
+  const QString secondDiagram = controller.addDiagram();
+  controller.selectObject(firstElement, QStringLiteral("element"));
+  const ProjectData beforePresentation = controller.data();
+  controller.addSelectedToDiagram(secondDiagram);
+  QCOMPARE(controller.data().diagrams.at(1).nodes.size(), 1);
+  controller.undo();
+  QCOMPARE(controller.data(), beforePresentation);
+  controller.redo();
+
+  const ProjectData beforeDiagramDeletion = controller.data();
+  controller.selectObject(secondDiagram, QStringLiteral("diagram"));
+  controller.deleteSelected();
+  QVERIFY(!findDiagram(controller.data(), secondDiagram));
+  controller.undo();
+  QCOMPARE(controller.data(), beforeDiagramDeletion);
+  controller.redo();
+  QVERIFY(!findDiagram(controller.data(), secondDiagram));
+}
+
+void CoreTests::connectorAnchorUndoRedo() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  controller.addElement(QStringLiteral("class"), diagramId);
+  controller.addElement(QStringLiteral("class"), diagramId);
+  const auto &nodes = controller.data().diagrams.first().nodes;
+  const QString connectorId = controller.createRelationship(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("dependency"));
+  QVERIFY(!connectorId.isEmpty());
+  const auto connector = [&]() {
+    return findConnector(controller.data().diagrams.first(), connectorId);
+  };
+  QVERIFY(connector());
+  const ConnectorAnchor originalSourceAnchor = connector()->sourceAnchor;
+
+  controller.updateConnectorAnchor(diagramId, connectorId, true,
+                                   QStringLiteral("right"), 0.25);
+  QVERIFY(connector()->sourceAnchor.side == ConnectorSide::Right);
+  QCOMPARE(connector()->sourceAnchor.offset, 0.25);
+
+  controller.undo();
+  QCOMPARE(connector()->sourceAnchor, originalSourceAnchor);
+  controller.redo();
+  QVERIFY(connector()->sourceAnchor.side == ConnectorSide::Right);
+  QCOMPARE(connector()->sourceAnchor.offset, 0.25);
+}
+
+void CoreTests::relationshipTypesAndPresentationRemoval() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString sourceElement =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const QString targetElement =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const auto originalNodes = controller.data().diagrams.first().nodes;
+
+  const QStringList types = {QStringLiteral("dependency"),
+                             QStringLiteral("generalization"),
+                             QStringLiteral("association")};
+  for (const auto &type : types) {
+    const QString connectorId = controller.createRelationship(
+        diagramId, originalNodes.at(0).id, originalNodes.at(1).id, type);
+    QVERIFY(!connectorId.isEmpty());
+    const auto &relationship = controller.data().relationships.constLast();
+    QCOMPARE(toString(relationship.type), type);
+    QCOMPARE(relationship.sourceId, sourceElement);
+    QCOMPARE(relationship.targetId, targetElement);
+    const auto *connector =
+        findConnector(controller.data().diagrams.first(), connectorId);
+    QVERIFY(connector);
+    QVERIFY(connector->sourceAnchor.side != ConnectorSide::Automatic);
+    QVERIFY(connector->targetAnchor.side != ConnectorSide::Automatic);
+    QVERIFY(connector->sourceAnchor.offset >= 0.0);
+    QVERIFY(connector->sourceAnchor.offset <= 1.0);
+    QVERIFY(connector->targetAnchor.offset >= 0.0);
+    QVERIFY(connector->targetAnchor.offset <= 1.0);
+  }
+
+  const int relationshipCount = controller.data().relationships.size();
+  controller.removePresentations(diagramId, {originalNodes.at(0).id});
+  QCOMPARE(controller.data().elements.size(), 2);
+  QCOMPARE(controller.data().relationships.size(), relationshipCount);
+  QCOMPARE(controller.data().diagrams.first().nodes.size(), 1);
+  QCOMPARE(controller.data().diagrams.first().connectors.size(), 0);
+
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first().nodes.size(), 2);
+  QCOMPARE(controller.data().diagrams.first().connectors.size(), 3);
+
+  // Re-placing a removed presentation is a new command, not an undo. This is
+  // the operation invoked by a project-tree double click.
+  controller.redo();
+  controller.selectObject(sourceElement, QStringLiteral("element"));
+  controller.addSelectedToDiagram(diagramId);
+  QCOMPARE(controller.data().diagrams.first().nodes.size(), 2);
+  QVERIFY(std::any_of(controller.data().diagrams.first().nodes.cbegin(),
+                      controller.data().diagrams.first().nodes.cend(),
+                      [&](const NodePresentation &node) {
+                        return node.elementId == sourceElement;
+                      }));
+}
+
+void CoreTests::multipleDiagramWorkspace() {
+  ProjectController controller;
+  WorkspaceController workspace(&controller);
+  const QString first = controller.data().diagrams.first().id;
+  const QString second = controller.addDiagram();
+  QCOMPARE(workspace.diagramIdsForHost(workspace.mainHostId()).size(), 2);
+
+  const QString host = workspace.detachDiagram(second, 300, 200);
+  QVERIFY(!host.isEmpty());
+  QCOMPARE(workspace.diagramIdsForHost(host), QVariantList{second});
+  QCOMPARE(workspace.hostForDiagram(first), workspace.mainHostId());
+  QCOMPARE(workspace.hostX(host), 300);
+
+  workspace.moveDiagram(first, host);
+  QCOMPARE(workspace.diagramIdsForHost(host).size(), 2);
+
+  // Moving inside a host also supplies the ordering used by tab-strip drops.
+  workspace.moveDiagram(second, host, 0);
+  QCOMPARE(workspace.diagramIdsForHost(host), QVariantList({second, first}));
+
+  workspace.closeHost(host);
+  QCOMPARE(workspace.detachedHostIds().size(), 0);
+  QCOMPARE(workspace.diagramIdsForHost(workspace.mainHostId()).size(), 2);
+}
+
+void CoreTests::detachedWindowModelAndGeometryRemainStable() {
+  ProjectController controller;
+  WorkspaceController workspace(&controller);
+  const QString second = controller.addDiagram();
+  const QString third = controller.addDiagram();
+
+  const QString firstHost = workspace.detachDiagram(second, 300, 200);
+  QCOMPARE(workspace.rowCount(), 1);
+  const QPersistentModelIndex firstHostIndex(workspace.index(0, 0));
+  QCOMPARE(
+      firstHostIndex.data(WorkspaceController::WindowHostIdRole).toString(),
+      firstHost);
+
+  workspace.updateHostGeometry(firstHost, 360, 240, 1024, 720);
+  const QString secondHost = workspace.detachDiagram(third, 700, 400);
+  QCOMPARE(workspace.rowCount(), 2);
+  QVERIFY(firstHostIndex.isValid());
+
+  workspace.moveDiagram(third, firstHost);
+  QCOMPARE(workspace.rowCount(), 1);
+  QVERIFY(firstHostIndex.isValid());
+  QCOMPARE(
+      firstHostIndex.data(WorkspaceController::WindowHostIdRole).toString(),
+      firstHost);
+  QCOMPARE(workspace.hostX(firstHost), 360);
+  QCOMPARE(workspace.hostY(firstHost), 240);
+  QCOMPARE(workspace.hostWidth(firstHost), 1024);
+  QCOMPARE(workspace.hostHeight(firstHost), 720);
+  QVERIFY(workspace.hostForDiagram(third) != secondHost);
+}
+
+void CoreTests::closingAllDetachedWindowsReturnsTheirDiagrams() {
+  ProjectController controller;
+  WorkspaceController workspace(&controller);
+  const QString second = controller.addDiagram();
+  const QString third = controller.addDiagram();
+  workspace.detachDiagram(second, 100, 100);
+  workspace.detachDiagram(third, 200, 200);
+  QCOMPARE(workspace.detachedHostIds().size(), 2);
+
+  workspace.closeAllDetachedHosts();
+
+  QCOMPARE(workspace.detachedHostIds().size(), 0);
+  QCOMPARE(workspace.diagramIdsForHost(workspace.mainHostId()).size(), 3);
+  QCOMPARE(workspace.hostForDiagram(second), workspace.mainHostId());
+  QCOMPARE(workspace.hostForDiagram(third), workspace.mainHostId());
+}
+
+void CoreTests::persistedWorkspaceRestoresTabGroups() {
+  struct SettingsScope {
+    QString organization = QCoreApplication::organizationName();
+    QString application = QCoreApplication::applicationName();
+    SettingsScope() {
+      QCoreApplication::setOrganizationName(
+          QStringLiteral("uuml-workspace-test-%1").arg(newId()));
+      QCoreApplication::setApplicationName(QStringLiteral("uuml-core-tests"));
+    }
+    ~SettingsScope() {
+      QSettings().clear();
+      QCoreApplication::setOrganizationName(organization);
+      QCoreApplication::setApplicationName(application);
+    }
+  } settingsScope;
+
+  ProjectController controller;
+  const QString first = controller.data().diagrams.first().id;
+  const QString second = controller.addDiagram();
+  const QString third = controller.addDiagram();
+
+  {
+    WorkspaceController workspace(&controller, true);
+    const QString host = workspace.detachDiagram(second, 300, 200);
+    workspace.moveDiagram(third, host, 0);
+    workspace.updateHostGeometry(host, 410, 260, 1100, 760);
+    workspace.setActiveDiagramId(third);
+    workspace.setProjectTreeVisible(false);
+    workspace.setPropertiesVisible(true);
+    workspace.updatePanelWidths(315, 365);
+    workspace.updateMainWindowGeometry(120, 90, 1500, 960);
+  }
+
+  {
+    WorkspaceController restored(&controller, true);
+    const QString host = restored.hostForDiagram(third);
+    QVERIFY(!host.isEmpty());
+    QVERIFY(host != restored.mainHostId());
+    QCOMPARE(restored.diagramIdsForHost(host), QVariantList({third, second}));
+    QCOMPARE(restored.diagramIdsForHost(restored.mainHostId()),
+             QVariantList({first}));
+    QCOMPARE(restored.hostX(host), 410);
+    QCOMPARE(restored.hostY(host), 260);
+    QCOMPARE(restored.hostWidth(host), 1100);
+    QCOMPARE(restored.hostHeight(host), 760);
+    QCOMPARE(restored.activeDiagramId(), third);
+    QVERIFY(!restored.projectTreeVisible());
+    QVERIFY(restored.propertiesVisible());
+    QCOMPARE(restored.projectTreeWidth(), 315);
+    QCOMPARE(restored.propertiesWidth(), 365);
+    QCOMPARE(restored.mainWindowX(), 120);
+    QCOMPARE(restored.mainWindowY(), 90);
+    QCOMPARE(restored.mainWindowWidth(), 1500);
+    QCOMPARE(restored.mainWindowHeight(), 960);
+  }
+}
+
+void CoreTests::interruptedSaveRecovery() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  ProjectData project = createStarterProject(QStringLiteral("Recover me"));
+  QVERIFY(ProjectSerializer::save(temporary.path(), project).ok);
+
+  const QString recovery =
+      QDir(temporary.path()).filePath(QStringLiteral(".uuml-recovery"));
+  QVERIFY(QDir().mkpath(recovery));
+  struct FilePair {
+    QString source;
+    QString backup;
+  };
+  const QList<FilePair> files = {
+      {QDir(temporary.path()).filePath(QStringLiteral("manifest.json5")),
+       QDir(recovery).filePath(QStringLiteral("manifest.json5"))},
+      {QDir(temporary.path()).filePath(QStringLiteral("model/model.json5")),
+       QDir(recovery).filePath(QStringLiteral("model.json5"))},
+      {QDir(temporary.path())
+           .filePath(QStringLiteral("diagrams/diagrams.json5")),
+       QDir(recovery).filePath(QStringLiteral("diagrams.json5"))}};
+  for (const auto &pair : files)
+    QVERIFY(QFile::copy(pair.source, pair.backup));
+  QFile marker(QDir(recovery).filePath(QStringLiteral("pending")));
+  QVERIFY(marker.open(QIODevice::WriteOnly));
+  marker.write("pending\n");
+  marker.close();
+  QFile corrupted(files.at(1).source);
+  QVERIFY(corrupted.open(QIODevice::WriteOnly | QIODevice::Truncate));
+  corrupted.write("not valid");
+  corrupted.close();
+
+  const auto outcome = ProjectSerializer::load(temporary.path());
+  QVERIFY(outcome.ok);
+  QVERIFY(outcome.recovered);
+  QCOMPARE(outcome.project.name, QStringLiteral("Recover me"));
+}
+
+void CoreTests::fullyCoveredTextHasNoVisibleFragments() {
+  const QRectF textBounds(10, 10, 100, 20);
+  QVERIFY(
+      uuml::ui::visibleRectangleFragments(textBounds, {QRectF(0, 0, 200, 200)})
+          .isEmpty());
+}
+
+void CoreTests::partialTextCoveragePreservesOnlyExposedArea() {
+  const QRectF textBounds(0, 0, 100, 100);
+  const QRectF occluder(20, 20, 60, 60);
+  const auto fragments =
+      uuml::ui::visibleRectangleFragments(textBounds, {occluder});
+
+  qreal visibleArea = 0.0;
+  for (const QRectF &fragment : fragments) {
+    visibleArea += fragment.width() * fragment.height();
+    QVERIFY(!fragment.intersects(occluder));
+  }
+  QCOMPARE(fragments.size(), 4);
+  QCOMPARE(visibleArea, 6400.0);
+}
+
+void CoreTests::triangleGeometryIsSplitOnPrimitiveBoundaries() {
+  const auto batches = uuml::ui::triangleBatches(150'006, 60'000);
+  QCOMPARE(batches.size(), 3);
+  QCOMPARE(batches.at(0).firstVertex, 0);
+  QCOMPARE(batches.at(0).vertexCount, 60'000);
+  QCOMPARE(batches.at(1).firstVertex, 60'000);
+  QCOMPARE(batches.at(1).vertexCount, 60'000);
+  QCOMPARE(batches.at(2).firstVertex, 120'000);
+  QCOMPARE(batches.at(2).vertexCount, 30'006);
+  for (const auto &batch : batches) {
+    QCOMPARE(batch.firstVertex % 3, 0);
+    QCOMPARE(batch.vertexCount % 3, 0);
+    QVERIFY(batch.vertexCount <= 60'000);
+  }
+}
+
+QTEST_APPLESS_MAIN(CoreTests)
+
+#include "core_tests.moc"
