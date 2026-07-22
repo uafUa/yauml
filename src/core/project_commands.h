@@ -200,7 +200,9 @@ public:
                                bool reconnectSource, QString beforeElementId,
                                QString afterElementId,
                                ConnectorAnchor beforeAnchor,
-                               ConnectorAnchor afterAnchor);
+                               ConnectorAnchor afterAnchor,
+                               QList<ConnectorBendPoint> beforeBendPoints,
+                               QList<ConnectorBendPoint> afterBendPoints);
 
 private:
   void execute(ProjectData &project) override;
@@ -215,6 +217,8 @@ private:
   QString m_afterElementId;
   ConnectorAnchor m_beforeAnchor;
   ConnectorAnchor m_afterAnchor;
+  QList<ConnectorBendPoint> m_beforeBendPoints;
+  QList<ConnectorBendPoint> m_afterBendPoints;
 };
 
 class MoveConnectorAnchorCommand final : public ProjectCommand {
@@ -233,6 +237,23 @@ private:
   bool m_source;
   ConnectorAnchor m_before;
   ConnectorAnchor m_after;
+};
+
+class SetConnectorRoutingCommand final : public ProjectCommand {
+public:
+  SetConnectorRoutingCommand(ProjectController *controller, QString diagramId,
+                             QString connectorId, ConnectorRouting before,
+                             ConnectorRouting after);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, ConnectorRouting routing);
+
+  QString m_diagramId;
+  QString m_connectorId;
+  ConnectorRouting m_before;
+  ConnectorRouting m_after;
 };
 
 class UpdateConnectorBendPointsCommand final : public ProjectCommand {

@@ -79,6 +79,7 @@ private slots:
   void relationshipAndDiagramDeletionUndoRedo();
   void relationshipTypesAndPresentationRemoval();
   void connectorAnchorUndoRedo();
+  void connectorRoutingUndoRedo();
   void connectorBendPointsUndoRedo();
   void multipleDiagramWorkspace();
   void detachedWindowModelAndGeometryRemainStable();
@@ -149,6 +150,7 @@ void CoreTests::deterministicRoundTrip() {
   project.diagrams[0].nodes.append(node);
   Relationship relationship;
   relationship.id = newId();
+  relationship.type = RelationshipType::Composition;
   relationship.name = QStringLiteral("self reference");
   relationship.sourceId = element.id;
   relationship.targetId = element.id;
@@ -156,6 +158,7 @@ void CoreTests::deterministicRoundTrip() {
   ConnectorPresentation connector;
   connector.id = newId();
   connector.relationshipId = relationship.id;
+  connector.routing = ConnectorRouting::Orthogonal;
   connector.sourceAnchor.side = ConnectorSide::Right;
   connector.sourceAnchor.offset = 0.25;
   connector.sourceAnchor.extra.insert(QStringLiteral("futureAnchorField"),
@@ -350,13 +353,13 @@ void CoreTests::reconnectRelationshipCommandUndoRedo() {
       *findRelationship(controller.data(), relationshipId);
   const ConnectorAnchor beforeAnchor = connector->sourceAnchor;
 
-  controller.reconnectRelationship(diagramId, connectorId, nodes.at(2).id,
-                                   true);
+  const ConnectorAnchor reattachedAnchor{ConnectorSide::Left, 0.25};
+  controller.reconnectRelationshipAtAnchor(
+      diagramId, connectorId, nodes.at(2).id, true, reattachedAnchor);
   QCOMPARE(findRelationship(controller.data(), relationshipId)->sourceId,
            nodes.at(2).elementId);
   connector = findConnector(controller.data().diagrams.first(), connectorId);
-  QVERIFY(connector->sourceAnchor.side == ConnectorSide::Automatic);
-  QCOMPARE(connector->sourceAnchor.offset, 0.5);
+  QCOMPARE(connector->sourceAnchor, reattachedAnchor);
 
   controller.undo();
   QCOMPARE(*findRelationship(controller.data(), relationshipId),
@@ -491,6 +494,33 @@ void CoreTests::connectorAnchorUndoRedo() {
   QCOMPARE(connector()->sourceAnchor.offset, 0.25);
 }
 
+void CoreTests::connectorRoutingUndoRedo() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  controller.addElement(QStringLiteral("class"), diagramId);
+  controller.addElement(QStringLiteral("class"), diagramId);
+  const auto nodes = controller.data().diagrams.first().nodes;
+  const QString connectorId = controller.createRelationshipWithRouting(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("dependency"),
+      QStringLiteral("orthogonal"));
+  QVERIFY(!connectorId.isEmpty());
+  const auto connector = [&]() {
+    return findConnector(controller.data().diagrams.first(), connectorId);
+  };
+  QVERIFY(connector());
+  QVERIFY(connector()->routing == ConnectorRouting::Orthogonal);
+
+  controller.setConnectorRouting(diagramId, connectorId,
+                                 QStringLiteral("straight"));
+  QVERIFY(connector()->routing == ConnectorRouting::Straight);
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Use straight connector routing"));
+  controller.undo();
+  QVERIFY(connector()->routing == ConnectorRouting::Orthogonal);
+  controller.redo();
+  QVERIFY(connector()->routing == ConnectorRouting::Straight);
+}
+
 void CoreTests::connectorBendPointsUndoRedo() {
   ProjectController controller;
   const QString diagramId = controller.data().diagrams.first().id;
@@ -570,9 +600,10 @@ void CoreTests::relationshipTypesAndPresentationRemoval() {
       controller.addElement(QStringLiteral("class"), diagramId);
   const auto originalNodes = controller.data().diagrams.first().nodes;
 
-  const QStringList types = {QStringLiteral("dependency"),
-                             QStringLiteral("generalization"),
-                             QStringLiteral("association")};
+  const QStringList types = {
+      QStringLiteral("dependency"),     QStringLiteral("realization"),
+      QStringLiteral("generalization"), QStringLiteral("association"),
+      QStringLiteral("aggregation"),    QStringLiteral("composition")};
   for (const auto &type : types) {
     const QString connectorId = controller.createRelationship(
         diagramId, originalNodes.at(0).id, originalNodes.at(1).id, type);
@@ -604,7 +635,7 @@ void CoreTests::relationshipTypesAndPresentationRemoval() {
 
   controller.undo();
   QCOMPARE(controller.data().diagrams.first().nodes.size(), 2);
-  QCOMPARE(controller.data().diagrams.first().connectors.size(), 3);
+  QCOMPARE(controller.data().diagrams.first().connectors.size(), types.size());
 
   // Re-placing a removed presentation is a new command, not an undo. This is
   // the operation invoked by a project-tree double click.
@@ -612,7 +643,7 @@ void CoreTests::relationshipTypesAndPresentationRemoval() {
   controller.selectObject(sourceElement, QStringLiteral("element"));
   controller.addSelectedToDiagram(diagramId);
   QCOMPARE(controller.data().diagrams.first().nodes.size(), 2);
-  QCOMPARE(controller.data().diagrams.first().connectors.size(), 3);
+  QCOMPARE(controller.data().diagrams.first().connectors.size(), types.size());
   QVERIFY(std::any_of(controller.data().diagrams.first().nodes.cbegin(),
                       controller.data().diagrams.first().nodes.cend(),
                       [&](const NodePresentation &node) {
@@ -637,7 +668,8 @@ void CoreTests::relationshipTypesAndPresentationRemoval() {
   controller.selectObject(targetElement, QStringLiteral("element"));
   controller.addSelectedToDiagram(secondDiagramId);
   QCOMPARE(controller.data().diagrams.constLast().nodes.size(), 2);
-  QCOMPARE(controller.data().diagrams.constLast().connectors.size(), 3);
+  QCOMPARE(controller.data().diagrams.constLast().connectors.size(),
+           types.size());
 
   controller.undo();
   QCOMPARE(controller.data().diagrams.constLast().nodes.size(), 1);
@@ -645,7 +677,8 @@ void CoreTests::relationshipTypesAndPresentationRemoval() {
   QCOMPARE(controller.data().relationships.size(), relationshipCount);
   controller.redo();
   QCOMPARE(controller.data().diagrams.constLast().nodes.size(), 2);
-  QCOMPARE(controller.data().diagrams.constLast().connectors.size(), 3);
+  QCOMPARE(controller.data().diagrams.constLast().connectors.size(),
+           types.size());
 }
 
 void CoreTests::multipleDiagramWorkspace() {
@@ -790,12 +823,26 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(settings.alignmentGuidesEnabled(),
              ApplicationSettings::kDefaultAlignmentGuidesEnabled);
     QCOMPARE(settings.gridSpacing(), ApplicationSettings::kDefaultGridSpacing);
+    QCOMPARE(settings.defaultConnectorRouting(), QStringLiteral("straight"));
+    QCOMPARE(settings.relationshipGestureKeys(),
+             ApplicationSettings::defaultRelationshipGestureKeys());
     QSignalSpy changes(&settings,
                        &ApplicationSettings::defaultDistributionGapChanged);
     settings.setDefaultDistributionGap(24);
     settings.setSnapToGridEnabled(false);
     settings.setAlignmentGuidesEnabled(false);
     settings.setGridSpacing(35);
+    settings.setDefaultConnectorRouting(QStringLiteral("orthogonal"));
+    QVariantMap gestureKeys =
+        ApplicationSettings::defaultRelationshipGestureKeys();
+    gestureKeys.insert(QStringLiteral("dependency"), QStringLiteral("X"));
+    gestureKeys.insert(QStringLiteral("realization"), QStringLiteral("Y"));
+    gestureKeys.insert(QStringLiteral("generalization"), QStringLiteral("Z"));
+    QVERIFY(settings.setRelationshipGestureKeys(gestureKeys));
+    const QVariantMap acceptedGestureKeys = settings.relationshipGestureKeys();
+    gestureKeys.insert(QStringLiteral("composition"), QStringLiteral("X"));
+    QVERIFY(!settings.setRelationshipGestureKeys(gestureKeys));
+    QCOMPARE(settings.relationshipGestureKeys(), acceptedGestureKeys);
     QCOMPARE(changes.count(), 1);
   }
 
@@ -805,6 +852,16 @@ void CoreTests::applicationPreferencesPersist() {
     QVERIFY(!restored.snapToGridEnabled());
     QVERIFY(!restored.alignmentGuidesEnabled());
     QCOMPARE(restored.gridSpacing(), 35);
+    QCOMPARE(restored.defaultConnectorRouting(), QStringLiteral("orthogonal"));
+    QVariantMap expectedGestureKeys =
+        ApplicationSettings::defaultRelationshipGestureKeys();
+    expectedGestureKeys.insert(QStringLiteral("dependency"),
+                               QStringLiteral("X"));
+    expectedGestureKeys.insert(QStringLiteral("realization"),
+                               QStringLiteral("Y"));
+    expectedGestureKeys.insert(QStringLiteral("generalization"),
+                               QStringLiteral("Z"));
+    QCOMPARE(restored.relationshipGestureKeys(), expectedGestureKeys);
     restored.setDefaultDistributionGap(-10);
     restored.setGridSpacing(-10);
     QCOMPARE(restored.defaultDistributionGap(),
@@ -818,6 +875,9 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(restored.alignmentGuidesEnabled(),
              ApplicationSettings::kDefaultAlignmentGuidesEnabled);
     QCOMPARE(restored.gridSpacing(), ApplicationSettings::kDefaultGridSpacing);
+    QCOMPARE(restored.defaultConnectorRouting(), QStringLiteral("straight"));
+    QCOMPARE(restored.relationshipGestureKeys(),
+             ApplicationSettings::defaultRelationshipGestureKeys());
   }
 }
 

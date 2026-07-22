@@ -365,7 +365,8 @@ ReconnectRelationshipCommand::ReconnectRelationshipCommand(
     ProjectController *controller, QString diagramId, QString connectorId,
     QString relationshipId, bool reconnectSource, QString beforeElementId,
     QString afterElementId, ConnectorAnchor beforeAnchor,
-    ConnectorAnchor afterAnchor)
+    ConnectorAnchor afterAnchor, QList<ConnectorBendPoint> beforeBendPoints,
+    QList<ConnectorBendPoint> afterBendPoints)
     : ProjectCommand(controller, reconnectSource
                                      ? QStringLiteral("Reconnect source")
                                      : QStringLiteral("Reconnect target")),
@@ -375,7 +376,9 @@ ReconnectRelationshipCommand::ReconnectRelationshipCommand(
       m_beforeElementId(std::move(beforeElementId)),
       m_afterElementId(std::move(afterElementId)),
       m_beforeAnchor(std::move(beforeAnchor)),
-      m_afterAnchor(std::move(afterAnchor)) {}
+      m_afterAnchor(std::move(afterAnchor)),
+      m_beforeBendPoints(std::move(beforeBendPoints)),
+      m_afterBendPoints(std::move(afterBendPoints)) {}
 
 void ReconnectRelationshipCommand::execute(ProjectData &project) {
   apply(project, true);
@@ -396,6 +399,7 @@ void ReconnectRelationshipCommand::apply(ProjectData &project, bool forward) {
       ConnectorAnchor &anchor =
           m_reconnectSource ? connector->sourceAnchor : connector->targetAnchor;
       anchor = forward ? m_afterAnchor : m_beforeAnchor;
+      connector->bendPoints = forward ? m_afterBendPoints : m_beforeBendPoints;
     }
   }
 }
@@ -426,6 +430,31 @@ void MoveConnectorAnchorCommand::apply(ProjectData &project,
           m_source ? connector->sourceAnchor : connector->targetAnchor;
       target = anchor;
     }
+  }
+}
+
+SetConnectorRoutingCommand::SetConnectorRoutingCommand(
+    ProjectController *controller, QString diagramId, QString connectorId,
+    ConnectorRouting before, ConnectorRouting after)
+    : ProjectCommand(
+          controller,
+          QStringLiteral("Use %1 connector routing").arg(toString(after))),
+      m_diagramId(std::move(diagramId)), m_connectorId(std::move(connectorId)),
+      m_before(before), m_after(after) {}
+
+void SetConnectorRoutingCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void SetConnectorRoutingCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void SetConnectorRoutingCommand::apply(ProjectData &project,
+                                       ConnectorRouting routing) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    if (auto *connector = findConnector(*diagram, m_connectorId))
+      connector->routing = routing;
   }
 }
 

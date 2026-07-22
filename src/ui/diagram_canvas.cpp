@@ -2,8 +2,10 @@
 
 #include "core/application_settings.h"
 #include "core/project_controller.h"
+#include "ui/connector_routing.h"
 #include "ui/diagram_arrangement.h"
 #include "ui/diagram_snapping.h"
+#include "ui/relationship_style.h"
 #include "ui/text_occlusion.h"
 #include "ui/triangle_batch.h"
 #include "ui/ui_theme.h"
@@ -47,10 +49,12 @@ struct RenderNode {
 
 struct RenderConnector {
   QVector<QPointF> points;
+  QVector<int> bendPointRouteIndices;
   QString name;
   RelationshipType type = RelationshipType::Dependency;
   bool selected = false;
   int selectedBendPoint = -1;
+  bool preview = false;
 };
 
 struct SceneSnapshot {
@@ -92,17 +96,6 @@ qreal distanceToSegment(const QPointF &point, const QPointF &start,
   const qreal t = std::clamp(
       QPointF::dotProduct(point - start, delta) / lengthSquared, 0.0, 1.0);
   return QLineF(point, start + delta * t).length();
-}
-
-QVector<QPointF> routePoints(const QPointF &source,
-                             const QVector<QPointF> &bendPoints,
-                             const QPointF &target) {
-  QVector<QPointF> points;
-  points.reserve(bendPoints.size() + 2);
-  points.append(source);
-  points.append(bendPoints);
-  points.append(target);
-  return points;
 }
 
 QPointF polylineMiddle(const QVector<QPointF> &points) {
@@ -189,6 +182,17 @@ ConnectorAnchor anchorAtPerimeterPoint(const QRectF &rect,
            (point.y() - rect.top()) / rect.height());
   anchor.offset = std::clamp(anchor.offset, 0.0, 1.0);
   return anchor;
+}
+
+bool nearRectanglePerimeter(const QRectF &rect, const QPointF &point,
+                            qreal tolerance) {
+  if (!rect.adjusted(-tolerance, -tolerance, tolerance, tolerance)
+           .contains(point))
+    return false;
+  return std::min({std::abs(point.x() - rect.left()),
+                   std::abs(point.x() - rect.right()),
+                   std::abs(point.y() - rect.top()),
+                   std::abs(point.y() - rect.bottom())}) <= tolerance;
 }
 
 const QColor &elementColor(ElementType type, const ui::UiPalette &palette) {
@@ -335,6 +339,50 @@ void appendAntialiasedTriangle(QVector<QSGGeometry::ColoredPoint2D> &vertices,
   appendFeather(a, b, outerA, outerB);
   appendFeather(b, c, outerB, outerC);
   appendFeather(c, a, outerC, outerA);
+}
+
+void appendRelationshipDecoration(
+    QVector<QSGGeometry::ColoredPoint2D> &vertices,
+    ui::RelationshipDecoration decoration, const QPointF &tip,
+    const QPointF &adjacentRoutePoint, qreal zoom, const QColor &color,
+    const QColor &background) {
+  if (decoration == ui::RelationshipDecoration::None)
+    return;
+  const QPointF direction = adjacentRoutePoint - tip;
+  const qreal length = std::hypot(direction.x(), direction.y());
+  if (length <= 1.0)
+    return;
+
+  const QPointF unit = direction / length;
+  const QPointF normal(-unit.y(), unit.x());
+  const qreal feather = 1.0 / zoom;
+  if (decoration == ui::RelationshipDecoration::OpenArrow ||
+      decoration == ui::RelationshipDecoration::HollowTriangle) {
+    const QPointF first = tip + unit * (12.0 / zoom) + normal * (5.0 / zoom);
+    const QPointF second = tip + unit * (12.0 / zoom) - normal * (5.0 / zoom);
+    if (decoration == ui::RelationshipDecoration::HollowTriangle) {
+      appendAntialiasedTriangle(vertices, tip, first, second, feather,
+                                background);
+      appendAntialiasedLine(vertices, first, second, 1.5 / zoom, feather,
+                            color);
+    }
+    appendAntialiasedLine(vertices, tip, first, 1.5 / zoom, feather, color);
+    appendAntialiasedLine(vertices, tip, second, 1.5 / zoom, feather, color);
+    return;
+  }
+
+  const QPointF first = tip + unit * (8.0 / zoom) + normal * (5.5 / zoom);
+  const QPointF far = tip + unit * (16.0 / zoom);
+  const QPointF second = tip + unit * (8.0 / zoom) - normal * (5.5 / zoom);
+  const QColor fill = decoration == ui::RelationshipDecoration::FilledDiamond
+                          ? color
+                          : background;
+  appendTriangle(vertices, tip, first, second, fill);
+  appendTriangle(vertices, first, far, second, fill);
+  appendAntialiasedLine(vertices, tip, first, 1.5 / zoom, feather, color);
+  appendAntialiasedLine(vertices, first, far, 1.5 / zoom, feather, color);
+  appendAntialiasedLine(vertices, far, second, 1.5 / zoom, feather, color);
+  appendAntialiasedLine(vertices, second, tip, 1.5 / zoom, feather, color);
 }
 
 void appendBorder(QVector<QSGGeometry::ColoredPoint2D> &vertices,
@@ -763,7 +811,7 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
   const auto &palette = ui::uiPalette();
   QVector<QSGGeometry::ColoredPoint2D> vertices;
   vertices.reserve(snapshot.nodes.size() * 48 +
-                   snapshot.connectors.size() * 64);
+                   snapshot.connectors.size() * 96);
 
   if (snapshot.lassoVisible)
     appendRect(vertices, snapshot.lassoRect, palette.selectionOverlay);
@@ -771,71 +819,31 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
   for (const auto &connector : snapshot.connectors) {
     if (connector.points.size() < 2)
       continue;
-    const QColor &color =
-        connector.selected ? palette.accent : palette.connector;
-    const qreal lineWidth = (connector.selected ? 3.0 : 1.5) / zoom;
+    const QColor &color = connector.selected || connector.preview
+                              ? palette.accent
+                              : palette.connector;
+    const qreal lineWidth =
+        (connector.selected || connector.preview ? 3.0 : 1.5) / zoom;
+    const ui::RelationshipVisualStyle style =
+        ui::relationshipVisualStyle(connector.type);
     for (qsizetype index = 1; index < connector.points.size(); ++index) {
       const QPointF start = connector.points.at(index - 1);
       const QPointF end = connector.points.at(index);
-      if (connector.type == RelationshipType::Dependency)
+      if (style.line == ui::RelationshipLineStyle::Dashed)
         appendDashedLine(vertices, start, end, lineWidth, 1.0 / zoom, color,
                          zoom);
       else
         appendAntialiasedLine(vertices, start, end, lineWidth, 1.0 / zoom,
                               color);
     }
-    if (detail > 0 && connector.type != RelationshipType::Association) {
-      const QPointF end = connector.points.constLast();
-      const QPointF direction =
-          connector.points.at(connector.points.size() - 2) - end;
-      const qreal length = std::hypot(direction.x(), direction.y());
-      if (length > 1) {
-        const QPointF unit = direction / length;
-        const QPointF normal(-unit.y(), unit.x());
-        const QPointF first =
-            end + unit * (12.0 / zoom) + normal * (5.0 / zoom);
-        const QPointF second =
-            end + unit * (12.0 / zoom) - normal * (5.0 / zoom);
-        if (connector.type == RelationshipType::Generalization) {
-          appendAntialiasedTriangle(vertices, end, first, second, 1.0 / zoom,
-                                    palette.surface);
-          appendAntialiasedLine(vertices, end, first, 1.5 / zoom, 1.0 / zoom,
-                                color);
-          appendAntialiasedLine(vertices, end, second, 1.5 / zoom, 1.0 / zoom,
-                                color);
-          appendAntialiasedLine(vertices, first, second, 1.5 / zoom, 1.0 / zoom,
-                                color);
-        } else {
-          // Dependencies use the UML open arrowhead.
-          appendAntialiasedLine(vertices, end, first, 1.5 / zoom, 1.0 / zoom,
-                                color);
-          appendAntialiasedLine(vertices, end, second, 1.5 / zoom, 1.0 / zoom,
-                                color);
-        }
-      }
-    }
-    if (connector.selected) {
-      constexpr qreal kOuterHandleSize = 11.0;
-      constexpr qreal kInnerHandleSize = 7.0;
-      const qreal outerSize = kOuterHandleSize / zoom;
-      const qreal innerSize = kInnerHandleSize / zoom;
-      const auto appendHandle = [&](const QPointF &center, bool active) {
-        appendRect(vertices,
-                   {center.x() - outerSize / 2.0, center.y() - outerSize / 2.0,
-                    outerSize, outerSize},
-                   palette.accent);
-        appendRect(vertices,
-                   {center.x() - innerSize / 2.0, center.y() - innerSize / 2.0,
-                    innerSize, innerSize},
-                   active ? palette.activeHandleFill : palette.surface);
-      };
-      for (qsizetype index = 0; index < connector.points.size(); ++index) {
-        const int bendPoint = index > 0 && index + 1 < connector.points.size()
-                                  ? static_cast<int>(index - 1)
-                                  : -1;
-        appendHandle(connector.points.at(index),
-                     bendPoint == connector.selectedBendPoint);
-      }
+    if (detail > 0) {
+      appendRelationshipDecoration(
+          vertices, style.source, connector.points.constFirst(),
+          connector.points.at(1), zoom, color, palette.surface);
+      appendRelationshipDecoration(
+          vertices, style.target, connector.points.constLast(),
+          connector.points.at(connector.points.size() - 2), zoom, color,
+          palette.surface);
     }
   }
 
@@ -870,6 +878,38 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
                   handle, handle},
                  palette.accent);
     }
+  }
+  // Selection handles must be drawn after element fills. Endpoint handles sit
+  // on element edges, so drawing them with the connector body would hide half
+  // of each handle behind its node and make dragging unnecessarily difficult.
+  constexpr qreal kOuterHandleSize = 11.0;
+  constexpr qreal kInnerHandleSize = 7.0;
+  const qreal outerHandleSize = kOuterHandleSize / zoom;
+  const qreal innerHandleSize = kInnerHandleSize / zoom;
+  const auto appendHandle = [&](const QPointF &center, bool active) {
+    appendRect(vertices,
+               {center.x() - outerHandleSize / 2.0,
+                center.y() - outerHandleSize / 2.0, outerHandleSize,
+                outerHandleSize},
+               palette.accent);
+    appendRect(vertices,
+               {center.x() - innerHandleSize / 2.0,
+                center.y() - innerHandleSize / 2.0, innerHandleSize,
+                innerHandleSize},
+               active ? palette.activeHandleFill : palette.surface);
+  };
+  for (const auto &connector : snapshot.connectors) {
+    if (!connector.selected || connector.points.size() < 2)
+      continue;
+    appendHandle(connector.points.constFirst(), false);
+    for (int bendPoint = 0; bendPoint < connector.bendPointRouteIndices.size();
+         ++bendPoint) {
+      const int routeIndex = connector.bendPointRouteIndices.at(bendPoint);
+      if (routeIndex > 0 && routeIndex + 1 < connector.points.size())
+        appendHandle(connector.points.at(routeIndex),
+                     bendPoint == connector.selectedBendPoint);
+    }
+    appendHandle(connector.points.constLast(), false);
   }
   for (const auto &guide : snapshot.alignmentGuides) {
     appendDashedLine(vertices, guide.p1(), guide.p2(), 1.5 / zoom, 1.0 / zoom,
@@ -964,7 +1004,10 @@ DiagramCanvas::DiagramCanvas(QQuickItem *parent)
       m_snapToGridEnabled(ApplicationSettings::kDefaultSnapToGridEnabled),
       m_alignmentGuidesEnabled(
           ApplicationSettings::kDefaultAlignmentGuidesEnabled),
-      m_gridSpacing(ApplicationSettings::kDefaultGridSpacing) {
+      m_gridSpacing(ApplicationSettings::kDefaultGridSpacing),
+      m_defaultConnectorRouting(ApplicationSettings::kDefaultConnectorRouting),
+      m_relationshipGestureKeys(
+          ApplicationSettings::defaultRelationshipGestureKeys()) {
   setFlag(QQuickItem::ItemHasContents, true);
   setClip(true);
   setAcceptedMouseButtons(Qt::AllButtons);
@@ -1027,11 +1070,47 @@ bool DiagramCanvas::selectedConnectorHasBendPoints() const {
   return connector && !connector->bendPoints.isEmpty();
 }
 
-QString DiagramCanvas::reconnectPrompt() const {
-  if (m_reconnectEndpoint == ReconnectEndpoint::Source)
-    return QStringLiteral("Click the new source node");
-  if (m_reconnectEndpoint == ReconnectEndpoint::Target)
-    return QStringLiteral("Click the new target node");
+QString DiagramCanvas::selectedConnectorRouting() const {
+  const auto *d = diagram();
+  const auto *connector = d ? findConnector(*d, m_selectedConnector) : nullptr;
+  return connector ? toString(connector->routing) : QString{};
+}
+
+QVariantMap DiagramCanvas::relationshipGestureKeys() const {
+  return m_relationshipGestureKeys;
+}
+
+void DiagramCanvas::setRelationshipGestureKeys(const QVariantMap &keys) {
+  const QVariantMap defaults =
+      ApplicationSettings::defaultRelationshipGestureKeys();
+  QVariantMap normalized;
+  QSet<QString> assigned;
+  for (auto it = defaults.cbegin(); it != defaults.cend(); ++it) {
+    const QString key = keys.value(it.key()).toString().trimmed().toUpper();
+    if (key.size() != 1 || !key.front().isLetterOrNumber() ||
+        assigned.contains(key))
+      return;
+    normalized.insert(it.key(), key);
+    assigned.insert(key);
+  }
+  if (m_relationshipGestureKeys == normalized)
+    return;
+  m_relationshipGestureKeys = std::move(normalized);
+  emit relationshipGestureKeysChanged();
+}
+
+QString DiagramCanvas::connectorInteractionPrompt() const {
+  if (!m_connectorGestureType.isEmpty())
+    return QStringLiteral("Drag to a target element; release to create %1")
+        .arg(m_connectorGestureType);
+  if (m_endpointDragActive) {
+    const bool source = m_interaction == Interaction::MoveSourcePort;
+    return source
+               ? QStringLiteral(
+                     "Drag the source end; release over an element to attach")
+               : QStringLiteral(
+                     "Drag the target end; release over an element to attach");
+  }
   return {};
 }
 
@@ -1087,6 +1166,20 @@ void DiagramCanvas::setGridSpacing(int spacing) {
   update();
 }
 
+QString DiagramCanvas::defaultConnectorRouting() const {
+  return toString(m_defaultConnectorRouting);
+}
+
+void DiagramCanvas::setDefaultConnectorRouting(const QString &routing) {
+  bool routingOk = false;
+  const ConnectorRouting parsed =
+      connectorRoutingFromString(routing, &routingOk);
+  if (!routingOk || m_defaultConnectorRouting == parsed)
+    return;
+  m_defaultConnectorRouting = parsed;
+  emit defaultConnectorRoutingChanged();
+}
+
 void DiagramCanvas::refreshTheme() {
   ++m_themeRevision;
   m_sceneDirty = true;
@@ -1125,29 +1218,37 @@ DiagramCanvas::ConnectorEndpoints DiagramCanvas::connectorEndpoints(
   const auto *d = diagram();
   if (!d || !m_project)
     return {};
-  const auto *relationship =
-      findRelationship(m_project->data(), connector.relationshipId);
-  if (!relationship)
-    return {};
 
-  QRectF sourceRect;
-  QRectF targetRect;
-  for (const auto &node : d->nodes) {
-    if (node.elementId == relationship->sourceId)
-      sourceRect = nodeGeometry(node);
-    if (node.elementId == relationship->targetId)
-      targetRect = nodeGeometry(node);
-  }
+  const auto *sourceNode = endpointNode(connector, true);
+  const auto *targetNode = endpointNode(connector, false);
+  if (!sourceNode || !targetNode)
+    return {};
+  QRectF sourceRect = nodeGeometry(*sourceNode);
+  QRectF targetRect = nodeGeometry(*targetNode);
   if (!sourceRect.isValid() || !targetRect.isValid())
     return {};
 
   ConnectorAnchor sourceAnchor = connector.sourceAnchor;
   ConnectorAnchor targetAnchor = connector.targetAnchor;
-  if (connector.id == m_selectedConnector && m_portPreviewActive) {
-    if (m_interaction == Interaction::MoveSourcePort)
-      sourceAnchor = m_portPreview;
-    else if (m_interaction == Interaction::MoveTargetPort)
-      targetAnchor = m_portPreview;
+  std::optional<QPointF> detachedSource;
+  std::optional<QPointF> detachedTarget;
+  if (connector.id == m_selectedConnector && m_endpointDragActive) {
+    const auto *previewNode = m_endpointDragTargetNode.isEmpty()
+                                  ? nullptr
+                                  : findNode(*d, m_endpointDragTargetNode);
+    if (m_interaction == Interaction::MoveSourcePort) {
+      sourceAnchor = m_endpointDragAnchor;
+      if (previewNode)
+        sourceRect = nodeGeometry(*previewNode);
+      else
+        detachedSource = m_endpointDragPoint;
+    } else if (m_interaction == Interaction::MoveTargetPort) {
+      targetAnchor = m_endpointDragAnchor;
+      if (previewNode)
+        targetRect = nodeGeometry(*previewNode);
+      else
+        detachedTarget = m_endpointDragPoint;
+    }
   }
   QVector<QPointF> bendPoints;
   const auto &presentationBends =
@@ -1159,29 +1260,52 @@ DiagramCanvas::ConnectorEndpoints DiagramCanvas::connectorEndpoints(
     bendPoints.append(bendPoint.position);
 
   const QPointF sourceTarget =
-      bendPoints.isEmpty() ? targetRect.center() : bendPoints.first();
+      bendPoints.isEmpty() ? detachedTarget.value_or(targetRect.center())
+                           : bendPoints.first();
   const QPointF targetTarget =
-      bendPoints.isEmpty() ? sourceRect.center() : bendPoints.last();
-  return {connectorAnchorPoint(sourceRect, sourceAnchor, sourceTarget),
-          connectorAnchorPoint(targetRect, targetAnchor, targetTarget),
-          bendPoints, true};
+      bendPoints.isEmpty() ? detachedSource.value_or(sourceRect.center())
+                           : bendPoints.last();
+  ConnectorEndpoints endpoints;
+  endpoints.source = detachedSource.value_or(
+      connectorAnchorPoint(sourceRect, sourceAnchor, sourceTarget));
+  endpoints.target = detachedTarget.value_or(
+      connectorAnchorPoint(targetRect, targetAnchor, targetTarget));
+  endpoints.bendPoints = std::move(bendPoints);
+  endpoints.routing = connector.routing;
+  endpoints.sourceSide =
+      detachedSource ? ConnectorSide::Automatic : sourceAnchor.side;
+  endpoints.targetSide =
+      detachedTarget ? ConnectorSide::Automatic : targetAnchor.side;
+  endpoints.valid = true;
+  return endpoints;
 }
 
-QRectF DiagramCanvas::endpointNodeRect(const ConnectorPresentation &connector,
-                                       bool source) const {
+ui::ConnectorRoute
+DiagramCanvas::connectorRoute(const ConnectorPresentation &connector) const {
+  const ConnectorEndpoints endpoints = connectorEndpoints(connector);
+  if (!endpoints.valid)
+    return {};
+  return ui::buildConnectorRoute(endpoints.source, endpoints.bendPoints,
+                                 endpoints.target, endpoints.routing,
+                                 endpoints.sourceSide, endpoints.targetSide);
+}
+
+const NodePresentation *
+DiagramCanvas::endpointNode(const ConnectorPresentation &connector,
+                            bool source) const {
   const auto *d = diagram();
   if (!d || !m_project)
-    return {};
+    return nullptr;
   const auto *relationship =
       findRelationship(m_project->data(), connector.relationshipId);
   if (!relationship)
-    return {};
+    return nullptr;
   const QString &elementId =
       source ? relationship->sourceId : relationship->targetId;
   for (const auto &node : d->nodes)
     if (node.elementId == elementId)
-      return nodeGeometry(node);
-  return {};
+      return &node;
+  return nullptr;
 }
 
 bool DiagramCanvas::hitSelectedPort(const QPointF &scenePoint,
@@ -1229,49 +1353,79 @@ int DiagramCanvas::hitBendPoint(const ConnectorPresentation &connector,
 
 int DiagramCanvas::nearestConnectorSegment(
     const ConnectorPresentation &connector, const QPointF &scenePoint) const {
-  const ConnectorEndpoints endpoints = connectorEndpoints(connector);
-  if (!endpoints.valid)
+  const ui::ConnectorRoute route = connectorRoute(connector);
+  if (route.points.size() < 2)
     return -1;
-  const QVector<QPointF> points =
-      routePoints(endpoints.source, endpoints.bendPoints, endpoints.target);
-  int nearest = -1;
+  int nearestRouteSegment = -1;
   qreal nearestDistance = std::numeric_limits<qreal>::max();
-  for (int index = 1; index < points.size(); ++index) {
-    const qreal distance =
-        distanceToSegment(scenePoint, points.at(index - 1), points.at(index));
+  for (int index = 1; index < route.points.size(); ++index) {
+    const qreal distance = distanceToSegment(
+        scenePoint, route.points.at(index - 1), route.points.at(index));
     if (distance < nearestDistance) {
-      nearest = index - 1;
+      nearestRouteSegment = index - 1;
       nearestDistance = distance;
     }
   }
-  return nearest;
+  if (nearestRouteSegment < 0)
+    return -1;
+  return static_cast<int>(std::count_if(
+      route.bendPointRouteIndices.cbegin(), route.bendPointRouteIndices.cend(),
+      [nearestRouteSegment](int routeIndex) {
+        return routeIndex <= nearestRouteSegment;
+      }));
 }
 
-void DiagramCanvas::updatePortPreview(const QPointF &scenePoint) {
+void DiagramCanvas::updateEndpointDrag(const QPointF &scenePoint) {
   const auto *d = diagram();
   if (!d || m_selectedConnector.isEmpty())
     return;
   const auto *connector = findConnector(*d, m_selectedConnector);
   if (!connector)
     return;
-  const bool source = m_interaction == Interaction::MoveSourcePort;
-  const QRectF rect = endpointNodeRect(*connector, source);
-  if (!rect.isValid())
-    return;
-  m_portPreview = anchorAtPerimeterPoint(rect, scenePoint);
-  m_portPreviewActive = true;
+
+  m_endpointDragPoint = scenePoint;
+  if (const auto *targetNode = hitNode(scenePoint)) {
+    m_endpointDragTargetNode = targetNode->id;
+    m_endpointDragAnchor =
+        anchorAtPerimeterPoint(nodeGeometry(*targetNode), scenePoint);
+  } else {
+    // While detached, the endpoint follows the pointer. No model state changes
+    // until release over a valid presentation.
+    m_endpointDragTargetNode.clear();
+    m_endpointDragAnchor = {ConnectorSide::Automatic, 0.5};
+  }
+  m_endpointDragActive = true;
   m_sceneDirty = true;
   m_textDirty = true;
+  emit canvasSelectionChanged();
   update();
 }
 
-void DiagramCanvas::commitPortPreview() {
-  if (!m_project || !m_portPreviewActive || m_selectedConnector.isEmpty())
+void DiagramCanvas::commitEndpointDrag() {
+  if (!m_project || !m_endpointDragActive || m_selectedConnector.isEmpty() ||
+      m_endpointDragTargetNode.isEmpty()) {
+    cancelEndpointDrag();
     return;
+  }
   const bool source = m_interaction == Interaction::MoveSourcePort;
-  m_project->updateConnectorAnchor(m_diagramId, m_selectedConnector, source,
-                                   toString(m_portPreview.side),
-                                   m_portPreview.offset);
+  m_project->reconnectRelationshipAtAnchor(m_diagramId, m_selectedConnector,
+                                           m_endpointDragTargetNode, source,
+                                           m_endpointDragAnchor);
+  cancelEndpointDrag();
+}
+
+void DiagramCanvas::cancelEndpointDrag() {
+  m_endpointDragTargetNode.clear();
+  m_endpointDragPoint = {};
+  m_endpointDragAnchor = {};
+  m_endpointDragActive = false;
+  if (m_interaction == Interaction::MoveSourcePort ||
+      m_interaction == Interaction::MoveTargetPort)
+    m_interaction = Interaction::None;
+  m_sceneDirty = true;
+  m_textDirty = true;
+  emit canvasSelectionChanged();
+  update();
 }
 
 void DiagramCanvas::updateBendPointPreview(const QPointF &scenePoint) {
@@ -1294,6 +1448,99 @@ void DiagramCanvas::commitBendPointPreview() {
   m_project->moveConnectorBendPoint(m_diagramId, m_selectedConnector,
                                     m_selectedBendPoint, position.x(),
                                     position.y());
+}
+
+QString
+DiagramCanvas::relationshipTypeForGestureKey(const QKeyEvent &event) const {
+  if (event.modifiers() != Qt::NoModifier)
+    return {};
+  QString key = event.text().trimmed().toUpper();
+  if (key.isEmpty() && event.key() >= Qt::Key_0 && event.key() <= Qt::Key_Z)
+    key = QChar(event.key()).toUpper();
+  if (key.size() != 1)
+    return {};
+  for (auto it = m_relationshipGestureKeys.cbegin();
+       it != m_relationshipGestureKeys.cend(); ++it) {
+    if (it.value().toString() == key)
+      return it.key();
+  }
+  return {};
+}
+
+bool DiagramCanvas::startConnectorGesture(const QString &relationshipType) {
+  if (!m_leftButtonPressed || relationshipType.isEmpty() ||
+      (m_interaction != Interaction::Move &&
+       m_interaction != Interaction::Resize))
+    return false;
+  const auto *sourceNode = hitNode(m_pressScene);
+  if (!sourceNode)
+    return false;
+  const QRectF sourceRect = nodeGeometry(*sourceNode);
+  constexpr qreal kEdgeHitTolerance = 9.0;
+  if (!nearRectanglePerimeter(sourceRect, m_pressScene,
+                              kEdgeHitTolerance / m_zoom))
+    return false;
+
+  m_connectorGestureSourceNode = sourceNode->id;
+  m_connectorGestureSourceAnchor =
+      anchorAtPerimeterPoint(sourceRect, m_pressScene);
+  m_connectorGestureType = relationshipType;
+  m_connectorGestureTargetPoint = m_lastPointerScene;
+  m_interaction = Interaction::CreateConnector;
+  m_originalGeometry.clear();
+  m_previewGeometry.clear();
+  m_alignmentGuides.clear();
+  m_sceneDirty = true;
+  emit canvasSelectionChanged();
+  update();
+  return true;
+}
+
+void DiagramCanvas::updateConnectorGesture(const QPointF &scenePoint) {
+  m_connectorGestureTargetPoint = scenePoint;
+  m_sceneDirty = true;
+  update();
+}
+
+void DiagramCanvas::commitConnectorGesture(const QPointF &scenePoint) {
+  if (!m_project || m_connectorGestureSourceNode.isEmpty()) {
+    cancelConnectorGesture();
+    return;
+  }
+  const auto *targetNode = hitNode(scenePoint);
+  if (!targetNode) {
+    cancelConnectorGesture();
+    return;
+  }
+
+  const ConnectorAnchor targetAnchor =
+      anchorAtPerimeterPoint(nodeGeometry(*targetNode), scenePoint);
+  const QString connectorId = m_project->createRelationshipAtAnchors(
+      m_diagramId, m_connectorGestureSourceNode, targetNode->id,
+      m_connectorGestureType, toString(m_defaultConnectorRouting),
+      m_connectorGestureSourceAnchor, targetAnchor);
+  m_connectorGestureSourceNode.clear();
+  m_connectorGestureType.clear();
+  m_interaction = Interaction::None;
+  m_sceneDirty = true;
+  if (!connectorId.isEmpty())
+    selectConnector(connectorId, false);
+  else {
+    emit canvasSelectionChanged();
+    update();
+  }
+}
+
+void DiagramCanvas::cancelConnectorGesture() {
+  m_connectorGestureSourceNode.clear();
+  m_connectorGestureType.clear();
+  m_originalGeometry.clear();
+  m_previewGeometry.clear();
+  m_alignmentGuides.clear();
+  m_interaction = Interaction::None;
+  m_sceneDirty = true;
+  emit canvasSelectionChanged();
+  update();
 }
 
 QSGNode *
@@ -1363,35 +1610,80 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
         const auto end = nodeRects.constFind((*relationship)->targetId);
         if (start == nodeRects.cend() || end == nodeRects.cend())
           continue;
-        ConnectorAnchor sourceAnchor = connector.sourceAnchor;
-        ConnectorAnchor targetAnchor = connector.targetAnchor;
-        if (connector.id == m_selectedConnector && m_portPreviewActive) {
-          if (m_interaction == Interaction::MoveSourcePort)
-            sourceAnchor = m_portPreview;
-          else if (m_interaction == Interaction::MoveTargetPort)
-            targetAnchor = m_portPreview;
+        ui::ConnectorRoute route;
+        if (connector.id == m_selectedConnector) {
+          // Only the selected connector can have an interaction preview. The
+          // focused calculation may resolve a provisional endpoint node;
+          // unselected connectors retain the hash-based fast path below.
+          const ConnectorEndpoints endpoints = connectorEndpoints(connector);
+          if (!endpoints.valid)
+            continue;
+          route = ui::buildConnectorRoute(
+              endpoints.source, endpoints.bendPoints, endpoints.target,
+              endpoints.routing, endpoints.sourceSide, endpoints.targetSide);
+        } else {
+          QVector<QPointF> bendPoints;
+          bendPoints.reserve(connector.bendPoints.size());
+          for (const auto &bendPoint : connector.bendPoints)
+            bendPoints.append(bendPoint.position);
+          const QPointF sourceTarget =
+              bendPoints.isEmpty() ? end->center() : bendPoints.first();
+          const QPointF targetTarget =
+              bendPoints.isEmpty() ? start->center() : bendPoints.last();
+          const QPointF sourcePoint = connectorAnchorPoint(
+              *start, connector.sourceAnchor, sourceTarget);
+          const QPointF targetPoint =
+              connectorAnchorPoint(*end, connector.targetAnchor, targetTarget);
+          route = ui::buildConnectorRoute(
+              sourcePoint, bendPoints, targetPoint, connector.routing,
+              connector.sourceAnchor.side, connector.targetAnchor.side);
         }
-        const auto &presentationBends =
-            connector.id == m_selectedConnector && m_bendPointPreviewActive
-                ? m_bendPointPreview
-                : connector.bendPoints;
-        QVector<QPointF> bendPoints;
-        bendPoints.reserve(presentationBends.size());
-        for (const auto &bendPoint : presentationBends)
-          bendPoints.append(bendPoint.position);
-        const QPointF sourceTarget =
-            bendPoints.isEmpty() ? end->center() : bendPoints.first();
-        const QPointF targetTarget =
-            bendPoints.isEmpty() ? start->center() : bendPoints.last();
-        const QPointF sourcePoint =
-            connectorAnchorPoint(*start, sourceAnchor, sourceTarget);
-        const QPointF targetPoint =
-            connectorAnchorPoint(*end, targetAnchor, targetTarget);
         snapshot.connectors.append(
-            {routePoints(sourcePoint, bendPoints, targetPoint),
-             (*relationship)->name, (*relationship)->type,
-             connector.id == m_selectedConnector,
+            {route.points, route.bendPointRouteIndices, (*relationship)->name,
+             (*relationship)->type, connector.id == m_selectedConnector,
              connector.id == m_selectedConnector ? m_selectedBendPoint : -1});
+      }
+      if (m_interaction == Interaction::CreateConnector &&
+          !m_connectorGestureSourceNode.isEmpty()) {
+        const auto sourceNode =
+            std::find_if(d->nodes.cbegin(), d->nodes.cend(),
+                         [this](const NodePresentation &candidate) {
+                           return candidate.id == m_connectorGestureSourceNode;
+                         });
+        if (sourceNode != d->nodes.cend()) {
+          const QRectF sourceRect = nodeGeometry(*sourceNode);
+          QPointF targetPoint = m_connectorGestureTargetPoint;
+          ConnectorSide targetSide = ConnectorSide::Automatic;
+          for (auto candidate = d->nodes.crbegin();
+               candidate != d->nodes.crend(); ++candidate) {
+            const QRectF candidateRect = nodeGeometry(*candidate);
+            if (!candidateRect.contains(targetPoint))
+              continue;
+            const ConnectorAnchor targetAnchor =
+                anchorAtPerimeterPoint(candidateRect, targetPoint);
+            targetSide = targetAnchor.side;
+            targetPoint = connectorAnchorPoint(candidateRect, targetAnchor,
+                                               sourceRect.center());
+            break;
+          }
+          const QPointF sourcePoint = connectorAnchorPoint(
+              sourceRect, m_connectorGestureSourceAnchor, targetPoint);
+          bool typeOk = false;
+          const RelationshipType type =
+              relationshipTypeFromString(m_connectorGestureType, &typeOk);
+          if (typeOk) {
+            const ui::ConnectorRoute route = ui::buildConnectorRoute(
+                sourcePoint, {}, targetPoint, m_defaultConnectorRouting,
+                m_connectorGestureSourceAnchor.side, targetSide);
+            snapshot.connectors.append({route.points,
+                                        route.bendPointRouteIndices,
+                                        {},
+                                        type,
+                                        false,
+                                        -1,
+                                        true});
+          }
+        }
       }
     }
     snapshot.lassoRect = m_lassoRect.normalized();
@@ -1448,14 +1740,12 @@ DiagramCanvas::hitConnector(const QPointF &scenePoint) const {
   if (!d)
     return nullptr;
   for (auto it = d->connectors.crbegin(); it != d->connectors.crend(); ++it) {
-    const ConnectorEndpoints endpoints = connectorEndpoints(*it);
-    if (!endpoints.valid)
+    const ui::ConnectorRoute route = connectorRoute(*it);
+    if (route.points.size() < 2)
       continue;
-    const QVector<QPointF> points =
-        routePoints(endpoints.source, endpoints.bendPoints, endpoints.target);
-    for (qsizetype index = 1; index < points.size(); ++index) {
-      if (distanceToSegment(scenePoint, points.at(index - 1),
-                            points.at(index)) <= 7.0 / m_zoom)
+    for (qsizetype index = 1; index < route.points.size(); ++index) {
+      if (distanceToSegment(scenePoint, route.points.at(index - 1),
+                            route.points.at(index)) <= 7.0 / m_zoom)
         return &*it;
     }
   }
@@ -1500,11 +1790,10 @@ DiagramCanvas::TextHit DiagramCanvas::hitText(const QPointF &scenePoint) const {
   if (const auto *connector = hitConnector(scenePoint)) {
     if (const auto *relationship =
             findRelationship(m_project->data(), connector->relationshipId)) {
-      const ConnectorEndpoints endpoints = connectorEndpoints(*connector);
-      if (!endpoints.valid)
+      const ui::ConnectorRoute route = connectorRoute(*connector);
+      if (route.points.size() < 2)
         return {};
-      const QPointF middle = polylineMiddle(routePoints(
-          endpoints.source, endpoints.bendPoints, endpoints.target));
+      const QPointF middle = polylineMiddle(route.points);
       const QRectF label(middle.x() - 70, middle.y() - 12, 140, 24);
       if (label.contains(scenePoint))
         return {relationship->id, QStringLiteral("name"), -1,
@@ -1519,6 +1808,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
   m_alignmentGuides.clear();
   m_pressView = event->position();
   m_pressScene = toScene(m_pressView);
+  m_lastPointerScene = m_pressScene;
   if (event->button() == Qt::MiddleButton) {
     m_interaction = Interaction::Pan;
     m_originalPan = m_pan;
@@ -1557,6 +1847,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
     event->ignore();
     return;
   }
+  m_leftButtonPressed = true;
 
   if (const auto *d = diagram(); d && !m_selectedConnector.isEmpty()) {
     if (const auto *selected = findConnector(*d, m_selectedConnector)) {
@@ -1577,30 +1868,26 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
   if (event->button() == Qt::LeftButton &&
       hitSelectedPort(m_pressScene, sourcePort)) {
     const auto *selected = findConnector(*diagram(), m_selectedConnector);
+    const auto *currentEndpoint = endpointNode(*selected, sourcePort);
+    if (!currentEndpoint) {
+      event->accept();
+      return;
+    }
     m_interaction =
         sourcePort ? Interaction::MoveSourcePort : Interaction::MoveTargetPort;
-    m_portPreview =
+    m_endpointDragAnchor =
         sourcePort ? selected->sourceAnchor : selected->targetAnchor;
-    m_portPreviewActive = true;
+    m_endpointDragTargetNode = currentEndpoint->id;
+    const ConnectorEndpoints endpoints = connectorEndpoints(*selected);
+    m_endpointDragPoint = sourcePort ? endpoints.source : endpoints.target;
+    m_endpointDragActive = true;
+    emit canvasSelectionChanged();
     event->accept();
     return;
   }
 
   const auto *node = hitNode(m_pressScene);
   const bool toggle = event->modifiers().testFlag(Qt::ControlModifier);
-  if (event->button() == Qt::LeftButton && node &&
-      m_reconnectEndpoint != ReconnectEndpoint::None && m_project &&
-      !m_selectedConnector.isEmpty()) {
-    m_project->reconnectRelationship(m_diagramId, m_selectedConnector, node->id,
-                                     m_reconnectEndpoint ==
-                                         ReconnectEndpoint::Source);
-    m_reconnectEndpoint = ReconnectEndpoint::None;
-    m_selectedNodes.clear();
-    m_selectedNodeOrder.clear();
-    emit canvasSelectionChanged();
-    event->accept();
-    return;
-  }
   if (node) {
     selectNode(node->id, toggle);
     m_interactionNode = node->id;
@@ -1633,7 +1920,6 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
     m_lassoBaseNodeOrder = m_selectedNodeOrder;
     m_lassoBaseConnector = m_selectedConnector;
     m_lassoBaseBendPoint = m_selectedBendPoint;
-    m_lassoBaseReconnectEndpoint = m_reconnectEndpoint;
     m_lassoModifiers = event->modifiers();
     m_lassoActive = false;
   }
@@ -1641,6 +1927,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
 }
 
 void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
+  m_lastPointerScene = toScene(event->position());
   if (m_interaction == Interaction::Pan) {
     m_pan = m_originalPan + event->position() - m_pressView;
     emit viewportChanged();
@@ -1649,11 +1936,15 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
   }
   if (m_interaction == Interaction::MoveSourcePort ||
       m_interaction == Interaction::MoveTargetPort) {
-    updatePortPreview(toScene(event->position()));
+    updateEndpointDrag(toScene(event->position()));
     return;
   }
   if (m_interaction == Interaction::MoveBendPoint) {
     updateBendPointPreview(toScene(event->position()));
+    return;
+  }
+  if (m_interaction == Interaction::CreateConnector) {
+    updateConnectorGesture(m_lastPointerScene);
     return;
   }
   if (m_interaction == Interaction::Lasso) {
@@ -1716,6 +2007,14 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
 }
 
 void DiagramCanvas::mouseReleaseEvent(QMouseEvent *event) {
+  m_lastPointerScene = toScene(event->position());
+  if (event->button() == Qt::LeftButton)
+    m_leftButtonPressed = false;
+  if (m_interaction == Interaction::CreateConnector) {
+    commitConnectorGesture(m_lastPointerScene);
+    event->accept();
+    return;
+  }
   if (m_interaction == Interaction::Lasso) {
     if (m_lassoActive) {
       updateLassoSelection(toScene(event->position()));
@@ -1739,14 +2038,15 @@ void DiagramCanvas::mouseReleaseEvent(QMouseEvent *event) {
     commitGeometryPreview();
   else if (m_interaction == Interaction::MoveSourcePort ||
            m_interaction == Interaction::MoveTargetPort)
-    commitPortPreview();
+    commitEndpointDrag();
   else if (m_interaction == Interaction::MoveBendPoint)
     commitBendPointPreview();
   m_interaction = Interaction::None;
   m_originalGeometry.clear();
   m_previewGeometry.clear();
   m_alignmentGuides.clear();
-  m_portPreviewActive = false;
+  m_endpointDragActive = false;
+  m_endpointDragTargetNode.clear();
   m_bendPointPreview.clear();
   m_bendPointPreviewActive = false;
   m_sceneDirty = true;
@@ -1839,8 +2139,8 @@ void DiagramCanvas::updateLassoSelection(const QPointF &scenePoint) {
   m_selectedNodeOrder = std::move(nextOrder);
   m_selectedConnector.clear();
   m_selectedBendPoint = -1;
-  m_reconnectEndpoint = ReconnectEndpoint::None;
-  m_portPreviewActive = false;
+  m_endpointDragActive = false;
+  m_endpointDragTargetNode.clear();
   m_bendPointPreviewActive = false;
   m_sceneDirty = true;
   if (selectionChanged)
@@ -1858,7 +2158,6 @@ void DiagramCanvas::cancelLassoSelection() {
   m_selectedNodeOrder = m_lassoBaseNodeOrder;
   m_selectedConnector = m_lassoBaseConnector;
   m_selectedBendPoint = m_lassoBaseBendPoint;
-  m_reconnectEndpoint = m_lassoBaseReconnectEndpoint;
   synchronizeProjectSelection();
   resetLassoState();
   m_interaction = Interaction::None;
@@ -1874,7 +2173,6 @@ void DiagramCanvas::resetLassoState() {
   m_lassoBaseNodeOrder.clear();
   m_lassoBaseConnector.clear();
   m_lassoBaseBendPoint = -1;
-  m_lassoBaseReconnectEndpoint = ReconnectEndpoint::None;
   m_lassoModifiers = Qt::NoModifier;
   m_lassoActive = false;
   m_sceneDirty = true;
@@ -1963,39 +2261,20 @@ void DiagramCanvas::createRelationship(const QString &type) {
   if (!m_project || m_selectedNodes.size() != 2)
     return;
   const QStringList ids = m_selectedNodeOrder;
-  m_selectedConnector =
-      m_project->createRelationship(m_diagramId, ids.at(0), ids.at(1), type);
+  m_selectedConnector = m_project->createRelationshipWithRouting(
+      m_diagramId, ids.at(0), ids.at(1), type,
+      toString(m_defaultConnectorRouting));
   m_selectedBendPoint = -1;
-  m_reconnectEndpoint = ReconnectEndpoint::None;
   emit canvasSelectionChanged();
   update();
 }
 
-void DiagramCanvas::reconnectSource() {
-  if (m_selectedConnector.isEmpty())
-    return;
-  m_reconnectEndpoint = ReconnectEndpoint::Source;
-  m_selectedNodes.clear();
-  m_selectedNodeOrder.clear();
-  m_selectedBendPoint = -1;
-  emit canvasSelectionChanged();
-}
-
-void DiagramCanvas::reconnectTarget() {
-  if (m_selectedConnector.isEmpty())
-    return;
-  m_reconnectEndpoint = ReconnectEndpoint::Target;
-  m_selectedNodes.clear();
-  m_selectedNodeOrder.clear();
-  m_selectedBendPoint = -1;
-  emit canvasSelectionChanged();
-}
-
-void DiagramCanvas::cancelReconnect() {
-  if (m_reconnectEndpoint == ReconnectEndpoint::None)
-    return;
-  m_reconnectEndpoint = ReconnectEndpoint::None;
-  emit canvasSelectionChanged();
+void DiagramCanvas::cancelConnectorInteraction() {
+  if (m_interaction == Interaction::CreateConnector)
+    cancelConnectorGesture();
+  else if (m_interaction == Interaction::MoveSourcePort ||
+           m_interaction == Interaction::MoveTargetPort)
+    cancelEndpointDrag();
 }
 
 void DiagramCanvas::addBendPointAtContextPosition() {
@@ -2033,6 +2312,12 @@ void DiagramCanvas::clearSelectedConnectorBendPoints() {
   m_textDirty = true;
   emit canvasSelectionChanged();
   update();
+}
+
+void DiagramCanvas::setSelectedConnectorRouting(const QString &routing) {
+  if (!m_project || m_selectedConnector.isEmpty())
+    return;
+  m_project->setConnectorRouting(m_diagramId, m_selectedConnector, routing);
 }
 
 void DiagramCanvas::arrangeSelection(const QString &operation) {
@@ -2116,7 +2401,8 @@ void DiagramCanvas::deleteSelectedConnector() {
 
 void DiagramCanvas::clearCanvasSelection() {
   const bool hadSelection =
-      !m_selectedNodes.isEmpty() || !m_selectedConnector.isEmpty();
+      !m_selectedNodes.isEmpty() || !m_selectedConnector.isEmpty() ||
+      !m_connectorGestureSourceNode.isEmpty() || m_endpointDragActive;
   resetLassoState();
   if (!hadSelection)
     return;
@@ -2124,10 +2410,16 @@ void DiagramCanvas::clearCanvasSelection() {
   m_selectedNodeOrder.clear();
   m_selectedConnector.clear();
   m_selectedBendPoint = -1;
-  m_reconnectEndpoint = ReconnectEndpoint::None;
-  m_portPreviewActive = false;
+  m_endpointDragTargetNode.clear();
+  m_endpointDragActive = false;
   m_bendPointPreview.clear();
   m_bendPointPreviewActive = false;
+  m_connectorGestureSourceNode.clear();
+  m_connectorGestureType.clear();
+  if (m_interaction == Interaction::CreateConnector ||
+      m_interaction == Interaction::MoveSourcePort ||
+      m_interaction == Interaction::MoveTargetPort)
+    m_interaction = Interaction::None;
   m_sceneDirty = true;
   emit canvasSelectionChanged();
   update();
@@ -2149,7 +2441,8 @@ void DiagramCanvas::selectNode(const QString &nodeId, bool toggle) {
   if (!toggle) {
     m_selectedConnector.clear();
     m_selectedBendPoint = -1;
-    m_reconnectEndpoint = ReconnectEndpoint::None;
+    m_endpointDragTargetNode.clear();
+    m_endpointDragActive = false;
   }
   m_sceneDirty = true;
   emit canvasSelectionChanged();
@@ -2160,8 +2453,8 @@ void DiagramCanvas::selectConnector(const QString &connectorId,
                                     bool preserveNodes) {
   m_selectedConnector = connectorId;
   m_selectedBendPoint = -1;
-  m_reconnectEndpoint = ReconnectEndpoint::None;
-  m_portPreviewActive = false;
+  m_endpointDragTargetNode.clear();
+  m_endpointDragActive = false;
   m_bendPointPreview.clear();
   m_bendPointPreviewActive = false;
   if (!preserveNodes) {
@@ -2174,6 +2467,17 @@ void DiagramCanvas::selectConnector(const QString &connectorId,
 }
 
 void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
+  if (event->key() == Qt::Key_Escape &&
+      m_interaction == Interaction::CreateConnector) {
+    cancelConnectorGesture();
+    event->accept();
+    return;
+  }
+  const QString gestureType = relationshipTypeForGestureKey(*event);
+  if (!gestureType.isEmpty() && startConnectorGesture(gestureType)) {
+    event->accept();
+    return;
+  }
   if (event->key() == Qt::Key_Escape &&
       m_interaction == Interaction::MoveBendPoint) {
     m_interaction = Interaction::None;
@@ -2191,8 +2495,9 @@ void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
     return;
   }
   if (event->key() == Qt::Key_Escape &&
-      m_reconnectEndpoint != ReconnectEndpoint::None) {
-    cancelReconnect();
+      (m_interaction == Interaction::MoveSourcePort ||
+       m_interaction == Interaction::MoveTargetPort)) {
+    cancelEndpointDrag();
     event->accept();
     return;
   }

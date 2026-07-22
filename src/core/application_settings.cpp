@@ -2,10 +2,12 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QSet>
 #include <QSettings>
 #include <QUrl>
 #include <QVariantMap>
 #include <algorithm>
+#include <utility>
 
 namespace uuml {
 namespace {
@@ -15,6 +17,9 @@ constexpr auto kDefaultDistributionGapKey = "defaultDistributionGap";
 constexpr auto kSnapToGridEnabledKey = "snapToGridEnabled";
 constexpr auto kAlignmentGuidesEnabledKey = "alignmentGuidesEnabled";
 constexpr auto kGridSpacingKey = "gridSpacing";
+constexpr auto kConnectorSettingsGroup = "preferences/connectors";
+constexpr auto kDefaultConnectorRoutingKey = "defaultRouting";
+constexpr auto kRelationshipGestureKeySuffix = "GestureKey";
 constexpr auto kHistorySettingsGroup = "history";
 constexpr auto kRecentProjectsKey = "recentProjects";
 
@@ -44,6 +49,35 @@ bool pathsMatch(const QString &left, const QString &right) {
   return left.compare(right, caseSensitivity) == 0;
 }
 
+QStringList relationshipGestureTypes() {
+  return {QStringLiteral("dependency"),     QStringLiteral("realization"),
+          QStringLiteral("generalization"), QStringLiteral("association"),
+          QStringLiteral("aggregation"),    QStringLiteral("composition")};
+}
+
+QVariantMap makeDefaultRelationshipGestureKeys() {
+  return {{QStringLiteral("dependency"), QStringLiteral("D")},
+          {QStringLiteral("realization"), QStringLiteral("I")},
+          {QStringLiteral("generalization"), QStringLiteral("H")},
+          {QStringLiteral("association"), QStringLiteral("A")},
+          {QStringLiteral("aggregation"), QStringLiteral("G")},
+          {QStringLiteral("composition"), QStringLiteral("C")}};
+}
+
+bool normalizeRelationshipGestureKeys(const QVariantMap &candidate,
+                                      QVariantMap &normalized) {
+  QSet<QString> assigned;
+  for (const auto &type : relationshipGestureTypes()) {
+    const QString key = candidate.value(type).toString().trimmed().toUpper();
+    if (key.size() != 1 || !key.front().isLetterOrNumber() ||
+        assigned.contains(key))
+      return false;
+    normalized.insert(type, key);
+    assigned.insert(key);
+  }
+  return true;
+}
+
 } // namespace
 
 ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
@@ -68,6 +102,31 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
           .toInt());
   settings.endGroup();
 
+  settings.beginGroup(QLatin1String(kConnectorSettingsGroup));
+  bool routingOk = false;
+  m_defaultConnectorRouting = connectorRoutingFromString(
+      settings
+          .value(QLatin1String(kDefaultConnectorRoutingKey),
+                 toString(kDefaultConnectorRouting))
+          .toString(),
+      &routingOk);
+  if (!routingOk)
+    m_defaultConnectorRouting = kDefaultConnectorRouting;
+
+  const QVariantMap gestureDefaults = makeDefaultRelationshipGestureKeys();
+  QVariantMap storedGestureKeys;
+  for (const auto &type : relationshipGestureTypes()) {
+    storedGestureKeys.insert(
+        type, settings
+                  .value(type + QLatin1String(kRelationshipGestureKeySuffix),
+                         gestureDefaults.value(type))
+                  .toString());
+  }
+  if (!normalizeRelationshipGestureKeys(storedGestureKeys,
+                                        m_relationshipGestureKeys))
+    m_relationshipGestureKeys = gestureDefaults;
+  settings.endGroup();
+
   settings.beginGroup(QLatin1String(kHistorySettingsGroup));
   const QStringList storedPaths =
       settings.value(QLatin1String(kRecentProjectsKey)).toStringList();
@@ -89,6 +148,10 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
 
 int ApplicationSettings::defaultDistributionGap() const {
   return m_defaultDistributionGap;
+}
+
+QVariantMap ApplicationSettings::defaultRelationshipGestureKeys() {
+  return makeDefaultRelationshipGestureKeys();
 }
 
 void ApplicationSettings::setDefaultDistributionGap(int gap) {
@@ -133,6 +196,37 @@ void ApplicationSettings::setGridSpacing(int spacing) {
   m_gridSpacing = validSpacing;
   persistDiagramPreferences();
   emit gridSpacingChanged();
+}
+
+QString ApplicationSettings::defaultConnectorRouting() const {
+  return toString(m_defaultConnectorRouting);
+}
+
+void ApplicationSettings::setDefaultConnectorRouting(const QString &routing) {
+  bool routingOk = false;
+  const ConnectorRouting parsed =
+      connectorRoutingFromString(routing, &routingOk);
+  if (!routingOk || m_defaultConnectorRouting == parsed)
+    return;
+  m_defaultConnectorRouting = parsed;
+  persistConnectorPreferences();
+  emit defaultConnectorRoutingChanged();
+}
+
+QVariantMap ApplicationSettings::relationshipGestureKeys() const {
+  return m_relationshipGestureKeys;
+}
+
+bool ApplicationSettings::setRelationshipGestureKeys(const QVariantMap &keys) {
+  QVariantMap normalized;
+  if (!normalizeRelationshipGestureKeys(keys, normalized))
+    return false;
+  if (m_relationshipGestureKeys == normalized)
+    return true;
+  m_relationshipGestureKeys = std::move(normalized);
+  persistConnectorPreferences();
+  emit relationshipGestureKeysChanged();
+  return true;
 }
 
 QVariantList ApplicationSettings::recentProjects() const {
@@ -184,6 +278,8 @@ void ApplicationSettings::resetDefaults() {
   setSnapToGridEnabled(kDefaultSnapToGridEnabled);
   setAlignmentGuidesEnabled(kDefaultAlignmentGuidesEnabled);
   setGridSpacing(kDefaultGridSpacing);
+  setDefaultConnectorRouting(toString(kDefaultConnectorRouting));
+  setRelationshipGestureKeys(makeDefaultRelationshipGestureKeys());
 }
 
 void ApplicationSettings::persistDiagramPreferences() const {
@@ -195,6 +291,18 @@ void ApplicationSettings::persistDiagramPreferences() const {
   settings.setValue(QLatin1String(kAlignmentGuidesEnabledKey),
                     m_alignmentGuidesEnabled);
   settings.setValue(QLatin1String(kGridSpacingKey), m_gridSpacing);
+  settings.endGroup();
+  settings.sync();
+}
+
+void ApplicationSettings::persistConnectorPreferences() const {
+  QSettings settings;
+  settings.beginGroup(QLatin1String(kConnectorSettingsGroup));
+  settings.setValue(QLatin1String(kDefaultConnectorRoutingKey),
+                    toString(m_defaultConnectorRouting));
+  for (const auto &type : relationshipGestureTypes())
+    settings.setValue(type + QLatin1String(kRelationshipGestureKeySuffix),
+                      m_relationshipGestureKeys.value(type));
   settings.endGroup();
   settings.sync();
 }

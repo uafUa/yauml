@@ -1,7 +1,10 @@
+#include "core/application_settings.h"
 #include "core/project_controller.h"
+#include "ui/connector_routing.h"
 #include "ui/diagram_arrangement.h"
 #include "ui/diagram_canvas.h"
 #include "ui/diagram_snapping.h"
+#include "ui/relationship_style.h"
 
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -80,11 +83,15 @@ class DiagramCanvasTests final : public QObject {
 private slots:
   void arrangementGeometryRulesAreDeterministic();
   void snappingGeometryRulesAreDeterministic();
+  void connectorRoutingGeometryIsOrthogonalAndTracksBends();
+  void relationshipStylesUseUmlDecorations();
   void lassoSelectsAndMovesMultipleNodesAsOneCommand();
   void lassoModifiersAddAndToggleSelection();
   void arrangementAndNudgingAreUndoableTransactions();
   void contextCreationUsesTheClickedDiagramAndPosition();
   void connectorBendPointCanBeAddedMovedAndRemoved();
+  void edgeGestureCreatesCancelsAndSupportsSelfConnections();
+  void connectorEndpointsDragToReattachAndCancel();
   void liveDragSnappingIsUndoableAndAltSuppressesIt();
 };
 
@@ -129,6 +136,76 @@ void DiagramCanvasTests::arrangementGeometryRulesAreDeterministic() {
   QCOMPARE(fallback.at(1).geometry.left(), 112.0);
   QCOMPARE(fallback.at(2).geometry.left(), 224.0);
   QVERIFY(!ui::arrangementOperationFromKey(QStringLiteral("unknown")));
+}
+
+void DiagramCanvasTests::connectorRoutingGeometryIsOrthogonalAndTracksBends() {
+  const QPointF source(0.0, 0.0);
+  const QPointF target(100.0, 50.0);
+  const auto straight = ui::buildConnectorRoute(
+      source, {{30.0, 20.0}}, target, ConnectorRouting::Straight,
+      ConnectorSide::Right, ConnectorSide::Left);
+  QCOMPARE(straight.points, QVector<QPointF>({source, {30.0, 20.0}, target}));
+  QCOMPARE(straight.bendPointRouteIndices, QVector<int>({1}));
+
+  const auto orthogonal = ui::buildConnectorRoute(
+      source, {{30.0, 20.0}}, target, ConnectorRouting::Orthogonal,
+      ConnectorSide::Right, ConnectorSide::Left);
+  QVERIFY(orthogonal.points.size() >= 4);
+  QCOMPARE(orthogonal.points.first(), source);
+  QCOMPARE(orthogonal.points.last(), target);
+  QCOMPARE(orthogonal.bendPointRouteIndices.size(), 1);
+  QCOMPARE(orthogonal.points.at(orthogonal.bendPointRouteIndices.first()),
+           QPointF(30.0, 20.0));
+  for (qsizetype index = 1; index < orthogonal.points.size(); ++index) {
+    const QPointF previous = orthogonal.points.at(index - 1);
+    const QPointF current = orthogonal.points.at(index);
+    QVERIFY(qFuzzyCompare(previous.x(), current.x()) ||
+            qFuzzyCompare(previous.y(), current.y()));
+  }
+
+  // Rebuilding from changed endpoints is what keeps the automatic elbows
+  // attached while nodes are interactively moved or resized.
+  const auto moved = ui::buildConnectorRoute(
+      {20.0, 10.0}, {{30.0, 20.0}}, {140.0, 80.0}, ConnectorRouting::Orthogonal,
+      ConnectorSide::Right, ConnectorSide::Left);
+  QCOMPARE(moved.points.first(), QPointF(20.0, 10.0));
+  QCOMPARE(moved.points.last(), QPointF(140.0, 80.0));
+  QCOMPARE(moved.points.at(moved.bendPointRouteIndices.first()),
+           QPointF(30.0, 20.0));
+}
+
+void DiagramCanvasTests::relationshipStylesUseUmlDecorations() {
+  using ui::RelationshipDecoration;
+  using ui::RelationshipLineStyle;
+
+  const auto dependency =
+      ui::relationshipVisualStyle(RelationshipType::Dependency);
+  QVERIFY(dependency.line == RelationshipLineStyle::Dashed);
+  QVERIFY(dependency.target == RelationshipDecoration::OpenArrow);
+
+  const auto generalization =
+      ui::relationshipVisualStyle(RelationshipType::Generalization);
+  QVERIFY(generalization.line == RelationshipLineStyle::Solid);
+  QVERIFY(generalization.target == RelationshipDecoration::HollowTriangle);
+
+  const auto realization =
+      ui::relationshipVisualStyle(RelationshipType::Realization);
+  QVERIFY(realization.line == RelationshipLineStyle::Dashed);
+  QVERIFY(realization.target == RelationshipDecoration::HollowTriangle);
+
+  const auto association =
+      ui::relationshipVisualStyle(RelationshipType::Association);
+  QVERIFY(association.target == RelationshipDecoration::OpenArrow);
+
+  const auto aggregation =
+      ui::relationshipVisualStyle(RelationshipType::Aggregation);
+  QVERIFY(aggregation.source == RelationshipDecoration::HollowDiamond);
+  QVERIFY(aggregation.target == RelationshipDecoration::None);
+
+  const auto composition =
+      ui::relationshipVisualStyle(RelationshipType::Composition);
+  QVERIFY(composition.source == RelationshipDecoration::FilledDiamond);
+  QVERIFY(composition.target == RelationshipDecoration::None);
 }
 
 void DiagramCanvasTests::snappingGeometryRulesAreDeterministic() {
@@ -319,6 +396,164 @@ void DiagramCanvasTests::connectorBendPointCanBeAddedMovedAndRemoved() {
   QVERIFY(connector()->bendPoints.isEmpty());
   controller.undo();
   QCOMPARE(connector()->bendPoints.first().position, QPointF(285.0, 170.0));
+}
+
+void DiagramCanvasTests::edgeGestureCreatesCancelsAndSupportsSelfConnections() {
+  ProjectController controller;
+  populate(controller, 2);
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  canvas.setDefaultConnectorRouting(QStringLiteral("orthogonal"));
+
+  // The default pan is (30, 30). Hold the first node's right edge, press D,
+  // and release on the second node's left edge.
+  canvas.press({300.0, 140.0});
+  canvas.key(Qt::Key_D);
+  QVERIFY(!canvas.connectorInteractionPrompt().isEmpty());
+  canvas.move({330.0, 140.0});
+  canvas.release({330.0, 140.0});
+  QCOMPARE(controller.data().relationships.size(), 1);
+  QVERIFY(controller.data().relationships.first().type ==
+          RelationshipType::Dependency);
+  const auto &firstConnector =
+      controller.data().diagrams.first().connectors.first();
+  QVERIFY(firstConnector.routing == ConnectorRouting::Orthogonal);
+  QVERIFY(firstConnector.sourceAnchor.side == ConnectorSide::Right);
+  QVERIFY(firstConnector.targetAnchor.side == ConnectorSide::Left);
+  controller.undo();
+  QVERIFY(controller.data().relationships.isEmpty());
+  controller.redo();
+  QCOMPARE(controller.data().relationships.size(), 1);
+
+  // Empty drops and Escape discard the candidate without creating an undoable
+  // model change.
+  canvas.clearCanvasSelection();
+  canvas.press({160.0, 80.0});
+  canvas.key(Qt::Key_A);
+  canvas.move({700.0, 400.0});
+  canvas.release({700.0, 400.0});
+  QCOMPARE(controller.data().relationships.size(), 1);
+
+  canvas.clearCanvasSelection();
+  canvas.press({160.0, 80.0});
+  canvas.key(Qt::Key_G);
+  canvas.key(Qt::Key_Escape);
+  canvas.move({330.0, 140.0});
+  canvas.release({330.0, 140.0});
+  QCOMPARE(controller.data().relationships.size(), 1);
+
+  // A connection may return to its source node. The command creates persisted
+  // outside bend points so the self-connection is visible around the element.
+  canvas.clearCanvasSelection();
+  canvas.press({160.0, 200.0});
+  canvas.key(Qt::Key_C);
+  canvas.move({160.0, 80.0});
+  canvas.release({160.0, 80.0});
+  QCOMPARE(controller.data().relationships.size(), 2);
+  const auto &selfRelationship = controller.data().relationships.constLast();
+  QVERIFY(selfRelationship.type == RelationshipType::Composition);
+  QCOMPARE(selfRelationship.sourceId, selfRelationship.targetId);
+  const auto &selfConnector =
+      controller.data().diagrams.first().connectors.constLast();
+  QVERIFY(!selfConnector.bendPoints.isEmpty());
+
+  // The canvas consumes the atomically validated configurable key map.
+  QVariantMap customKeys =
+      ApplicationSettings::defaultRelationshipGestureKeys();
+  customKeys.insert(QStringLiteral("dependency"), QStringLiteral("X"));
+  customKeys.insert(QStringLiteral("realization"), QStringLiteral("D"));
+  canvas.setRelationshipGestureKeys(customKeys);
+  canvas.clearCanvasSelection();
+  canvas.press({300.0, 140.0});
+  canvas.key(Qt::Key_D);
+  canvas.move({330.0, 140.0});
+  canvas.release({330.0, 140.0});
+  QCOMPARE(controller.data().relationships.size(), 3);
+  QVERIFY(controller.data().relationships.constLast().type ==
+          RelationshipType::Realization);
+}
+
+void DiagramCanvasTests::connectorEndpointsDragToReattachAndCancel() {
+  ProjectController controller;
+  populate(controller, 3);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+  const QString connectorId = controller.createRelationship(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("association"));
+  QVERIFY(!connectorId.isEmpty());
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  // Select the connector between the first two horizontally arranged nodes.
+  canvas.rightClick({315.0, 140.0});
+  QVERIFY(canvas.connectorSelected());
+
+  const auto relationship = [&]() {
+    const auto *connector =
+        findConnector(controller.data().diagrams.first(), connectorId);
+    return connector
+               ? findRelationship(controller.data(), connector->relationshipId)
+               : nullptr;
+  };
+  const auto connector = [&]() {
+    return findConnector(controller.data().diagrams.first(), connectorId);
+  };
+
+  // Drag the target handle from the second node to the third node. The drop
+  // point is its left-edge midpoint; pan adds 30 view pixels to scene values.
+  canvas.press({330.0, 140.0});
+  QVERIFY(!canvas.connectorInteractionPrompt().isEmpty());
+  canvas.move({580.0, 140.0});
+  canvas.release({580.0, 140.0});
+  QVERIFY(relationship());
+  QCOMPARE(relationship()->targetId, nodes.at(2).elementId);
+  QVERIFY(connector()->targetAnchor.side == ConnectorSide::Left);
+  QCOMPARE(connector()->targetAnchor.offset, 0.5);
+  QCOMPARE(controller.undoText(), QStringLiteral("Reconnect target"));
+
+  controller.undo();
+  QCOMPARE(relationship()->targetId, nodes.at(1).elementId);
+  controller.redo();
+  QCOMPARE(relationship()->targetId, nodes.at(2).elementId);
+
+  // Empty drops and Escape only discard the preview. Neither creates an undo
+  // entry nor changes the original semantic endpoint or its port.
+  const ProjectData beforeCancelledDrags = controller.data();
+  const QString undoTextBeforeCancelledDrags = controller.undoText();
+  canvas.press({580.0, 140.0});
+  canvas.move({820.0, 430.0});
+  canvas.release({820.0, 430.0});
+  QCOMPARE(controller.data(), beforeCancelledDrags);
+  QCOMPARE(controller.undoText(), undoTextBeforeCancelledDrags);
+
+  canvas.press({580.0, 140.0});
+  canvas.move({300.0, 140.0});
+  canvas.key(Qt::Key_Escape);
+  canvas.release({300.0, 140.0});
+  QCOMPARE(controller.data(), beforeCancelledDrags);
+  QCOMPARE(controller.undoText(), undoTextBeforeCancelledDrags);
+
+  // Moving an endpoint around its current element remains a focused port move
+  // command rather than rewriting the relationship endpoint.
+  canvas.drag({300.0, 140.0}, {190.0, 200.0});
+  QCOMPARE(relationship()->sourceId, nodes.at(0).elementId);
+  QVERIFY(connector()->sourceAnchor.side == ConnectorSide::Bottom);
+  QCOMPARE(connector()->sourceAnchor.offset, 0.5);
+  QCOMPARE(controller.undoText(), QStringLiteral("Move connector source port"));
+
+  // Reattaching to the other endpoint creates a self-connection. An external
+  // persisted loop keeps it visible, and the whole change is one command.
+  canvas.drag({580.0, 140.0}, {190.0, 80.0});
+  QCOMPARE(relationship()->sourceId, relationship()->targetId);
+  QVERIFY(connector()->targetAnchor.side == ConnectorSide::Top);
+  QVERIFY(!connector()->bendPoints.isEmpty());
+  QCOMPARE(controller.undoText(), QStringLiteral("Reconnect target"));
+  controller.undo();
+  QCOMPARE(relationship()->targetId, nodes.at(2).elementId);
+  QVERIFY(connector()->bendPoints.isEmpty());
+  controller.redo();
+  QCOMPARE(relationship()->sourceId, relationship()->targetId);
+  QVERIFY(!connector()->bendPoints.isEmpty());
 }
 
 void DiagramCanvasTests::liveDragSnappingIsUndoableAndAltSuppressesIt() {

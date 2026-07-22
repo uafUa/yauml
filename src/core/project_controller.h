@@ -8,6 +8,7 @@
 #include <QUndoStack>
 #include <QUrl>
 #include <memory>
+#include <optional>
 
 namespace uuml {
 
@@ -97,14 +98,31 @@ public:
                                          const QString &sourceNodeId,
                                          const QString &targetNodeId,
                                          const QString &type);
+  Q_INVOKABLE QString createRelationshipWithRouting(const QString &diagramId,
+                                                    const QString &sourceNodeId,
+                                                    const QString &targetNodeId,
+                                                    const QString &type,
+                                                    const QString &routing);
+  QString createRelationshipAtAnchors(
+      const QString &diagramId, const QString &sourceNodeId,
+      const QString &targetNodeId, const QString &type, const QString &routing,
+      ConnectorAnchor sourceAnchor, ConnectorAnchor targetAnchor);
   Q_INVOKABLE void reconnectRelationship(const QString &diagramId,
                                          const QString &connectorId,
                                          const QString &nodeId,
                                          bool reconnectSource);
+  void reconnectRelationshipAtAnchor(const QString &diagramId,
+                                     const QString &connectorId,
+                                     const QString &nodeId,
+                                     bool reconnectSource,
+                                     ConnectorAnchor anchor);
   Q_INVOKABLE void updateConnectorAnchor(const QString &diagramId,
                                          const QString &connectorId,
                                          bool source, const QString &side,
                                          qreal offset);
+  Q_INVOKABLE void setConnectorRouting(const QString &diagramId,
+                                       const QString &connectorId,
+                                       const QString &routing);
   Q_INVOKABLE void insertConnectorBendPoint(const QString &diagramId,
                                             const QString &connectorId,
                                             int index, qreal x, qreal y);
@@ -143,6 +161,16 @@ private:
   QString normalizedLocalPath(const QUrl &url) const;
   ModelElement *selectedElement(ProjectData &project) const;
   const ModelElement *selectedElement() const;
+  QString createRelationshipImpl(const QString &diagramId,
+                                 const QString &sourceNodeId,
+                                 const QString &targetNodeId,
+                                 const QString &type, ConnectorRouting routing);
+  QString createRelationshipImpl(const QString &diagramId,
+                                 const QString &sourceNodeId,
+                                 const QString &targetNodeId,
+                                 const QString &type, ConnectorRouting routing,
+                                 std::optional<ConnectorAnchor> sourceAnchor,
+                                 std::optional<ConnectorAnchor> targetAnchor);
   void updateConnectorBendPoints(const QString &diagramId,
                                  const QString &connectorId,
                                  QList<ConnectorBendPoint> bendPoints,

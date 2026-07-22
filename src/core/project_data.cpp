@@ -36,12 +36,18 @@ ElementType elementTypeFromString(const QString &value, bool *ok) {
 
 QString toString(RelationshipType type) {
   switch (type) {
-  case RelationshipType::Generalization:
-    return QStringLiteral("generalization");
   case RelationshipType::Dependency:
     return QStringLiteral("dependency");
+  case RelationshipType::Generalization:
+    return QStringLiteral("generalization");
+  case RelationshipType::Realization:
+    return QStringLiteral("realization");
   case RelationshipType::Association:
     return QStringLiteral("association");
+  case RelationshipType::Aggregation:
+    return QStringLiteral("aggregation");
+  case RelationshipType::Composition:
+    return QStringLiteral("composition");
   }
   return QStringLiteral("dependency");
 }
@@ -49,12 +55,18 @@ QString toString(RelationshipType type) {
 RelationshipType relationshipTypeFromString(const QString &value, bool *ok) {
   if (ok)
     *ok = true;
-  if (value == QStringLiteral("generalization"))
-    return RelationshipType::Generalization;
   if (value == QStringLiteral("dependency"))
     return RelationshipType::Dependency;
+  if (value == QStringLiteral("generalization"))
+    return RelationshipType::Generalization;
+  if (value == QStringLiteral("realization"))
+    return RelationshipType::Realization;
   if (value == QStringLiteral("association"))
     return RelationshipType::Association;
+  if (value == QStringLiteral("aggregation"))
+    return RelationshipType::Aggregation;
+  if (value == QStringLiteral("composition"))
+    return RelationshipType::Composition;
   if (ok)
     *ok = false;
   return RelationshipType::Dependency;
@@ -92,6 +104,28 @@ ConnectorSide connectorSideFromString(const QString &value, bool *ok) {
   if (ok)
     *ok = false;
   return ConnectorSide::Automatic;
+}
+
+QString toString(ConnectorRouting routing) {
+  switch (routing) {
+  case ConnectorRouting::Straight:
+    return QStringLiteral("straight");
+  case ConnectorRouting::Orthogonal:
+    return QStringLiteral("orthogonal");
+  }
+  return QStringLiteral("straight");
+}
+
+ConnectorRouting connectorRoutingFromString(const QString &value, bool *ok) {
+  if (ok)
+    *ok = true;
+  if (value == QStringLiteral("straight"))
+    return ConnectorRouting::Straight;
+  if (value == QStringLiteral("orthogonal"))
+    return ConnectorRouting::Orthogonal;
+  if (ok)
+    *ok = false;
+  return ConnectorRouting::Straight;
 }
 
 QString newId() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }

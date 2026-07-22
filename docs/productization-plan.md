@@ -1,7 +1,7 @@
 # uuml Productization Plan
 
-Status: command foundation and Phase 3.1–3.4 implemented; advanced connector
-routing and direct interaction are next
+Status: command foundation and Phase 3.1–3.5 implemented; project and
+presentation styling is next
 
 The product owner accepted the MVP on 2026-07-21. This plan turns the broader
 architecture roadmap into bounded, testable delivery tranches. MVP audit notes
@@ -89,41 +89,49 @@ history memory grow with total project size rather than the size of each edit.
   both snapping modes are persisted application preferences.
 - Treat a multi-object operation as one undoable transaction.
 
-### 3.5 Connector routing and direct interaction
+### 3.5 Connector routing and direct interaction — implemented
 
-- Add straight and orthogonal connector shapes. The default shape for newly
-  created connectors is an application preference and defaults to **Straight**;
-  individual connector presentations retain their chosen routing mode.
-  Orthogonal routing automatically creates horizontal and vertical segments
-  joined by 90-degree bends. Moving or resizing an endpoint node must update the
-  route while preserving its attachment constraints. User-adjusted bend points
-  remain orthogonal. Basic Manhattan routing is the first acceptance level;
-  obstacle avoidance is a separate enhancement.
-- Complete the structural relationship vocabulary used by supported class and
-  package diagrams: dependency, generalization/inheritance,
-  realization/implementation, association with navigability, aggregation, and
-  composition. Each type has distinct persisted semantics, decorations,
-  validation, creation commands, and undo/redo. Behavioral-diagram connectors
-  remain outside the current product direction.
-- Add edge-gesture connector creation. While the pointer button is held on a
-  node edge, pressing the relationship hotkey enters a drag-to-connect gesture.
-  Defaults are `D` dependency, `I` implementation/realization, `H` inheritance/
-  generalization, `A` association, `G` aggregation, and `C` composition. All
-  relationship hotkeys are application preferences editable through the
-  Preferences UI. The initial press position creates the candidate perimeter
-  attachment; dragging previews the connector, and releasing over any
-  compatible node—including the originating node—commits the relationship as
-  one command. Escape or a drop on empty/incompatible space discards a new
-  relationship without changing the model.
-- Replace the modal **Reconnect source…** and **Reconnect target…** actions with
-  direct endpoint manipulation. A selected connector exposes draggable endpoint
-  handles. Starting a drag provisionally detaches that end; dropping it on any
-  compatible node creates or updates the perimeter attachment and commits one
-  undoable reconnection. Escape and empty/incompatible drops restore the
-  original connection.
-- Add a Connectors preferences page for the default connector shape and the six
-  relationship gesture keys. Validate assignments so two relationship types
-  cannot silently use the same key, and persist them as application settings.
+- Straight and orthogonal connector shapes are implemented. The default shape
+  for newly created connectors is a persisted application preference and
+  defaults to **Straight**; individual connector presentations retain their
+  chosen routing mode in JSON5. The relationship context menu changes routing
+  through an undoable command. Orthogonal paths contain only horizontal and
+  vertical segments, preserve persisted user bend handles, and recompute their
+  automatic elbows when endpoint nodes or ports move. Basic Manhattan routing
+  is the current acceptance level; obstacle avoidance remains a separate
+  enhancement.
+- The structural relationship vocabulary for supported class and package
+  diagrams is implemented: dependency, generalization/inheritance,
+  realization/implementation, navigable association, aggregation, and
+  composition. Each type has distinct persisted semantics, default text, line
+  style, endpoint decoration, creation actions, and undo/redo. Aggregation and
+  composition use the source as the whole end; the other directed types point
+  toward the target. Behavioral-diagram connectors remain outside the current
+  product direction.
+- Edge-gesture connector creation is implemented. While the pointer button is
+  held on a node edge, pressing the relationship hotkey enters a live
+  drag-to-connect preview using the configured default routing. Defaults are
+  `D` dependency, `I` implementation/realization, `H` inheritance/
+  generalization, `A` association, `G` aggregation, and `C` composition. The
+  initial press and final drop positions become exact persisted perimeter
+  attachments. Releasing over any node—including the originating node—commits
+  one relationship command; self-connections receive a persisted outside loop.
+  Escape or a drop on empty space discards the candidate without changing the
+  model or undo history.
+- Direct endpoint manipulation is implemented and replaces the modal
+  **Reconnect source…** and **Reconnect target…** actions. A selected connector
+  exposes fully visible draggable endpoint handles. Starting a drag
+  provisionally detaches that end; hovering a node snaps to its exact perimeter,
+  and releasing commits one compact reconnection command. Dragging around the
+  current node remains a smaller port-move command. Any node—including the other
+  endpoint—is valid, and a new self-connection receives a persisted outside
+  loop. Escape and empty-space drops restore the original connection without
+  touching model or undo state.
+- The Connectors preferences page implements both the default connector shape
+  and editors for all six relationship gesture keys. Assignments are applied
+  atomically, normalized to uppercase, restricted to one letter or digit, and
+  rejected visibly when empty or duplicated. All values persist as application
+  settings.
 - Keep routing mode, semantic direction, endpoint attachments, bend constraints,
   and self-connections intact across save/load and exact command undo/redo.
 

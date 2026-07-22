@@ -10,8 +10,16 @@
 namespace uuml {
 
 enum class ElementType { Package, Class, Struct, Enumeration };
-enum class RelationshipType { Generalization, Dependency, Association };
+enum class RelationshipType {
+  Dependency,
+  Generalization,
+  Realization,
+  Association,
+  Aggregation,
+  Composition
+};
 enum class ConnectorSide { Automatic, Top, Right, Bottom, Left };
+enum class ConnectorRouting { Straight, Orthogonal };
 
 QString toString(ElementType type);
 ElementType elementTypeFromString(const QString &value, bool *ok = nullptr);
@@ -20,6 +28,9 @@ RelationshipType relationshipTypeFromString(const QString &value,
                                             bool *ok = nullptr);
 QString toString(ConnectorSide side);
 ConnectorSide connectorSideFromString(const QString &value, bool *ok = nullptr);
+QString toString(ConnectorRouting routing);
+ConnectorRouting connectorRoutingFromString(const QString &value,
+                                            bool *ok = nullptr);
 QString newId();
 
 struct ModelElement {
@@ -73,6 +84,7 @@ struct ConnectorBendPoint {
 struct ConnectorPresentation {
   QString id;
   QString relationshipId;
+  ConnectorRouting routing = ConnectorRouting::Straight;
   ConnectorAnchor sourceAnchor;
   ConnectorAnchor targetAnchor;
   QList<ConnectorBendPoint> bendPoints;
@@ -127,3 +139,4 @@ const ConnectorPresentation *findConnector(const Diagram &diagram,
 Q_DECLARE_METATYPE(uuml::ElementType)
 Q_DECLARE_METATYPE(uuml::RelationshipType)
 Q_DECLARE_METATYPE(uuml::ConnectorSide)
+Q_DECLARE_METATYPE(uuml::ConnectorRouting)

@@ -1,12 +1,15 @@
 #pragma once
 
 #include "core/project_controller.h"
+#include "ui/connector_routing.h"
 
 #include <QHash>
+#include <QKeyEvent>
 #include <QLineF>
 #include <QQuickItem>
 #include <QSet>
 #include <QStringList>
+#include <QVariantMap>
 
 namespace uuml {
 
@@ -29,8 +32,8 @@ class DiagramCanvas : public QQuickItem {
                  canvasSelectionChanged)
   Q_PROPERTY(bool selectedConnectorHasBendPoints READ
                  selectedConnectorHasBendPoints NOTIFY canvasSelectionChanged)
-  Q_PROPERTY(QString reconnectPrompt READ reconnectPrompt NOTIFY
-                 canvasSelectionChanged)
+  Q_PROPERTY(QString connectorInteractionPrompt READ connectorInteractionPrompt
+                 NOTIFY canvasSelectionChanged)
   Q_PROPERTY(int defaultDistributionGap READ defaultDistributionGap WRITE
                  setDefaultDistributionGap NOTIFY defaultDistributionGapChanged)
   Q_PROPERTY(bool snapToGridEnabled READ snapToGridEnabled WRITE
@@ -39,6 +42,14 @@ class DiagramCanvas : public QQuickItem {
                  setAlignmentGuidesEnabled NOTIFY alignmentGuidesEnabledChanged)
   Q_PROPERTY(int gridSpacing READ gridSpacing WRITE setGridSpacing NOTIFY
                  gridSpacingChanged)
+  Q_PROPERTY(
+      QString defaultConnectorRouting READ defaultConnectorRouting WRITE
+          setDefaultConnectorRouting NOTIFY defaultConnectorRoutingChanged)
+  Q_PROPERTY(QString selectedConnectorRouting READ selectedConnectorRouting
+                 NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(
+      QVariantMap relationshipGestureKeys READ relationshipGestureKeys WRITE
+          setRelationshipGestureKeys NOTIFY relationshipGestureKeysChanged)
 
 public:
   explicit DiagramCanvas(QQuickItem *parent = nullptr);
@@ -52,7 +63,7 @@ public:
   bool connectorSelected() const;
   bool bendPointSelected() const;
   bool selectedConnectorHasBendPoints() const;
-  QString reconnectPrompt() const;
+  QString connectorInteractionPrompt() const;
   int defaultDistributionGap() const;
   void setDefaultDistributionGap(int gap);
   bool snapToGridEnabled() const;
@@ -61,17 +72,21 @@ public:
   void setAlignmentGuidesEnabled(bool enabled);
   int gridSpacing() const;
   void setGridSpacing(int spacing);
+  QString defaultConnectorRouting() const;
+  void setDefaultConnectorRouting(const QString &routing);
+  QString selectedConnectorRouting() const;
+  QVariantMap relationshipGestureKeys() const;
+  void setRelationshipGestureKeys(const QVariantMap &keys);
 
   Q_INVOKABLE void fitToContent();
   Q_INVOKABLE void createElementAtContextPosition(const QString &type);
   Q_INVOKABLE void createElementAtViewportCenter(const QString &type);
   Q_INVOKABLE void createRelationship(const QString &type);
-  Q_INVOKABLE void reconnectSource();
-  Q_INVOKABLE void reconnectTarget();
-  Q_INVOKABLE void cancelReconnect();
+  Q_INVOKABLE void cancelConnectorInteraction();
   Q_INVOKABLE void addBendPointAtContextPosition();
   Q_INVOKABLE void removeSelectedBendPoint();
   Q_INVOKABLE void clearSelectedConnectorBendPoints();
+  Q_INVOKABLE void setSelectedConnectorRouting(const QString &routing);
   Q_INVOKABLE void arrangeSelection(const QString &operation);
   Q_INVOKABLE void nudgeSelection(qreal deltaX, qreal deltaY);
   Q_INVOKABLE void removeSelectedPresentations();
@@ -88,6 +103,8 @@ signals:
   void snapToGridEnabledChanged();
   void alignmentGuidesEnabledChanged();
   void gridSpacingChanged();
+  void defaultConnectorRoutingChanged();
+  void relationshipGestureKeysChanged();
   void contextMenuRequested(const QString &target, qreal x, qreal y);
   void editRequested(const QString &objectId, const QString &field, int index,
                      const QString &text, qreal x, qreal y, qreal width,
@@ -114,13 +131,16 @@ private:
     Lasso,
     MoveSourcePort,
     MoveTargetPort,
-    MoveBendPoint
+    MoveBendPoint,
+    CreateConnector
   };
-  enum class ReconnectEndpoint { None, Source, Target };
   struct ConnectorEndpoints {
     QPointF source;
     QPointF target;
     QVector<QPointF> bendPoints;
+    ConnectorRouting routing = ConnectorRouting::Straight;
+    ConnectorSide sourceSide = ConnectorSide::Automatic;
+    ConnectorSide targetSide = ConnectorSide::Automatic;
     bool valid = false;
   };
   struct TextHit {
@@ -143,17 +163,25 @@ private:
   QRectF textLineRect(const QRectF &nodeRect, int line) const;
   ConnectorEndpoints
   connectorEndpoints(const ConnectorPresentation &connector) const;
-  QRectF endpointNodeRect(const ConnectorPresentation &connector,
-                          bool source) const;
+  ui::ConnectorRoute
+  connectorRoute(const ConnectorPresentation &connector) const;
+  const NodePresentation *endpointNode(const ConnectorPresentation &connector,
+                                       bool source) const;
   bool hitSelectedPort(const QPointF &scenePoint, bool &source) const;
   int hitBendPoint(const ConnectorPresentation &connector,
                    const QPointF &scenePoint) const;
   int nearestConnectorSegment(const ConnectorPresentation &connector,
                               const QPointF &scenePoint) const;
-  void updatePortPreview(const QPointF &scenePoint);
-  void commitPortPreview();
+  void updateEndpointDrag(const QPointF &scenePoint);
+  void commitEndpointDrag();
+  void cancelEndpointDrag();
   void updateBendPointPreview(const QPointF &scenePoint);
   void commitBendPointPreview();
+  bool startConnectorGesture(const QString &relationshipType);
+  void updateConnectorGesture(const QPointF &scenePoint);
+  void commitConnectorGesture(const QPointF &scenePoint);
+  void cancelConnectorGesture();
+  QString relationshipTypeForGestureKey(const QKeyEvent &event) const;
   void commitGeometryPreview();
   void updateLassoSelection(const QPointF &scenePoint);
   void finishLassoSelection();
@@ -173,10 +201,10 @@ private:
   // click order so relationship source and target are deterministic.
   QStringList m_selectedNodeOrder;
   QString m_selectedConnector;
-  ReconnectEndpoint m_reconnectEndpoint = ReconnectEndpoint::None;
   Interaction m_interaction = Interaction::None;
   QPointF m_pressView;
   QPointF m_pressScene;
+  QPointF m_lastPointerScene;
   QPointF m_originalPan;
   QPointF m_lassoOrigin;
   QPointF m_contextScenePoint;
@@ -185,18 +213,27 @@ private:
   QStringList m_lassoBaseNodeOrder;
   QString m_lassoBaseConnector;
   int m_lassoBaseBendPoint = -1;
-  ReconnectEndpoint m_lassoBaseReconnectEndpoint = ReconnectEndpoint::None;
   Qt::KeyboardModifiers m_lassoModifiers = Qt::NoModifier;
   bool m_lassoActive = false;
   QString m_interactionNode;
   QHash<QString, QRectF> m_originalGeometry;
   QHash<QString, QRectF> m_previewGeometry;
-  ConnectorAnchor m_portPreview;
-  bool m_portPreviewActive = false;
+  // Endpoint drags are presentation-only until a valid drop commits one
+  // command. An empty target ID means the end is provisionally detached and
+  // follows m_endpointDragPoint directly.
+  QString m_endpointDragTargetNode;
+  QPointF m_endpointDragPoint;
+  ConnectorAnchor m_endpointDragAnchor;
+  bool m_endpointDragActive = false;
   QList<ConnectorBendPoint> m_bendPointPreview;
   int m_selectedBendPoint = -1;
   int m_contextSegment = -1;
   bool m_bendPointPreviewActive = false;
+  bool m_leftButtonPressed = false;
+  QString m_connectorGestureSourceNode;
+  QString m_connectorGestureType;
+  ConnectorAnchor m_connectorGestureSourceAnchor;
+  QPointF m_connectorGestureTargetPoint;
   bool m_sceneDirty = true;
   // Selection-only changes rebuild colored geometry but can retain the
   // expensive text atlases. Model and geometry changes set both dirty flags.
@@ -205,6 +242,8 @@ private:
   bool m_snapToGridEnabled;
   bool m_alignmentGuidesEnabled;
   int m_gridSpacing;
+  ConnectorRouting m_defaultConnectorRouting;
+  QVariantMap m_relationshipGestureKeys;
   QVector<QLineF> m_alignmentGuides;
   quint64 m_themeRevision = 0;
 };

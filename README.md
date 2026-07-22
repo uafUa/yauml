@@ -127,8 +127,30 @@ Validate a project without opening the GUI:
 - Right-click a connector segment and choose `Add bend point here`, or
   double-click a segment. Drag a selected bend handle to shape the route;
   `Delete` removes the selected bend before it removes the relationship.
+- Select a connector and drag either square endpoint handle. The end follows
+  the pointer while detached and snaps to the exact perimeter position of any
+  element under it, including the other endpoint for a self-connection. Release
+  to commit one undoable change; press `Escape` or release over empty space to
+  retain the original connection. Dragging along the current element edge only
+  moves its persisted port.
+- Right-click a connector and choose **Routing > Straight** or **Orthogonal**.
+  Orthogonal routes automatically maintain 90-degree bends as their elements
+  move or resize; manual bend handles remain editable. New relationships use
+  the shape selected under **Edit > Preferences > Connectors** (Straight by
+  default), while existing relationships retain their own saved setting.
+- With two elements selected, use **Create relationship** to create a
+  dependency, realization, generalization, navigable association, aggregation,
+  or composition. Selection order defines source then target; aggregation and
+  composition place their hollow or filled diamond on the source (whole) end.
+- To draw directly, hold the left pointer button on an element edge, press
+  `D`, `I`, `H`, `A`, `G`, or `C`, drag, and release over the target element.
+  The original press and final drop positions become the connector ports. A
+  connection may return to its originating element. Press `Escape` or release
+  over empty space to discard the candidate. Edit the six unique keys under
+  **Edit > Preferences > Connectors**.
 - Use `Ctrl+0` to fit the active diagram. Element creation shortcuts are
-  `Ctrl+Shift+P/C/S/E`; relationship shortcuts are `Ctrl+Alt+D/G/A`.
+  `Ctrl+Shift+P/C/S/E`; relationship shortcuts are `Ctrl+Alt+D/I/G/A/C`, with
+  `Ctrl+Alt+Shift+G` for aggregation.
 
 Project directories contain `manifest.json5`, `model/model.json5`, and
 `diagrams/diagrams.json5`. Strict JSON is accepted because it is a valid JSON5

@@ -477,12 +477,43 @@ ApplicationWindow {
         focus: true
         title: qsTr("Preferences")
         standardButtons: Dialog.Ok | Dialog.Cancel
+        property bool connectorGestureKeysValid: {
+            const values = [dependencyGestureKey.text, realizationGestureKey.text,
+                            generalizationGestureKey.text, associationGestureKey.text,
+                            aggregationGestureKey.text, compositionGestureKey.text]
+            const assigned = {}
+            for (let index = 0; index < values.length; ++index) {
+                const key = values[index].trim().toUpperCase()
+                if (!/^[A-Z0-9]$/.test(key) || assigned[key])
+                    return false
+                assigned[key] = true
+            }
+            return true
+        }
+
+        function updateOkButton() {
+            const button = standardButton(Dialog.Ok)
+            if (button)
+                button.enabled = connectorGestureKeysValid
+        }
+
+        onConnectorGestureKeysValidChanged: updateOkButton()
 
         onOpened: {
             distributionGap.value = applicationSettings.defaultDistributionGap
             snapToGrid.checked = applicationSettings.snapToGridEnabled
             alignmentGuides.checked = applicationSettings.alignmentGuidesEnabled
             gridSpacing.value = applicationSettings.gridSpacing
+            defaultConnectorRouting.currentIndex =
+                    applicationSettings.defaultConnectorRouting === "orthogonal" ? 1 : 0
+            const gestureKeys = applicationSettings.relationshipGestureKeys
+            dependencyGestureKey.text = gestureKeys.dependency
+            realizationGestureKey.text = gestureKeys.realization
+            generalizationGestureKey.text = gestureKeys.generalization
+            associationGestureKey.text = gestureKeys.association
+            aggregationGestureKey.text = gestureKeys.aggregation
+            compositionGestureKey.text = gestureKeys.composition
+            Qt.callLater(updateOkButton)
             colorPreferencesModel.clear()
             const roles = uiTheme.colorRoles
             for (let index = 0; index < roles.length; ++index) {
@@ -496,10 +527,21 @@ ApplicationWindow {
             }
         }
         onAccepted: {
+            applicationSettings.setRelationshipGestureKeys({
+                dependency: dependencyGestureKey.text,
+                realization: realizationGestureKey.text,
+                generalization: generalizationGestureKey.text,
+                association: associationGestureKey.text,
+                aggregation: aggregationGestureKey.text,
+                composition: compositionGestureKey.text
+            })
             applicationSettings.defaultDistributionGap = distributionGap.value
             applicationSettings.snapToGridEnabled = snapToGrid.checked
             applicationSettings.alignmentGuidesEnabled = alignmentGuides.checked
             applicationSettings.gridSpacing = gridSpacing.value
+            applicationSettings.defaultConnectorRouting =
+                    defaultConnectorRouting.currentIndex === 1
+                    ? "orthogonal" : "straight"
             const colors = {}
             for (let index = 0; index < colorPreferencesModel.count; ++index) {
                 const entry = colorPreferencesModel.get(index)
@@ -517,6 +559,7 @@ ApplicationWindow {
                 objectName: "preferencesTabs"
                 Layout.fillWidth: true
                 TabButton { text: qsTr("General") }
+                TabButton { text: qsTr("Connectors") }
                 TabButton { text: qsTr("Colors") }
             }
 
@@ -582,6 +625,110 @@ ApplicationWindow {
                             wrapMode: Text.Wrap
                             color: uiTheme.mutedText
                             text: qsTr("Hold Alt while dragging to temporarily disable snapping.")
+                        }
+                        Item { Layout.fillHeight: true }
+                    }
+                }
+
+                Item {
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 12
+
+                        Label {
+                            text: qsTr("Connector creation")
+                            font.bold: true
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: qsTr("Choose the route used when a new relationship is created. Existing relationships keep their own route setting.")
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label { text: qsTr("Default connector shape") }
+                            Item { Layout.fillWidth: true }
+                            ComboBox {
+                                id: defaultConnectorRouting
+                                model: [qsTr("Straight"), qsTr("Orthogonal")]
+                            }
+                        }
+                        Label {
+                            text: qsTr("Edge-drag relationship keys")
+                            font.bold: true
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: qsTr("Hold the pointer button on an element edge, press the relationship key, then drag to a target element. Each assignment must be unique.")
+                        }
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 2
+                            columnSpacing: 16
+                            rowSpacing: 6
+
+                            Label { text: qsTr("Dependency") }
+                            TextField {
+                                id: dependencyGestureKey
+                                Layout.preferredWidth: 64
+                                maximumLength: 1
+                                selectByMouse: true
+                                validator: RegularExpressionValidator { regularExpression: /^[A-Za-z0-9]$/ }
+                                onTextEdited: text = text.toUpperCase()
+                            }
+                            Label { text: qsTr("Realization / implementation") }
+                            TextField {
+                                id: realizationGestureKey
+                                Layout.preferredWidth: 64
+                                maximumLength: 1
+                                selectByMouse: true
+                                validator: RegularExpressionValidator { regularExpression: /^[A-Za-z0-9]$/ }
+                                onTextEdited: text = text.toUpperCase()
+                            }
+                            Label { text: qsTr("Generalization / inheritance") }
+                            TextField {
+                                id: generalizationGestureKey
+                                Layout.preferredWidth: 64
+                                maximumLength: 1
+                                selectByMouse: true
+                                validator: RegularExpressionValidator { regularExpression: /^[A-Za-z0-9]$/ }
+                                onTextEdited: text = text.toUpperCase()
+                            }
+                            Label { text: qsTr("Navigable association") }
+                            TextField {
+                                id: associationGestureKey
+                                Layout.preferredWidth: 64
+                                maximumLength: 1
+                                selectByMouse: true
+                                validator: RegularExpressionValidator { regularExpression: /^[A-Za-z0-9]$/ }
+                                onTextEdited: text = text.toUpperCase()
+                            }
+                            Label { text: qsTr("Aggregation") }
+                            TextField {
+                                id: aggregationGestureKey
+                                Layout.preferredWidth: 64
+                                maximumLength: 1
+                                selectByMouse: true
+                                validator: RegularExpressionValidator { regularExpression: /^[A-Za-z0-9]$/ }
+                                onTextEdited: text = text.toUpperCase()
+                            }
+                            Label { text: qsTr("Composition") }
+                            TextField {
+                                id: compositionGestureKey
+                                Layout.preferredWidth: 64
+                                maximumLength: 1
+                                selectByMouse: true
+                                validator: RegularExpressionValidator { regularExpression: /^[A-Za-z0-9]$/ }
+                                onTextEdited: text = text.toUpperCase()
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: !preferencesDialog.connectorGestureKeysValid
+                            color: uiTheme.warningBorder
+                            text: qsTr("Assign one unique letter or digit to every relationship type.")
                         }
                         Item { Layout.fillHeight: true }
                     }

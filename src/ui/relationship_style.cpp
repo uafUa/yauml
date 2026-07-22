@@ -1,0 +1,29 @@
+#include "ui/relationship_style.h"
+
+namespace uuml::ui {
+
+RelationshipVisualStyle relationshipVisualStyle(RelationshipType type) {
+  switch (type) {
+  case RelationshipType::Dependency:
+    return {RelationshipLineStyle::Dashed, RelationshipDecoration::None,
+            RelationshipDecoration::OpenArrow};
+  case RelationshipType::Generalization:
+    return {RelationshipLineStyle::Solid, RelationshipDecoration::None,
+            RelationshipDecoration::HollowTriangle};
+  case RelationshipType::Realization:
+    return {RelationshipLineStyle::Dashed, RelationshipDecoration::None,
+            RelationshipDecoration::HollowTriangle};
+  case RelationshipType::Association:
+    return {RelationshipLineStyle::Solid, RelationshipDecoration::None,
+            RelationshipDecoration::OpenArrow};
+  case RelationshipType::Aggregation:
+    return {RelationshipLineStyle::Solid, RelationshipDecoration::HollowDiamond,
+            RelationshipDecoration::None};
+  case RelationshipType::Composition:
+    return {RelationshipLineStyle::Solid, RelationshipDecoration::FilledDiamond,
+            RelationshipDecoration::None};
+  }
+  return {};
+}
+
+} // namespace uuml::ui

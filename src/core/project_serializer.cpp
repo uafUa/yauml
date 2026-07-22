@@ -192,6 +192,10 @@ QJsonObject connectorToJson(const ConnectorPresentation &connector) {
   QJsonObject object = connector.extra;
   object.insert(QStringLiteral("id"), connector.id);
   object.insert(QStringLiteral("relationshipId"), connector.relationshipId);
+  if (connector.routing != ConnectorRouting::Straight)
+    object.insert(QStringLiteral("routing"), toString(connector.routing));
+  else
+    object.remove(QStringLiteral("routing"));
   if (connector.sourceAnchor.side != ConnectorSide::Automatic ||
       !connector.sourceAnchor.extra.isEmpty())
     object.insert(QStringLiteral("sourceAnchor"),
@@ -496,6 +500,18 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
       connector.id = connectorObject.value(QStringLiteral("id")).toString();
       connector.relationshipId =
           connectorObject.value(QStringLiteral("relationshipId")).toString();
+      const QJsonValue routingValue =
+          connectorObject.value(QStringLiteral("routing"));
+      if (!routingValue.isUndefined()) {
+        bool routingOk = false;
+        connector.routing =
+            connectorRoutingFromString(routingValue.toString(), &routingOk);
+        if (!routingOk)
+          outcome.diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral("Connector has an unknown routing mode"),
+                    connector.id));
+      }
       connector.sourceAnchor = readAnchor(
           connectorObject.value(QStringLiteral("sourceAnchor")),
           QStringLiteral("source"), connector.id, outcome.diagnostics);
@@ -517,8 +533,8 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
       connector.extra = withoutKeys(
           connectorObject,
           {QStringLiteral("id"), QStringLiteral("relationshipId"),
-           QStringLiteral("sourceAnchor"), QStringLiteral("targetAnchor"),
-           QStringLiteral("bendPoints")});
+           QStringLiteral("routing"), QStringLiteral("sourceAnchor"),
+           QStringLiteral("targetAnchor"), QStringLiteral("bendPoints")});
       diagram.connectors.append(connector);
     }
     diagram.extra = withoutKeys(

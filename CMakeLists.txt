@@ -53,10 +53,14 @@ target_include_directories(uuml_core PUBLIC src)
 target_link_libraries(uuml_core PUBLIC uuml_theme Qt6::Core Qt6::Gui)
 
 add_library(uuml_ui_support STATIC
+    src/ui/connector_routing.cpp
+    src/ui/connector_routing.h
     src/ui/diagram_arrangement.cpp
     src/ui/diagram_arrangement.h
     src/ui/diagram_snapping.cpp
     src/ui/diagram_snapping.h
+    src/ui/relationship_style.cpp
+    src/ui/relationship_style.h
     src/ui/text_occlusion.cpp
     src/ui/text_occlusion.h
     src/ui/triangle_batch.cpp

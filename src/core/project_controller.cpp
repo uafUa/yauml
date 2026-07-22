@@ -7,6 +7,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QLineF>
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -123,6 +124,105 @@ ConnectorAnchor edgeAnchorToward(const QRectF &rect, const QPointF &target) {
   }
   anchor.offset = std::clamp(anchor.offset, 0.0, 1.0);
   return anchor;
+}
+
+QPointF anchorPoint(const QRectF &rect, const ConnectorAnchor &anchor) {
+  const qreal offset = std::clamp(anchor.offset, 0.0, 1.0);
+  switch (anchor.side) {
+  case ConnectorSide::Top:
+    return {rect.left() + rect.width() * offset, rect.top()};
+  case ConnectorSide::Right:
+    return {rect.right(), rect.top() + rect.height() * offset};
+  case ConnectorSide::Bottom:
+    return {rect.left() + rect.width() * offset, rect.bottom()};
+  case ConnectorSide::Left:
+    return {rect.left(), rect.top() + rect.height() * offset};
+  case ConnectorSide::Automatic:
+    return rect.center();
+  }
+  return rect.center();
+}
+
+bool horizontalSide(ConnectorSide side) {
+  return side == ConnectorSide::Left || side == ConnectorSide::Right;
+}
+
+QPointF outsidePoint(const QRectF &rect, const ConnectorAnchor &anchor,
+                     qreal gap) {
+  QPointF point = anchorPoint(rect, anchor);
+  switch (anchor.side) {
+  case ConnectorSide::Top:
+    point.ry() -= gap;
+    break;
+  case ConnectorSide::Right:
+    point.rx() += gap;
+    break;
+  case ConnectorSide::Bottom:
+    point.ry() += gap;
+    break;
+  case ConnectorSide::Left:
+    point.rx() -= gap;
+    break;
+  case ConnectorSide::Automatic:
+    break;
+  }
+  return point;
+}
+
+QList<ConnectorBendPoint>
+selfConnectorBendPoints(const QRectF &rect, const ConnectorAnchor &source,
+                        const ConnectorAnchor &target) {
+  constexpr qreal kLoopGap = 44.0;
+  const QPointF sourceOutside = outsidePoint(rect, source, kLoopGap);
+  const QPointF targetOutside = outsidePoint(rect, target, kLoopGap);
+  QVector<QPointF> points{sourceOutside};
+  bool appendTargetOutside = true;
+
+  if (source.side == target.side) {
+    if (QLineF(sourceOutside, targetOutside).length() < 1.0) {
+      const qreal tangentDirection = source.offset <= 0.5 ? 1.0 : -1.0;
+      const QPointF tangent = horizontalSide(source.side)
+                                  ? QPointF(0, 40 * tangentDirection)
+                                  : QPointF(40 * tangentDirection, 0);
+      points.append(sourceOutside + tangent);
+      points.append(anchorPoint(rect, target) + tangent);
+      appendTargetOutside = false;
+    }
+  } else if (horizontalSide(source.side) != horizontalSide(target.side)) {
+    points.append(horizontalSide(source.side)
+                      ? QPointF(sourceOutside.x(), targetOutside.y())
+                      : QPointF(targetOutside.x(), sourceOutside.y()));
+  } else if (horizontalSide(source.side)) {
+    const qreal top = rect.top() - kLoopGap;
+    const qreal bottom = rect.bottom() + kLoopGap;
+    const qreal routeY =
+        std::abs(sourceOutside.y() - top) + std::abs(targetOutside.y() - top) <=
+                std::abs(sourceOutside.y() - bottom) +
+                    std::abs(targetOutside.y() - bottom)
+            ? top
+            : bottom;
+    points.append({sourceOutside.x(), routeY});
+    points.append({targetOutside.x(), routeY});
+  } else {
+    const qreal left = rect.left() - kLoopGap;
+    const qreal right = rect.right() + kLoopGap;
+    const qreal routeX = std::abs(sourceOutside.x() - left) +
+                                     std::abs(targetOutside.x() - left) <=
+                                 std::abs(sourceOutside.x() - right) +
+                                     std::abs(targetOutside.x() - right)
+                             ? left
+                             : right;
+    points.append({routeX, sourceOutside.y()});
+    points.append({routeX, targetOutside.y()});
+  }
+  if (appendTargetOutside)
+    points.append(targetOutside);
+
+  QList<ConnectorBendPoint> bendPoints;
+  bendPoints.reserve(points.size());
+  for (const auto &point : points)
+    bendPoints.append({point, {}});
+  return bendPoints;
 }
 
 } // namespace
@@ -506,12 +606,67 @@ QString ProjectController::createRelationship(const QString &diagramId,
                                               const QString &sourceNodeId,
                                               const QString &targetNodeId,
                                               const QString &type) {
+  return createRelationshipImpl(diagramId, sourceNodeId, targetNodeId, type,
+                                ConnectorRouting::Straight);
+}
+
+QString ProjectController::createRelationshipWithRouting(
+    const QString &diagramId, const QString &sourceNodeId,
+    const QString &targetNodeId, const QString &type, const QString &routing) {
+  bool routingOk = false;
+  const ConnectorRouting parsedRouting =
+      connectorRoutingFromString(routing, &routingOk);
+  if (!routingOk) {
+    m_diagnostics.addError(
+        QStringLiteral("command"),
+        QStringLiteral("Unknown connector routing mode: %1").arg(routing));
+    return {};
+  }
+  return createRelationshipImpl(diagramId, sourceNodeId, targetNodeId, type,
+                                parsedRouting);
+}
+
+QString ProjectController::createRelationshipImpl(const QString &diagramId,
+                                                  const QString &sourceNodeId,
+                                                  const QString &targetNodeId,
+                                                  const QString &type,
+                                                  ConnectorRouting routing) {
+  return createRelationshipImpl(diagramId, sourceNodeId, targetNodeId, type,
+                                routing, std::nullopt, std::nullopt);
+}
+
+QString ProjectController::createRelationshipAtAnchors(
+    const QString &diagramId, const QString &sourceNodeId,
+    const QString &targetNodeId, const QString &type, const QString &routing,
+    ConnectorAnchor sourceAnchor, ConnectorAnchor targetAnchor) {
+  bool routingOk = false;
+  const ConnectorRouting parsedRouting =
+      connectorRoutingFromString(routing, &routingOk);
+  if (!routingOk) {
+    m_diagnostics.addError(
+        QStringLiteral("command"),
+        QStringLiteral("Unknown connector routing mode: %1").arg(routing));
+    return {};
+  }
+  return createRelationshipImpl(diagramId, sourceNodeId, targetNodeId, type,
+                                parsedRouting, std::move(sourceAnchor),
+                                std::move(targetAnchor));
+}
+
+QString ProjectController::createRelationshipImpl(
+    const QString &diagramId, const QString &sourceNodeId,
+    const QString &targetNodeId, const QString &type, ConnectorRouting routing,
+    std::optional<ConnectorAnchor> sourceAnchor,
+    std::optional<ConnectorAnchor> targetAnchor) {
   const auto *diagram = findDiagram(m_data, diagramId);
   if (!diagram)
     return {};
   const auto *sourceNode = findNode(*diagram, sourceNodeId);
   const auto *targetNode = findNode(*diagram, targetNodeId);
-  if (!sourceNode || !targetNode || sourceNode == targetNode) {
+  const bool anchoredGesture =
+      sourceAnchor.has_value() && targetAnchor.has_value();
+  if (!sourceNode || !targetNode ||
+      (sourceNode == targetNode && !anchoredGesture)) {
     m_diagnostics.addError(
         QStringLiteral("command"),
         QStringLiteral("Select two different diagram elements to connect"));
@@ -537,8 +692,17 @@ QString ProjectController::createRelationship(const QString &diagramId,
   case RelationshipType::Generalization:
     relationship.name = QStringLiteral("inherits");
     break;
+  case RelationshipType::Realization:
+    relationship.name = QStringLiteral("implements");
+    break;
   case RelationshipType::Association:
     relationship.name = QStringLiteral("associated with");
+    break;
+  case RelationshipType::Aggregation:
+    relationship.name = QStringLiteral("aggregates");
+    break;
+  case RelationshipType::Composition:
+    relationship.name = QStringLiteral("composes");
     break;
   }
   relationship.sourceId = sourceNode->elementId;
@@ -546,10 +710,14 @@ QString ProjectController::createRelationship(const QString &diagramId,
   ConnectorPresentation connector;
   connector.id = newId();
   connector.relationshipId = relationship.id;
-  connector.sourceAnchor =
-      edgeAnchorToward(sourceNode->geometry, targetNode->geometry.center());
-  connector.targetAnchor =
-      edgeAnchorToward(targetNode->geometry, sourceNode->geometry.center());
+  connector.routing = routing;
+  connector.sourceAnchor = sourceAnchor.value_or(
+      edgeAnchorToward(sourceNode->geometry, targetNode->geometry.center()));
+  connector.targetAnchor = targetAnchor.value_or(
+      edgeAnchorToward(targetNode->geometry, sourceNode->geometry.center()));
+  if (sourceNode == targetNode)
+    connector.bendPoints = selfConnectorBendPoints(
+        sourceNode->geometry, connector.sourceAnchor, connector.targetAnchor);
   pushCommand(std::make_unique<CreateRelationshipCommand>(
       this, m_data, diagramId, relationship, connector));
   selectObject(relationship.id, QStringLiteral("relationship"));
@@ -560,6 +728,13 @@ void ProjectController::reconnectRelationship(const QString &diagramId,
                                               const QString &connectorId,
                                               const QString &nodeId,
                                               bool reconnectSource) {
+  reconnectRelationshipAtAnchor(diagramId, connectorId, nodeId, reconnectSource,
+                                {ConnectorSide::Automatic, 0.5});
+}
+
+void ProjectController::reconnectRelationshipAtAnchor(
+    const QString &diagramId, const QString &connectorId, const QString &nodeId,
+    bool reconnectSource, ConnectorAnchor afterAnchor) {
   const auto *diagram = findDiagram(m_data, diagramId);
   if (!diagram)
     return;
@@ -575,14 +750,40 @@ void ProjectController::reconnectRelationship(const QString &diagramId,
       reconnectSource ? relationship->sourceId : relationship->targetId;
   const ConnectorAnchor beforeAnchor =
       reconnectSource ? connector->sourceAnchor : connector->targetAnchor;
-  ConnectorAnchor afterAnchor = beforeAnchor;
-  afterAnchor.side = ConnectorSide::Automatic;
-  afterAnchor.offset = 0.5;
-  if (beforeElementId == node->elementId && beforeAnchor == afterAnchor)
+  afterAnchor.offset = std::clamp(afterAnchor.offset, 0.0, 1.0);
+
+  QList<ConnectorBendPoint> afterBendPoints = connector->bendPoints;
+  const QString afterSourceId =
+      reconnectSource ? node->elementId : relationship->sourceId;
+  const QString afterTargetId =
+      reconnectSource ? relationship->targetId : node->elementId;
+  if (afterSourceId == afterTargetId && afterBendPoints.isEmpty()) {
+    const ConnectorAnchor sourceAnchor =
+        reconnectSource ? afterAnchor : connector->sourceAnchor;
+    const ConnectorAnchor targetAnchor =
+        reconnectSource ? connector->targetAnchor : afterAnchor;
+    afterBendPoints =
+        selfConnectorBendPoints(node->geometry, sourceAnchor, targetAnchor);
+  }
+
+  if (beforeElementId == node->elementId && beforeAnchor == afterAnchor &&
+      connector->bendPoints == afterBendPoints)
     return;
+
+  // A port move on the same element remains the smaller, more specific
+  // command. Reattachment changes both the semantic relationship endpoint and
+  // its diagram presentation in one undoable operation.
+  if (beforeElementId == node->elementId &&
+      connector->bendPoints == afterBendPoints) {
+    pushCommand(std::make_unique<MoveConnectorAnchorCommand>(
+        this, diagramId, connectorId, reconnectSource, beforeAnchor,
+        afterAnchor));
+    return;
+  }
   pushCommand(std::make_unique<ReconnectRelationshipCommand>(
       this, diagramId, connectorId, relationship->id, reconnectSource,
-      beforeElementId, node->elementId, beforeAnchor, afterAnchor));
+      beforeElementId, node->elementId, beforeAnchor, afterAnchor,
+      connector->bendPoints, afterBendPoints));
 }
 
 void ProjectController::updateConnectorAnchor(const QString &diagramId,
@@ -615,6 +816,29 @@ void ProjectController::updateConnectorAnchor(const QString &diagramId,
     return;
   pushCommand(std::make_unique<MoveConnectorAnchorCommand>(
       this, diagramId, connectorId, source, before, after));
+}
+
+void ProjectController::setConnectorRouting(const QString &diagramId,
+                                            const QString &connectorId,
+                                            const QString &routing) {
+  bool routingOk = false;
+  const ConnectorRouting parsedRouting =
+      connectorRoutingFromString(routing, &routingOk);
+  if (!routingOk) {
+    m_diagnostics.addError(
+        QStringLiteral("command"),
+        QStringLiteral("Unknown connector routing mode: %1").arg(routing),
+        connectorId);
+    return;
+  }
+
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *connector =
+      diagram ? findConnector(*diagram, connectorId) : nullptr;
+  if (!connector || connector->routing == parsedRouting)
+    return;
+  pushCommand(std::make_unique<SetConnectorRoutingCommand>(
+      this, diagramId, connectorId, connector->routing, parsedRouting));
 }
 
 void ProjectController::insertConnectorBendPoint(const QString &diagramId,

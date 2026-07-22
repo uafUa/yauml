@@ -16,6 +16,8 @@ Item {
         snapToGridEnabled: applicationSettings.snapToGridEnabled
         alignmentGuidesEnabled: applicationSettings.alignmentGuidesEnabled
         gridSpacing: applicationSettings.gridSpacing
+        defaultConnectorRouting: applicationSettings.defaultConnectorRouting
+        relationshipGestureKeys: applicationSettings.relationshipGestureKeys
 
         onContextMenuRequested: function(target, menuX, menuY) {
             const menu = target === "element" ? elementMenu
@@ -94,8 +96,12 @@ Item {
             title: qsTr("Create relationship")
             enabled: canvas.selectedNodeCount === 2
             MenuItem { text: qsTr("Dependency"); onTriggered: canvas.createRelationship("dependency") }
-            MenuItem { text: qsTr("Generalization"); onTriggered: canvas.createRelationship("generalization") }
-            MenuItem { text: qsTr("Association"); onTriggered: canvas.createRelationship("association") }
+            MenuItem { text: qsTr("Realization (implementation)"); onTriggered: canvas.createRelationship("realization") }
+            MenuItem { text: qsTr("Generalization (inheritance)"); onTriggered: canvas.createRelationship("generalization") }
+            MenuSeparator {}
+            MenuItem { text: qsTr("Navigable association"); onTriggered: canvas.createRelationship("association") }
+            MenuItem { text: qsTr("Aggregation"); onTriggered: canvas.createRelationship("aggregation") }
+            MenuItem { text: qsTr("Composition"); onTriggered: canvas.createRelationship("composition") }
         }
         MenuSeparator {}
         Menu {
@@ -145,8 +151,21 @@ Item {
             onTriggered: canvas.clearSelectedConnectorBendPoints()
         }
         MenuSeparator {}
-        MenuItem { text: qsTr("Reconnect source…"); onTriggered: canvas.reconnectSource() }
-        MenuItem { text: qsTr("Reconnect target…"); onTriggered: canvas.reconnectTarget() }
+        Menu {
+            title: qsTr("Routing")
+            MenuItem {
+                text: qsTr("Straight")
+                checkable: true
+                checked: canvas.selectedConnectorRouting === "straight"
+                onTriggered: canvas.setSelectedConnectorRouting("straight")
+            }
+            MenuItem {
+                text: qsTr("Orthogonal")
+                checkable: true
+                checked: canvas.selectedConnectorRouting === "orthogonal"
+                onTriggered: canvas.setSelectedConnectorRouting("orthogonal")
+            }
+        }
         MenuSeparator {}
         MenuItem { text: qsTr("Delete relationship"); onTriggered: canvas.deleteSelectedConnector() }
     }
@@ -235,10 +254,11 @@ Item {
     Shortcut { sequences: ["Ctrl+Shift+S"]; context: Qt.WindowShortcut; enabled: root.visible && !editor.visible; onActivated: canvas.createElementAtViewportCenter("struct") }
     Shortcut { sequences: ["Ctrl+Shift+E"]; context: Qt.WindowShortcut; enabled: root.visible && !editor.visible; onActivated: canvas.createElementAtViewportCenter("enumeration") }
     Shortcut { sequences: ["Ctrl+Alt+D"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("dependency") }
+    Shortcut { sequences: ["Ctrl+Alt+I"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("realization") }
     Shortcut { sequences: ["Ctrl+Alt+G"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("generalization") }
     Shortcut { sequences: ["Ctrl+Alt+A"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("association") }
-    Shortcut { sequences: ["Ctrl+Alt+S"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.connectorSelected; onActivated: canvas.reconnectSource() }
-    Shortcut { sequences: ["Ctrl+Alt+T"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.connectorSelected; onActivated: canvas.reconnectTarget() }
+    Shortcut { sequences: ["Ctrl+Alt+Shift+G"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("aggregation") }
+    Shortcut { sequences: ["Ctrl+Alt+C"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("composition") }
     Shortcut {
         sequences: ["Delete"]
         context: Qt.WindowShortcut
@@ -255,8 +275,8 @@ Item {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
         anchors.topMargin: 12
-        visible: canvas.reconnectPrompt.length > 0
-        width: reconnectMessage.implicitWidth + cancelReconnect.implicitWidth + 28
+        visible: canvas.connectorInteractionPrompt.length > 0
+        width: interactionMessage.implicitWidth + cancelInteraction.implicitWidth + 28
         height: 38
         radius: 5
         color: uiTheme.warningBackground
@@ -267,11 +287,11 @@ Item {
             anchors.fill: parent
             anchors.leftMargin: 10
             anchors.rightMargin: 4
-            Label { id: reconnectMessage; text: canvas.reconnectPrompt }
+            Label { id: interactionMessage; text: canvas.connectorInteractionPrompt }
             ToolButton {
-                id: cancelReconnect
+                id: cancelInteraction
                 text: qsTr("Cancel")
-                onClicked: canvas.cancelReconnect()
+                onClicked: canvas.cancelConnectorInteraction()
             }
         }
     }
