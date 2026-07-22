@@ -167,6 +167,15 @@ const ModelElement *findElement(const ProjectData &project, const QString &id) {
   return findById(project.elements, id);
 }
 
+BrowserFolder *findBrowserFolder(ProjectData &project, const QString &id) {
+  return findById(project.browserFolders, id);
+}
+
+const BrowserFolder *findBrowserFolder(const ProjectData &project,
+                                       const QString &id) {
+  return findById(project.browserFolders, id);
+}
+
 Relationship *findRelationship(ProjectData &project, const QString &id) {
   return findById(project.relationships, id);
 }

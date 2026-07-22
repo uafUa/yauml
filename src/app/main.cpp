@@ -199,6 +199,8 @@ int main(int argc, char *argv[]) {
           project.addElement(QStringLiteral("class"), firstDiagram);
           const QString secondDiagram = project.addDiagram();
           project.addElement(QStringLiteral("enumeration"), secondDiagram);
+          project.addBrowserFolder(QStringLiteral("model"), {},
+                                   QStringLiteral("Smoke Folder"));
           if (supportsDetachedWindows)
             workspace.detachDiagram(secondDiagram, 80, 80);
 
@@ -211,10 +213,17 @@ int main(int argc, char *argv[]) {
                                   ? rootObject->findChild<QObject *>(
                                         QStringLiteral("preferencesDialog"))
                                   : nullptr;
+          auto *folderDialog = rootObject
+                                   ? rootObject->findChild<QObject *>(
+                                         QStringLiteral("folderNameDialog"))
+                                   : nullptr;
           auto *tabs = rootObject ? rootObject->findChild<QObject *>(
                                         QStringLiteral("preferencesTabs"))
                                   : nullptr;
-          if (!preferences || !tabs ||
+          if (!folderDialog ||
+              !QMetaObject::invokeMethod(folderDialog, "open") ||
+              !QMetaObject::invokeMethod(folderDialog, "close") ||
+              !preferences || !tabs ||
               !QMetaObject::invokeMethod(preferences, "open")) {
             QCoreApplication::exit(1);
             return;

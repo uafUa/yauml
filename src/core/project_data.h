@@ -33,6 +33,16 @@ ConnectorRouting connectorRoutingFromString(const QString &value,
                                             bool *ok = nullptr);
 QString newId();
 
+// Browser organization is deliberately separate from UML/C++ ownership. An
+// empty kind means "use semantic hierarchy"; otherwise the item is explicitly
+// placed under the named browser container.
+struct BrowserParent {
+  QString kind;
+  QString id;
+
+  bool operator==(const BrowserParent &) const = default;
+};
+
 struct ModelElement {
   QString id;
   ElementType type = ElementType::Class;
@@ -41,9 +51,19 @@ struct ModelElement {
   QStringList attributes;
   QStringList operations;
   QStringList enumLiterals;
+  BrowserParent browserParent;
   QJsonObject extra;
 
   bool operator==(const ModelElement &) const = default;
+};
+
+struct BrowserFolder {
+  QString id;
+  QString name;
+  BrowserParent parent;
+  QJsonObject extra;
+
+  bool operator==(const BrowserFolder &) const = default;
 };
 
 struct Relationship {
@@ -108,6 +128,7 @@ struct ProjectData {
   QString id;
   QString name;
   QList<ModelElement> elements;
+  QList<BrowserFolder> browserFolders;
   QList<Relationship> relationships;
   QList<Diagram> diagrams;
   QJsonObject manifestExtra;
@@ -123,6 +144,9 @@ createStarterProject(const QString &name = QStringLiteral("New Project"));
 
 ModelElement *findElement(ProjectData &project, const QString &id);
 const ModelElement *findElement(const ProjectData &project, const QString &id);
+BrowserFolder *findBrowserFolder(ProjectData &project, const QString &id);
+const BrowserFolder *findBrowserFolder(const ProjectData &project,
+                                       const QString &id);
 Relationship *findRelationship(ProjectData &project, const QString &id);
 const Relationship *findRelationship(const ProjectData &project,
                                      const QString &id);

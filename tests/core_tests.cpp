@@ -86,6 +86,9 @@ private slots:
   void cppImportScansSourceFolderWithoutBuildMetadata();
   void largeModelGeometryCommandUndoRedo();
   void bulkDiagramPlacementIsOneUndoableCommand();
+  void projectTreeExtendedSelection();
+  void projectTreeQualifiedHierarchy();
+  void browserFoldersPersistAndReorganize();
   void largeDiagramReplacementUsesFirstFreeSlot();
   void deleteElementCommandRestoresCascade();
   void reconnectRelationshipCommandUndoRedo();
@@ -683,6 +686,202 @@ void CoreTests::bulkDiagramPlacementIsOneUndoableCommand() {
                diagramId, {firstElement, secondElement}, 0.0, 0.0),
            0);
   QCOMPARE(controller.data(), afterDrop);
+}
+
+void CoreTests::projectTreeExtendedSelection() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString firstElement =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const QString secondElement =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const QString thirdElement =
+      controller.addElement(QStringLiteral("struct"), diagramId);
+
+  ProjectTreeModel *tree = controller.treeModel();
+  QItemSelectionModel selection(tree);
+  const QModelIndex first =
+      tree->indexForObject(firstElement, QStringLiteral("element"));
+  const QModelIndex second =
+      tree->indexForObject(secondElement, QStringLiteral("element"));
+  const QModelIndex third =
+      tree->indexForObject(thirdElement, QStringLiteral("element"));
+
+  tree->selectWithModifiers(&selection, first, Qt::NoModifier);
+  QCOMPARE(tree->elementIdsForIndexes(selection.selectedRows()),
+           QStringList({firstElement}));
+
+  tree->selectWithModifiers(&selection, second, Qt::ControlModifier);
+  QCOMPARE(tree->elementIdsForIndexes(selection.selectedRows()),
+           QStringList({firstElement, secondElement}));
+
+  tree->selectWithModifiers(&selection, first, Qt::ControlModifier);
+  QCOMPARE(tree->elementIdsForIndexes(selection.selectedRows()),
+           QStringList({secondElement}));
+
+  tree->selectWithModifiers(&selection, first, Qt::NoModifier);
+  tree->selectWithModifiers(&selection, third, Qt::ShiftModifier);
+  QCOMPARE(tree->elementIdsForIndexes(selection.selectedRows()),
+           QStringList({firstElement, secondElement, thirdElement}));
+}
+
+void CoreTests::projectTreeQualifiedHierarchy() {
+  ProjectController controller;
+  const auto addNamedElement = [&](const QString &type, const QString &name) {
+    const QString id = controller.addElement(type);
+    controller.selectObject(id, QStringLiteral("element"));
+    controller.setSelectedName(name);
+    return id;
+  };
+
+  const QString outer =
+      addNamedElement(QStringLiteral("class"), QStringLiteral("demo::Outer"));
+  const QString inner = addNamedElement(QStringLiteral("struct"),
+                                        QStringLiteral("demo::Outer::Inner"));
+  const QString service =
+      addNamedElement(QStringLiteral("class"), QStringLiteral("demo::Service"));
+  const QString other =
+      addNamedElement(QStringLiteral("class"), QStringLiteral("other::Thing"));
+
+  ProjectTreeModel *tree = controller.treeModel();
+  const QModelIndex outerIndex =
+      tree->indexForObject(outer, QStringLiteral("element"));
+  const QModelIndex innerIndex =
+      tree->indexForObject(inner, QStringLiteral("element"));
+  const QModelIndex serviceIndex =
+      tree->indexForObject(service, QStringLiteral("element"));
+  const QModelIndex otherIndex =
+      tree->indexForObject(other, QStringLiteral("element"));
+  const QModelIndex demoNamespace = outerIndex.parent();
+
+  QVERIFY(demoNamespace.isValid());
+  QCOMPARE(tree->data(demoNamespace, Qt::DisplayRole).toString(),
+           QStringLiteral("demo"));
+  QCOMPARE(tree->data(demoNamespace, ProjectTreeModel::KindRole).toString(),
+           QStringLiteral("namespace"));
+  QCOMPARE(innerIndex.parent(), outerIndex);
+  QCOMPARE(serviceIndex.parent(), demoNamespace);
+  QCOMPARE(tree->data(innerIndex, Qt::DisplayRole).toString(),
+           QStringLiteral("Inner"));
+  QVERIFY(otherIndex.parent() != demoNamespace);
+
+  // Dragging a namespace or an owning type expands to all descendant types;
+  // overlapping selections are de-duplicated in stable project order.
+  QCOMPARE(tree->elementIdsForIndexes({demoNamespace}),
+           QStringList({outer, inner, service}));
+  QCOMPARE(tree->elementIdsForIndexes({demoNamespace, outerIndex, innerIndex}),
+           QStringList({outer, inner, service}));
+
+  QItemSelectionModel selection(tree);
+  tree->selectWithModifiers(&selection, demoNamespace, Qt::NoModifier);
+  tree->selectWithModifiers(&selection, otherIndex, Qt::ControlModifier);
+  QCOMPARE(tree->elementIdsForIndexes(selection.selectedRows()),
+           QStringList({outer, inner, service, other}));
+}
+
+void CoreTests::browserFoldersPersistAndReorganize() {
+  ProjectController controller;
+  const auto addNamedElement = [&](const QString &type, const QString &name) {
+    const QString id = controller.addElement(type);
+    controller.selectObject(id, QStringLiteral("element"));
+    controller.setSelectedName(name);
+    return id;
+  };
+  const auto browserItemsJson =
+      [](const QList<QPair<QString, QString>> &items) {
+        QJsonArray array;
+        for (const auto &[kind, id] : items)
+          array.append(QJsonObject{{QStringLiteral("kind"), kind},
+                                   {QStringLiteral("id"), id}});
+        return QString::fromUtf8(
+            QJsonDocument(array).toJson(QJsonDocument::Compact));
+      };
+
+  const QString outer =
+      addNamedElement(QStringLiteral("class"), QStringLiteral("team::Outer"));
+  const QString inner = addNamedElement(QStringLiteral("struct"),
+                                        QStringLiteral("team::Outer::Inner"));
+  const QString service =
+      addNamedElement(QStringLiteral("class"), QStringLiteral("team::Service"));
+  const QString folder = controller.addBrowserFolder(
+      QStringLiteral("namespace"), QStringLiteral("team"),
+      QStringLiteral("Architecture"));
+  QVERIFY(!folder.isEmpty());
+  const QString subfolder = controller.addBrowserFolder(
+      QStringLiteral("folder"), folder, QStringLiteral("Details"));
+  QVERIFY(!subfolder.isEmpty());
+  const QString nestedNamespaceFolder = controller.addBrowserFolder(
+      QStringLiteral("namespace"), QStringLiteral("team::Outer::detail"),
+      QStringLiteral("Nested namespace content"));
+  QVERIFY(!nestedNamespaceFolder.isEmpty());
+
+  QVERIFY(controller.moveBrowserItems(
+      browserItemsJson({{QStringLiteral("element"), outer},
+                        {QStringLiteral("element"), service}}),
+      QStringLiteral("folder"), folder));
+  ProjectTreeModel *tree = controller.treeModel();
+  const QModelIndex folderIndex =
+      tree->indexForObject(folder, QStringLiteral("folder"));
+  const QModelIndex outerIndex =
+      tree->indexForObject(outer, QStringLiteral("element"));
+  const QModelIndex innerIndex =
+      tree->indexForObject(inner, QStringLiteral("element"));
+  const QModelIndex serviceIndex =
+      tree->indexForObject(service, QStringLiteral("element"));
+  QCOMPARE(outerIndex.parent(), folderIndex);
+  QCOMPARE(innerIndex.parent(), outerIndex);
+  QCOMPARE(serviceIndex.parent(), folderIndex);
+  QCOMPARE(tree->elementIdsForIndexes({folderIndex}),
+           QStringList({outer, inner, service}));
+
+  // Reparenting is cycle-safe and rejected before an undo command is created.
+  QVERIFY(!controller.moveBrowserItems(
+      browserItemsJson({{QStringLiteral("folder"), folder}}),
+      QStringLiteral("folder"), subfolder));
+  QVERIFY(!controller.moveBrowserItems(
+      browserItemsJson({{QStringLiteral("element"), outer}}),
+      QStringLiteral("folder"), nestedNamespaceFolder));
+  QCOMPARE(
+      findBrowserFolder(controller.data(), folder)->parent,
+      (BrowserParent{QStringLiteral("namespace"), QStringLiteral("team")}));
+
+  controller.renameBrowserFolder(folder, QStringLiteral("Core architecture"));
+  QCOMPARE(findBrowserFolder(controller.data(), folder)->name,
+           QStringLiteral("Core architecture"));
+
+  controller.deleteBrowserFolder(folder);
+  QVERIFY(!findBrowserFolder(controller.data(), folder));
+  QCOMPARE(
+      findBrowserFolder(controller.data(), subfolder)->parent,
+      (BrowserParent{QStringLiteral("namespace"), QStringLiteral("team")}));
+  QCOMPARE(
+      findElement(controller.data(), outer)->browserParent,
+      (BrowserParent{QStringLiteral("namespace"), QStringLiteral("team")}));
+  controller.undo();
+  QVERIFY(findBrowserFolder(controller.data(), folder));
+  QCOMPARE(findBrowserFolder(controller.data(), subfolder)->parent,
+           (BrowserParent{QStringLiteral("folder"), folder}));
+  QCOMPARE(findElement(controller.data(), outer)->browserParent,
+           (BrowserParent{QStringLiteral("folder"), folder}));
+
+  const QString elementOwnedFolder = controller.addBrowserFolder(
+      QStringLiteral("element"), outer, QStringLiteral("Owned notes"));
+  controller.deleteElement(outer);
+  QCOMPARE(findBrowserFolder(controller.data(), elementOwnedFolder)->parent,
+           (BrowserParent{QStringLiteral("model"), {}}));
+  controller.undo();
+  QCOMPARE(findBrowserFolder(controller.data(), elementOwnedFolder)->parent,
+           (BrowserParent{QStringLiteral("element"), outer}));
+
+  // Browser organization is project data, not workspace-only UI state.
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(temporary.path(), controller.data()).ok);
+  const LoadOutcome loaded = ProjectSerializer::load(temporary.path());
+  QVERIFY2(loaded.ok, qPrintable(loaded.diagnostics.isEmpty()
+                                     ? QString{}
+                                     : loaded.diagnostics.first().message));
+  QCOMPARE(loaded.project, controller.data());
 }
 
 void CoreTests::largeDiagramReplacementUsesFirstFreeSlot() {

@@ -80,6 +80,15 @@ public:
   Q_INVOKABLE QString addElementAt(const QString &type,
                                    const QString &diagramId, qreal x, qreal y);
   Q_INVOKABLE QString addDiagram();
+  Q_INVOKABLE QString addBrowserFolder(const QString &parentKind,
+                                       const QString &parentId,
+                                       const QString &name);
+  Q_INVOKABLE void renameBrowserFolder(const QString &folderId,
+                                       const QString &name);
+  Q_INVOKABLE void deleteBrowserFolder(const QString &folderId);
+  Q_INVOKABLE bool moveBrowserItems(const QString &itemsJson,
+                                    const QString &targetKind,
+                                    const QString &targetId);
   Q_INVOKABLE void addSelectedToDiagram(const QString &diagramId);
   Q_INVOKABLE int addElementsToDiagram(const QString &diagramId,
                                        const QStringList &elementIds, qreal x,

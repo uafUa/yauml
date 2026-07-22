@@ -8,6 +8,9 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QLineF>
 #include <algorithm>
 #include <cmath>
@@ -27,6 +30,79 @@ constexpr qreal kNodeHorizontalSpacing = 250.0;
 constexpr qreal kNodeVerticalSpacing = 160.0;
 constexpr qreal kNodeClearance = 12.0;
 constexpr int kPlacementColumns = 12;
+
+QString browserSubjectKey(const QString &kind, const QString &id) {
+  return (kind == QStringLiteral("element") ||
+          kind == QStringLiteral("folder") ||
+          kind == QStringLiteral("namespace")) &&
+                 !id.isEmpty()
+             ? kind + u':' + id
+             : QString{};
+}
+
+QString browserParentSubjectKey(const BrowserParent &parent) {
+  return browserSubjectKey(parent.kind, parent.id);
+}
+
+QString effectiveBrowserParentKey(const ProjectData &project,
+                                  const QString &kind, const QString &id) {
+  if (kind == QStringLiteral("namespace")) {
+    const int separator = id.lastIndexOf(QStringLiteral("::"));
+    if (separator < 0)
+      return {};
+    const QString parentPath = id.left(separator);
+    const auto owner =
+        std::find_if(project.elements.cbegin(), project.elements.cend(),
+                     [&](const ModelElement &candidate) {
+                       return candidate.name == parentPath;
+                     });
+    return owner != project.elements.cend()
+               ? browserSubjectKey(QStringLiteral("element"), owner->id)
+               : browserSubjectKey(QStringLiteral("namespace"), parentPath);
+  }
+  if (kind == QStringLiteral("folder")) {
+    const BrowserFolder *folder = findBrowserFolder(project, id);
+    return folder ? browserParentSubjectKey(folder->parent) : QString{};
+  }
+  const ModelElement *element = findElement(project, id);
+  if (!element)
+    return {};
+  if (!element->browserParent.kind.isEmpty())
+    return browserParentSubjectKey(element->browserParent);
+  if (!element->packageId.isEmpty())
+    return browserSubjectKey(QStringLiteral("element"), element->packageId);
+
+  const QStringList parts =
+      element->name.split(QStringLiteral("::"), Qt::SkipEmptyParts);
+  QString qualifiedPath;
+  QString parent;
+  for (int index = 0; index + 1 < parts.size(); ++index) {
+    if (!qualifiedPath.isEmpty())
+      qualifiedPath += QStringLiteral("::");
+    qualifiedPath += parts.at(index);
+    const auto owner = std::find_if(
+        project.elements.cbegin(), project.elements.cend(),
+        [&](const ModelElement &candidate) {
+          return candidate.name == qualifiedPath && candidate.id != id;
+        });
+    if (owner != project.elements.cend())
+      parent = browserSubjectKey(QStringLiteral("element"), owner->id);
+  }
+  return parent;
+}
+
+bool browserContainerExists(const ProjectData &project,
+                            const BrowserParent &parent) {
+  if (parent.kind == QStringLiteral("model"))
+    return parent.id.isEmpty();
+  if (parent.kind == QStringLiteral("namespace"))
+    return !parent.id.trimmed().isEmpty();
+  if (parent.kind == QStringLiteral("element"))
+    return findElement(project, parent.id);
+  if (parent.kind == QStringLiteral("folder"))
+    return findBrowserFolder(project, parent.id);
+  return false;
+}
 
 QRectF firstAvailableNodeGeometry(const Diagram &diagram) {
   // Reusing the first open slot keeps newly placed nodes near the diagram's
@@ -461,6 +537,151 @@ QString ProjectController::addDiagram() {
   pushCommand(std::make_unique<CreateDiagramCommand>(this, m_data, diagram));
   selectObject(diagram.id, QStringLiteral("diagram"));
   return diagram.id;
+}
+
+QString ProjectController::addBrowserFolder(const QString &parentKind,
+                                            const QString &parentId,
+                                            const QString &name) {
+  const BrowserParent parent{parentKind, parentId};
+  const QString trimmedName = name.trimmed();
+  if (trimmedName.isEmpty() || !browserContainerExists(m_data, parent)) {
+    m_diagnostics.addError(QStringLiteral("command"),
+                           QStringLiteral("Cannot create browser folder at "
+                                          "the selected location"));
+    return {};
+  }
+
+  BrowserFolder folder;
+  folder.id = newId();
+  folder.name = trimmedName;
+  folder.parent = parent;
+  pushCommand(
+      std::make_unique<CreateBrowserFolderCommand>(this, m_data, folder));
+  return folder.id;
+}
+
+void ProjectController::renameBrowserFolder(const QString &folderId,
+                                            const QString &name) {
+  const BrowserFolder *folder = findBrowserFolder(m_data, folderId);
+  const QString trimmedName = name.trimmed();
+  if (!folder || trimmedName.isEmpty() || folder->name == trimmedName)
+    return;
+  pushCommand(std::make_unique<RenameBrowserFolderCommand>(
+      this, folderId, folder->name, trimmedName));
+}
+
+void ProjectController::deleteBrowserFolder(const QString &folderId) {
+  if (!findBrowserFolder(m_data, folderId))
+    return;
+  pushCommand(
+      std::make_unique<DeleteBrowserFolderCommand>(this, m_data, folderId));
+}
+
+bool ProjectController::moveBrowserItems(const QString &itemsJson,
+                                         const QString &targetKind,
+                                         const QString &targetId) {
+  const BrowserParent target{targetKind, targetId};
+  if (!browserContainerExists(m_data, target))
+    return false;
+
+  QJsonParseError parseError;
+  const QJsonDocument document =
+      QJsonDocument::fromJson(itemsJson.toUtf8(), &parseError);
+  if (parseError.error != QJsonParseError::NoError || !document.isArray())
+    return false;
+
+  struct BrowserItem {
+    QString kind;
+    QString id;
+  };
+  QList<BrowserItem> requested;
+  QSet<QString> requestedKeys;
+  for (const QJsonValue &value : document.array()) {
+    const QJsonObject object = value.toObject();
+    const QString kind = object.value(QStringLiteral("kind")).toString();
+    const QString id = object.value(QStringLiteral("id")).toString();
+    const QString key = browserSubjectKey(kind, id);
+    const bool exists = kind == QStringLiteral("element")
+                            ? findElement(m_data, id) != nullptr
+                        : kind == QStringLiteral("folder")
+                            ? findBrowserFolder(m_data, id) != nullptr
+                            : false;
+    if (!key.isEmpty() && exists && !requestedKeys.contains(key)) {
+      requested.append({kind, id});
+      requestedKeys.insert(key);
+    }
+  }
+  if (requested.isEmpty())
+    return false;
+
+  // If both a folder/owning type and one of its descendants are selected, move
+  // only the ancestor. Its subtree remains intact instead of being flattened.
+  QList<BrowserItem> topLevelItems;
+  for (const auto &item : requested) {
+    bool hasSelectedAncestor = false;
+    QSet<QString> visited;
+    QString parent = effectiveBrowserParentKey(m_data, item.kind, item.id);
+    while (!parent.isEmpty() && !visited.contains(parent)) {
+      if (requestedKeys.contains(parent)) {
+        hasSelectedAncestor = true;
+        break;
+      }
+      visited.insert(parent);
+      const int separator = parent.indexOf(u':');
+      parent = separator > 0
+                   ? effectiveBrowserParentKey(m_data, parent.left(separator),
+                                               parent.mid(separator + 1))
+                   : QString{};
+    }
+    if (!hasSelectedAncestor)
+      topLevelItems.append(item);
+  }
+
+  const QString targetKey = browserParentSubjectKey(target);
+  QStringList elementIds;
+  QStringList folderIds;
+  for (const auto &item : topLevelItems) {
+    const QString itemKey = browserSubjectKey(item.kind, item.id);
+    QSet<QString> visited;
+    QString ancestor = targetKey;
+    while (!ancestor.isEmpty() && !visited.contains(ancestor)) {
+      if (ancestor == itemKey) {
+        m_diagnostics.addError(
+            QStringLiteral("command"),
+            QStringLiteral("A project-tree item cannot be moved into itself "
+                           "or one of its descendants"),
+            item.id);
+        return false;
+      }
+      visited.insert(ancestor);
+      const int separator = ancestor.indexOf(u':');
+      ancestor =
+          separator > 0
+              ? effectiveBrowserParentKey(m_data, ancestor.left(separator),
+                                          ancestor.mid(separator + 1))
+              : QString{};
+    }
+    if (item.kind == QStringLiteral("element"))
+      elementIds.append(item.id);
+    else
+      folderIds.append(item.id);
+  }
+
+  const bool changesAnything =
+      std::any_of(elementIds.cbegin(), elementIds.cend(),
+                  [&](const QString &id) {
+                    const ModelElement *element = findElement(m_data, id);
+                    return element && element->browserParent != target;
+                  }) ||
+      std::any_of(folderIds.cbegin(), folderIds.cend(), [&](const QString &id) {
+        const BrowserFolder *folder = findBrowserFolder(m_data, id);
+        return folder && folder->parent != target;
+      });
+  if (!changesAnything)
+    return false;
+  pushCommand(std::make_unique<MoveBrowserItemsCommand>(
+      this, m_data, elementIds, folderIds, target));
+  return true;
 }
 
 void ProjectController::addSelectedToDiagram(const QString &diagramId) {

@@ -52,6 +52,78 @@ private:
   QList<RelationshipChange> m_relationshipChanges;
 };
 
+class CreateBrowserFolderCommand final : public ProjectCommand {
+public:
+  CreateBrowserFolderCommand(ProjectController *controller,
+                             const ProjectData &project, BrowserFolder folder);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  BrowserFolder m_folder;
+  qsizetype m_index;
+};
+
+class RenameBrowserFolderCommand final : public ProjectCommand {
+public:
+  RenameBrowserFolderCommand(ProjectController *controller, QString folderId,
+                             QString before, QString after);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, const QString &name);
+
+  QString m_folderId;
+  QString m_before;
+  QString m_after;
+};
+
+class MoveBrowserItemsCommand final : public ProjectCommand {
+public:
+  MoveBrowserItemsCommand(ProjectController *controller,
+                          const ProjectData &project,
+                          const QStringList &elementIds,
+                          const QStringList &folderIds, BrowserParent target);
+
+private:
+  struct ParentChange {
+    QString kind;
+    QString id;
+    BrowserParent before;
+    BrowserParent after;
+  };
+
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, bool forward);
+
+  QList<ParentChange> m_changes;
+};
+
+class DeleteBrowserFolderCommand final : public ProjectCommand {
+public:
+  DeleteBrowserFolderCommand(ProjectController *controller,
+                             const ProjectData &project, QString folderId);
+
+private:
+  struct ParentChange {
+    QString kind;
+    QString id;
+    BrowserParent before;
+    BrowserParent after;
+  };
+
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void applyParentChanges(ProjectData &project, bool forward);
+
+  BrowserFolder m_folder;
+  qsizetype m_index = -1;
+  QList<ParentChange> m_changes;
+};
+
 class CreateDiagramCommand final : public ProjectCommand {
 public:
   CreateDiagramCommand(ProjectController *controller,
@@ -198,6 +270,12 @@ private:
     QList<PositionedNode> nodes;
     QList<PositionedConnector> connectors;
   };
+  struct BrowserParentChange {
+    QString kind;
+    QString id;
+    BrowserParent before;
+    BrowserParent after;
+  };
 
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
@@ -206,6 +284,7 @@ private:
   qsizetype m_elementIndex;
   QList<PositionedRelationship> m_relationships;
   QList<DiagramRecords> m_diagrams;
+  QList<BrowserParentChange> m_browserParentChanges;
 };
 
 struct NodeGeometryChange {

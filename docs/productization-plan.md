@@ -142,6 +142,15 @@ history memory grow with total project size rather than the size of each edit.
   deterministic grid at the pointer. Existing presentations are skipped,
   newly eligible semantic connectors appear, and the complete drop is one
   compact undo command.
+- Qualified model names are projected as namespace and nested-type hierarchy in
+  the browser. Namespace and owning-type drags expand recursively to a stable,
+  de-duplicated list of contained model types; selecting both a container and
+  one of its children never creates duplicate presentations.
+- Custom browser folders are persisted as project data and can be created at
+  the model root or inside namespaces, types, and other folders. Native tree
+  drag/drop reorganizes selected elements or folders with cycle protection;
+  create, rename, move, and delete are compact undoable commands. Deleting a
+  folder promotes its direct contents instead of deleting semantic model data.
 - Represent semantic ownership independently from browser organization. C++
   namespaces, UML packages, and nested types participate in qualified identity;
   custom folders do not. A browser folder therefore stores only grouping and

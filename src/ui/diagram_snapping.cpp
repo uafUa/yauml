@@ -124,6 +124,40 @@ void considerGridCandidate(AxisCandidate &best, qreal position, qreal spacing,
   considerCandidate(best, target - position, target, {}, {}, false, tolerance);
 }
 
+AxisCandidate
+resizeAlignmentCandidate(const QRectF &requestedGeometry,
+                         const QList<DiagramNodeGeometry> &stationary,
+                         Qt::Orientation orientation, qreal minimumEdge,
+                         qreal tolerance) {
+  const qreal draggedEdge = orientation == Qt::Horizontal
+                                ? requestedGeometry.right()
+                                : requestedGeometry.bottom();
+  AxisCandidate best;
+  for (const auto &node : stationary) {
+    const auto features = orientation == Qt::Horizontal
+                              ? xFeatures(node.geometry)
+                              : yFeatures(node.geometry);
+    for (const qreal position : features) {
+      if (position < minimumEdge - kComparisonEpsilon)
+        continue;
+      considerCandidate(best, position - draggedEdge, position,
+                        requestedGeometry, node.geometry, true, tolerance);
+    }
+  }
+  return best;
+}
+
+void considerResizeGridCandidate(AxisCandidate &best, qreal position,
+                                 qreal minimumEdge, qreal spacing,
+                                 qreal tolerance) {
+  if (spacing <= 0.0)
+    return;
+  const qreal target = std::round(position / spacing) * spacing;
+  if (target < minimumEdge - kComparisonEpsilon)
+    return;
+  considerCandidate(best, target - position, target, {}, {}, false, tolerance);
+}
+
 } // namespace
 
 DiagramSnapResult snapDiagramMove(const QList<DiagramNodeGeometry> &moving,
@@ -179,6 +213,66 @@ DiagramSnapResult snapDiagramMove(const QList<DiagramNodeGeometry> &moving,
     const qreal right =
         std::max(moved.right(), yCandidate.stationaryGeometry.right()) +
         kGuidePadding;
+    result.guides.append(QLineF(left, yCandidate.guidePosition, right,
+                                yCandidate.guidePosition));
+  }
+  return result;
+}
+
+DiagramResizeSnapResult
+snapDiagramBottomRightResize(const QRectF &requestedGeometry,
+                             const QList<DiagramNodeGeometry> &stationary,
+                             const QSizeF &minimumSize,
+                             const DiagramSnapOptions &options) {
+  DiagramResizeSnapResult result{requestedGeometry, {}};
+  if (options.tolerance < 0.0)
+    return result;
+
+  const qreal minimumRight = requestedGeometry.left() + minimumSize.width();
+  const qreal minimumBottom = requestedGeometry.top() + minimumSize.height();
+  AxisCandidate xCandidate;
+  AxisCandidate yCandidate;
+  if (options.snapToAlignment && !stationary.isEmpty()) {
+    xCandidate =
+        resizeAlignmentCandidate(requestedGeometry, stationary, Qt::Horizontal,
+                                 minimumRight, options.tolerance);
+    yCandidate =
+        resizeAlignmentCandidate(requestedGeometry, stationary, Qt::Vertical,
+                                 minimumBottom, options.tolerance);
+  }
+
+  if (options.snapToGrid) {
+    considerResizeGridCandidate(xCandidate, requestedGeometry.right(),
+                                minimumRight, options.gridSpacing,
+                                options.tolerance);
+    considerResizeGridCandidate(yCandidate, requestedGeometry.bottom(),
+                                minimumBottom, options.gridSpacing,
+                                options.tolerance);
+  }
+
+  if (xCandidate.valid)
+    result.geometry.setRight(requestedGeometry.right() + xCandidate.adjustment);
+  if (yCandidate.valid)
+    result.geometry.setBottom(requestedGeometry.bottom() +
+                              yCandidate.adjustment);
+
+  if (xCandidate.valid && xCandidate.alignment) {
+    const qreal top =
+        std::min(result.geometry.top(), xCandidate.stationaryGeometry.top()) -
+        kGuidePadding;
+    const qreal bottom = std::max(result.geometry.bottom(),
+                                  xCandidate.stationaryGeometry.bottom()) +
+                         kGuidePadding;
+    result.guides.append(QLineF(xCandidate.guidePosition, top,
+                                xCandidate.guidePosition, bottom));
+  }
+  if (yCandidate.valid && yCandidate.alignment) {
+    const qreal left =
+        std::min(result.geometry.left(), yCandidate.stationaryGeometry.left()) -
+        kGuidePadding;
+    const qreal right = std::max(result.geometry.right(),
+                                 yCandidate.stationaryGeometry.right()) +
+                        kGuidePadding;
     result.guides.append(QLineF(left, yCandidate.guidePosition, right,
                                 yCandidate.guidePosition));
   }

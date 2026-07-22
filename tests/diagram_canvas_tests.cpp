@@ -238,6 +238,20 @@ void DiagramCanvasTests::snappingGeometryRulesAreDeterministic() {
                           QPointF(27, 33), gridOptions);
   QCOMPARE(onGrid.delta, QPointF(30, 30));
   QVERIFY(onGrid.guides.isEmpty());
+
+  const auto resized = ui::snapDiagramBottomRightResize(
+      QRectF(10, 10, 186, 66), stationary, QSizeF(120, 60), alignmentOptions);
+  QCOMPARE(resized.geometry, QRectF(10, 10, 190, 70));
+  QCOMPARE(resized.guides.size(), 2);
+  QCOMPARE(resized.guides.at(0).x1(), 200.0);
+  QCOMPARE(resized.guides.at(0).x2(), 200.0);
+  QCOMPARE(resized.guides.at(1).y1(), 80.0);
+  QCOMPARE(resized.guides.at(1).y2(), 80.0);
+
+  const auto resizedOnGrid = ui::snapDiagramBottomRightResize(
+      QRectF(10, 10, 127, 93), stationary, QSizeF(120, 60), gridOptions);
+  QCOMPARE(resizedOnGrid.geometry, QRectF(10, 10, 130, 90));
+  QVERIFY(resizedOnGrid.guides.isEmpty());
 }
 
 void DiagramCanvasTests::lassoSelectsAndMovesMultipleNodesAsOneCommand() {
@@ -580,6 +594,21 @@ void DiagramCanvasTests::liveDragSnappingIsUndoableAndAltSuppressesIt() {
   canvas.drag({130, 130}, {156, 133}, Qt::AltModifier);
   QCOMPARE(controller.data().diagrams.first().nodes.at(0).geometry,
            before.at(0).geometry.translated(26, 3));
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first().nodes, before);
+
+  // The lower-right resize handle uses the same snapping behavior. The raw
+  // right edge is four units from the second node's left edge and the raw
+  // bottom edge is three units from its bottom edge.
+  canvas.drag({295, 195}, {321, 198});
+  QCOMPARE(controller.data().diagrams.first().nodes.at(0).geometry,
+           QRectF(50, 50, 250, 120));
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first().nodes, before);
+
+  canvas.drag({295, 195}, {321, 198}, Qt::AltModifier);
+  QCOMPARE(controller.data().diagrams.first().nodes.at(0).geometry,
+           QRectF(50, 50, 246, 123));
   controller.undo();
   QCOMPARE(controller.data().diagrams.first().nodes, before);
 }

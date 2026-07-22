@@ -81,6 +81,21 @@ ApplicationWindow {
         }
     }
 
+    function createFolderAt(parentKind, parentId) {
+        folderNameDialog.mode = "create"
+        folderNameDialog.folderId = ""
+        folderNameDialog.parentKind = parentKind
+        folderNameDialog.parentId = parentId
+        folderNameDialog.open()
+    }
+
+    function renameFolder(folderId, currentName) {
+        folderNameDialog.mode = "rename"
+        folderNameDialog.folderId = folderId
+        folderNameDialog.currentName = currentName
+        folderNameDialog.open()
+    }
+
     onClosing: function(close) {
         if (projectController.dirty && !closeAuthorized) {
             close.accepted = false
@@ -247,6 +262,12 @@ ApplicationWindow {
                             font.bold: true
                         }
                         ToolButton {
+                            text: qsTr("+ Folder")
+                            onClicked: root.createFolderAt("model", "")
+                            ToolTip.visible: hovered
+                            ToolTip.text: qsTr("Create a project-tree folder")
+                        }
+                        ToolButton {
                             text: qsTr("Delete")
                             enabled: projectController.selectedKind === "diagram"
                                      || projectController.selectedKind === "element"
@@ -264,8 +285,14 @@ ApplicationWindow {
                     Layout.fillHeight: true
                     model: projectController.treeModel
                     clip: true
+                    // Apply selection explicitly in selectFromPointer(). The
+                    // native delegate can otherwise collapse an extended
+                    // selection before Ctrl/Shift handling on Windows.
+                    pointerNavigationEnabled: false
                     selectionBehavior: TableView.SelectRows
                     selectionMode: TableView.ExtendedSelection
+                    readonly property string browserItemsMimeType:
+                        "application/x-uuml-browser-items"
                     property bool selectionOriginatesFromTree: false
                     selectionModel: ItemSelectionModel {
                         id: projectTreeSelection
@@ -314,17 +341,27 @@ ApplicationWindow {
                         required property string objectId
                         required property string kind
                         required property string objectType
+                        property bool browserDropActive: false
                         highlighted: kind !== "root" && (
                                          kind === "diagram"
                                          ? objectId === workspaceController.activeDiagramId
                                          : selected)
                         background: Rectangle {
                             color: treeDelegate.highlighted ? uiTheme.accent
+                                 : treeDelegate.browserDropActive ? uiTheme.hoverBackground
                                  : treeDelegate.hovered ? uiTheme.hoverBackground : "transparent"
                         }
                         onClicked: {
-                            if (kind !== "root")
-                                projectController.selectObject(objectId, kind)
+                            if (kind !== "root") {
+                                const itemIndex = projectTree.index(treeDelegate.row,
+                                                                    treeDelegate.column)
+                                projectController.treeModel.selectFromPointer(
+                                            projectTreeSelection, itemIndex)
+                                if (kind === "element" || kind === "diagram")
+                                    projectController.selectObject(objectId, kind)
+                                else
+                                    projectController.clearSelection()
+                            }
                         }
                         onDoubleClicked: {
                             if (kind === "element") {
@@ -344,6 +381,8 @@ ApplicationWindow {
                         DragHandler {
                             target: null
                             enabled: treeDelegate.kind === "element"
+                                     || treeDelegate.kind === "namespace"
+                                     || treeDelegate.kind === "folder"
                             grabPermissions: PointerHandler.CanTakeOverFromAnything
                             onActiveChanged: {
                                 if (!active)
@@ -356,9 +395,54 @@ ApplicationWindow {
                                                 ItemSelectionModel.ClearAndSelect
                                                 | ItemSelectionModel.Rows)
                                 }
-                                const elementIds = projectController.treeModel.elementIdsForIndexes(
-                                                       projectTreeSelection.selectedIndexes)
-                                projectController.treeModel.startElementDrag(elementIds)
+                                projectController.treeModel.startTreeDrag(
+                                            projectTreeSelection.selectedIndexes)
+                            }
+                        }
+
+                        DropArea {
+                            anchors.fill: parent
+                            enabled: treeDelegate.kind === "namespace"
+                                     || treeDelegate.kind === "element"
+                                     || treeDelegate.kind === "folder"
+                                     || (treeDelegate.kind === "root"
+                                         && treeDelegate.objectId === "model")
+                            keys: [projectTree.browserItemsMimeType]
+                            onEntered: treeDelegate.browserDropActive = true
+                            onExited: treeDelegate.browserDropActive = false
+                            onDropped: function(drop) {
+                                treeDelegate.browserDropActive = false
+                                if (drop.formats.indexOf(
+                                            projectTree.browserItemsMimeType) < 0)
+                                    return
+                                const targetKind = treeDelegate.kind === "root"
+                                                 ? "model" : treeDelegate.kind
+                                const targetId = targetKind === "model"
+                                               ? "" : treeDelegate.objectId
+                                if (projectController.moveBrowserItems(
+                                            drop.getDataAsString(
+                                                projectTree.browserItemsMimeType),
+                                            targetKind, targetId))
+                                    drop.acceptProposedAction()
+                            }
+                        }
+
+                        MouseArea {
+                            anchors.fill: parent
+                            acceptedButtons: Qt.RightButton
+                            onClicked: function(mouse) {
+                                if (treeDelegate.kind === "root"
+                                        && treeDelegate.objectId !== "model")
+                                    return
+                                treeContextMenu.targetId = treeDelegate.objectId
+                                treeContextMenu.targetKind = treeDelegate.kind
+                                treeContextMenu.targetName = treeDelegate.text
+                                const point = treeDelegate.mapToItem(
+                                                root.contentItem,
+                                                mouse.x, mouse.y)
+                                treeContextMenu.x = point.x
+                                treeContextMenu.y = point.y
+                                treeContextMenu.open()
                             }
                         }
                     }
@@ -514,6 +598,83 @@ ApplicationWindow {
                     }
                     Item { Layout.fillHeight: true; Layout.minimumHeight: 20 }
                 }
+            }
+        }
+    }
+
+    Menu {
+        id: treeContextMenu
+        property string targetId: ""
+        property string targetKind: ""
+        property string targetName: ""
+
+        MenuItem {
+            text: qsTr("New folder here…")
+            onTriggered: root.createFolderAt(
+                             treeContextMenu.targetKind === "root"
+                             ? "model" : treeContextMenu.targetKind,
+                             treeContextMenu.targetKind === "root"
+                             ? "" : treeContextMenu.targetId)
+        }
+        MenuSeparator { visible: treeContextMenu.targetKind === "folder" }
+        MenuItem {
+            visible: treeContextMenu.targetKind === "folder"
+            height: visible ? implicitHeight : 0
+            text: qsTr("Rename folder…")
+            onTriggered: root.renameFolder(treeContextMenu.targetId,
+                                           treeContextMenu.targetName)
+        }
+        MenuItem {
+            visible: treeContextMenu.targetKind === "folder"
+            height: visible ? implicitHeight : 0
+            text: qsTr("Delete folder")
+            onTriggered: projectController.deleteBrowserFolder(
+                             treeContextMenu.targetId)
+        }
+    }
+
+    Dialog {
+        id: folderNameDialog
+        objectName: "folderNameDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        modal: true
+        focus: true
+        title: mode === "rename" ? qsTr("Rename folder")
+                                 : qsTr("New project-tree folder")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        property string mode: "create"
+        property string folderId: ""
+        property string parentKind: "model"
+        property string parentId: ""
+        property string currentName: ""
+
+        onOpened: {
+            folderNameInput.text = mode === "rename" ? currentName
+                                                      : qsTr("New Folder")
+            folderNameInput.forceActiveFocus()
+            folderNameInput.selectAll()
+            const okButton = standardButton(Dialog.Ok)
+            if (okButton)
+                okButton.enabled = folderNameInput.text.trim().length > 0
+        }
+        onAccepted: {
+            if (mode === "rename")
+                projectController.renameBrowserFolder(folderId,
+                                                      folderNameInput.text)
+            else
+                projectController.addBrowserFolder(parentKind, parentId,
+                                                   folderNameInput.text)
+        }
+
+        contentItem: TextField {
+            id: folderNameInput
+            implicitWidth: 320
+            selectByMouse: true
+            onTextChanged: {
+                const okButton = folderNameDialog.standardButton(Dialog.Ok)
+                if (okButton)
+                    okButton.enabled = text.trim().length > 0
             }
         }
     }

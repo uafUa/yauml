@@ -34,6 +34,8 @@ constexpr qreal kHeaderHeight = 30.0;
 constexpr qreal kLineHeight = 21.0;
 constexpr qreal kPadding = 8.0;
 constexpr qreal kSnapToleranceViewPixels = 8.0;
+constexpr qreal kMinimumNodeWidth = 120.0;
+constexpr qreal kMinimumNodeHeight = 60.0;
 constexpr int kTextAtlasSize = 2048;
 constexpr int kTextAtlasPadding = 2;
 
@@ -1997,9 +1999,28 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
     m_previewGeometry.clear();
     const QRectF original = m_originalGeometry.value(m_interactionNode);
     QRectF resized = original;
-    resized.setWidth(qMax(120.0, original.width() + delta.x()));
-    resized.setHeight(qMax(60.0, original.height() + delta.y()));
-    m_previewGeometry.insert(m_interactionNode, resized);
+    resized.setWidth(qMax(kMinimumNodeWidth, original.width() + delta.x()));
+    resized.setHeight(qMax(kMinimumNodeHeight, original.height() + delta.y()));
+
+    ui::DiagramResizeSnapResult snapResult{resized, {}};
+    const auto *d = diagram();
+    const bool suppressSnapping = event->modifiers().testFlag(Qt::AltModifier);
+    if (d && !suppressSnapping &&
+        (m_snapToGridEnabled || m_alignmentGuidesEnabled)) {
+      QList<ui::DiagramNodeGeometry> stationary;
+      stationary.reserve(qMax(0, d->nodes.size() - 1));
+      for (const auto &node : d->nodes)
+        if (node.id != m_interactionNode)
+          stationary.append({node.id, node.geometry});
+      const ui::DiagramSnapOptions options{
+          m_snapToGridEnabled, m_alignmentGuidesEnabled,
+          static_cast<qreal>(m_gridSpacing), kSnapToleranceViewPixels / m_zoom};
+      snapResult = ui::snapDiagramBottomRightResize(
+          resized, stationary, QSizeF(kMinimumNodeWidth, kMinimumNodeHeight),
+          options);
+    }
+    m_previewGeometry.insert(m_interactionNode, snapResult.geometry);
+    m_alignmentGuides = std::move(snapResult.guides);
     m_sceneDirty = true;
     m_textDirty = true;
     update();

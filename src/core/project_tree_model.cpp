@@ -4,115 +4,299 @@
 #include "ui/ui_theme.h"
 
 #include <QDrag>
+#include <QGuiApplication>
+#include <QItemSelection>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QJsonObject>
 #include <QMimeData>
 #include <QPainter>
 #include <QPixmap>
+#include <algorithm>
 
 namespace uuml {
 
 namespace {
-constexpr quintptr kModelRoot = 1;
-constexpr quintptr kDiagramRoot = 2;
-constexpr quintptr kElementBase = 1000;
-constexpr quintptr kDiagramBase = 2000;
 constexpr auto kElementsMimeType = "application/x-uuml-element-ids";
+constexpr auto kBrowserItemsMimeType = "application/x-uuml-browser-items";
 } // namespace
+
+struct ProjectTreeModel::TreeNode {
+  QString label;
+  QString objectId;
+  QString kind;
+  QString objectType;
+  QString qualifiedPath;
+  TreeNode *parent = nullptr;
+  std::vector<TreeNode *> children;
+};
 
 ProjectTreeModel::ProjectTreeModel(ProjectController *controller)
     : QAbstractItemModel(controller), m_controller(controller) {
+  rebuildTree();
   connect(controller, &ProjectController::stateChanged, this,
           &ProjectTreeModel::reset);
 }
 
+ProjectTreeModel::~ProjectTreeModel() = default;
+
+ProjectTreeModel::TreeNode *ProjectTreeModel::createNode() {
+  m_nodes.push_back(std::make_unique<TreeNode>());
+  return m_nodes.back().get();
+}
+
+QModelIndex ProjectTreeModel::indexForNode(const TreeNode *node) const {
+  if (!node || !node->parent)
+    return {};
+  const auto &siblings = node->parent->children;
+  const auto position = std::find(siblings.cbegin(), siblings.cend(), node);
+  if (position == siblings.cend())
+    return {};
+  return createIndex(static_cast<int>(position - siblings.cbegin()), 0,
+                     const_cast<TreeNode *>(node));
+}
+
+ProjectTreeModel::TreeNode *
+ProjectTreeModel::nodeForIndex(const QModelIndex &item) const {
+  return item.isValid() && item.model() == this
+             ? static_cast<TreeNode *>(item.internalPointer())
+             : nullptr;
+}
+
+void ProjectTreeModel::rebuildTree() {
+  m_nodes.clear();
+  m_elementNodes.clear();
+  m_folderNodes.clear();
+  m_namespaceNodes.clear();
+  m_diagramNodes.clear();
+
+  m_invisibleRoot = createNode();
+  const auto attach = [](TreeNode *parent, TreeNode *child) {
+    child->parent = parent;
+    parent->children.push_back(child);
+  };
+
+  m_modelRoot = createNode();
+  m_modelRoot->label = QStringLiteral("Model");
+  m_modelRoot->objectId = QStringLiteral("model");
+  m_modelRoot->kind = QStringLiteral("root");
+  attach(m_invisibleRoot, m_modelRoot);
+
+  m_diagramRoot = createNode();
+  m_diagramRoot->label = QStringLiteral("Diagrams");
+  m_diagramRoot->objectId = QStringLiteral("diagrams");
+  m_diagramRoot->kind = QStringLiteral("root");
+  attach(m_invisibleRoot, m_diagramRoot);
+
+  QHash<QString, TreeNode *> elementsByQualifiedName;
+  std::vector<TreeNode *> elementOrder;
+  for (const auto &element : m_controller->data().elements) {
+    TreeNode *node = createNode();
+    node->label = element.name.section(QStringLiteral("::"), -1);
+    if (node->label.isEmpty())
+      node->label = element.name;
+    node->objectId = element.id;
+    node->kind = QStringLiteral("element");
+    node->objectType = toString(element.type);
+    node->qualifiedPath = element.name;
+    m_elementNodes.insert(element.id, node);
+    elementOrder.push_back(node);
+    // Duplicate display names are legal user data. The first matching element
+    // owns qualified descendants; later duplicates remain sibling leaves.
+    if (!elementsByQualifiedName.contains(element.name))
+      elementsByQualifiedName.insert(element.name, node);
+  }
+
+  QHash<TreeNode *, TreeNode *> desiredParents;
+  std::vector<TreeNode *> namespaceOrder;
+  const auto ensureNamespace = [&](const QString &qualifiedPath,
+                                   const QString &label,
+                                   TreeNode *parent) -> TreeNode * {
+    if (TreeNode *existing = m_namespaceNodes.value(qualifiedPath, nullptr))
+      return existing;
+    TreeNode *node = createNode();
+    node->label = label;
+    node->objectId = qualifiedPath;
+    node->kind = QStringLiteral("namespace");
+    node->objectType = QStringLiteral("namespace");
+    node->qualifiedPath = qualifiedPath;
+    m_namespaceNodes.insert(qualifiedPath, node);
+    desiredParents.insert(node, parent);
+    namespaceOrder.push_back(node);
+    return node;
+  };
+
+  const auto namespacePathNode = [&](const QString &path) -> TreeNode * {
+    TreeNode *parent = m_modelRoot;
+    QString qualifiedPath;
+    const QStringList parts =
+        path.split(QStringLiteral("::"), Qt::SkipEmptyParts);
+    for (int index = 0; index < parts.size(); ++index) {
+      if (!qualifiedPath.isEmpty())
+        qualifiedPath += QStringLiteral("::");
+      qualifiedPath += parts.at(index);
+      if (TreeNode *existing = m_namespaceNodes.value(qualifiedPath, nullptr)) {
+        parent = existing;
+      } else if (index + 1 < parts.size()) {
+        if (TreeNode *type =
+                elementsByQualifiedName.value(qualifiedPath, nullptr))
+          parent = type;
+        else
+          parent = ensureNamespace(qualifiedPath, parts.at(index), parent);
+      } else {
+        parent = ensureNamespace(qualifiedPath, parts.at(index), parent);
+      }
+    }
+    return parent;
+  };
+
+  // Materialize namespace paths before attaching semantic elements so custom
+  // folders can retain an otherwise-empty namespace as their stable parent.
+  for (const auto &element : m_controller->data().elements) {
+    TreeNode *parent = m_modelRoot;
+    const QStringList parts =
+        element.name.split(QStringLiteral("::"), Qt::SkipEmptyParts);
+    QString qualifiedPath;
+    for (int partIndex = 0; partIndex + 1 < parts.size(); ++partIndex) {
+      if (!qualifiedPath.isEmpty())
+        qualifiedPath += QStringLiteral("::");
+      qualifiedPath += parts.at(partIndex);
+      if (TreeNode *typeParent =
+              elementsByQualifiedName.value(qualifiedPath, nullptr)) {
+        parent = typeParent;
+      } else {
+        parent = ensureNamespace(qualifiedPath, parts.at(partIndex), parent);
+      }
+    }
+  }
+
+  std::vector<TreeNode *> folderOrder;
+  for (const auto &folder : m_controller->data().browserFolders) {
+    TreeNode *node = createNode();
+    node->label = folder.name;
+    node->objectId = folder.id;
+    node->kind = QStringLiteral("folder");
+    node->objectType = QStringLiteral("folder");
+    m_folderNodes.insert(folder.id, node);
+    folderOrder.push_back(node);
+  }
+
+  const auto explicitParentNode = [&](const BrowserParent &parent) {
+    if (parent.kind == QStringLiteral("model"))
+      return m_modelRoot;
+    if (parent.kind == QStringLiteral("namespace"))
+      return namespacePathNode(parent.id);
+    if (parent.kind == QStringLiteral("element"))
+      return m_elementNodes.value(parent.id, m_modelRoot);
+    if (parent.kind == QStringLiteral("folder"))
+      return m_folderNodes.value(parent.id, m_modelRoot);
+    return m_modelRoot;
+  };
+
+  const auto semanticParentNode = [&](const ModelElement &element) {
+    if (!element.packageId.isEmpty())
+      return m_elementNodes.value(element.packageId, m_modelRoot);
+    TreeNode *parent = m_modelRoot;
+    const QStringList parts =
+        element.name.split(QStringLiteral("::"), Qt::SkipEmptyParts);
+    QString qualifiedPath;
+    for (int partIndex = 0; partIndex + 1 < parts.size(); ++partIndex) {
+      if (!qualifiedPath.isEmpty())
+        qualifiedPath += QStringLiteral("::");
+      qualifiedPath += parts.at(partIndex);
+      if (TreeNode *typeParent =
+              elementsByQualifiedName.value(qualifiedPath, nullptr))
+        parent = typeParent;
+      else
+        parent = m_namespaceNodes.value(qualifiedPath, m_modelRoot);
+    }
+    return parent;
+  };
+
+  for (const auto &folder : m_controller->data().browserFolders)
+    desiredParents.insert(m_folderNodes.value(folder.id),
+                          explicitParentNode(folder.parent));
+  for (const auto &element : m_controller->data().elements) {
+    TreeNode *parent = element.browserParent.kind.isEmpty()
+                           ? semanticParentNode(element)
+                           : explicitParentNode(element.browserParent);
+    desiredParents.insert(m_elementNodes.value(element.id), parent);
+  }
+
+  // Validate the complete desired graph—including namespace nodes—before
+  // assigning actual parent pointers. Malformed external files therefore
+  // degrade to model-root placement rather than constructing a cyclic tree.
+  const auto cycleSafeParent = [&](TreeNode *node) {
+    TreeNode *parent = desiredParents.value(node, m_modelRoot);
+    QSet<TreeNode *> visited{node};
+    for (TreeNode *candidate = parent;
+         candidate && candidate != m_modelRoot && candidate != m_invisibleRoot;
+         candidate = desiredParents.value(candidate, m_modelRoot)) {
+      if (visited.contains(candidate))
+        return m_modelRoot;
+      visited.insert(candidate);
+    }
+    return parent;
+  };
+
+  for (TreeNode *node : namespaceOrder)
+    attach(cycleSafeParent(node), node);
+  for (TreeNode *node : folderOrder)
+    attach(cycleSafeParent(node), node);
+  for (TreeNode *node : elementOrder)
+    attach(cycleSafeParent(node), node);
+
+  for (const auto &diagram : m_controller->data().diagrams) {
+    TreeNode *node = createNode();
+    node->label = diagram.name;
+    node->objectId = diagram.id;
+    node->kind = QStringLiteral("diagram");
+    node->objectType = QStringLiteral("class diagram");
+    m_diagramNodes.insert(diagram.id, node);
+    attach(m_diagramRoot, node);
+  }
+}
+
 QModelIndex ProjectTreeModel::index(int row, int column,
                                     const QModelIndex &parentIndex) const {
-  if (column != 0 || row < 0)
+  if (column != 0 || row < 0 || parentIndex.column() > 0)
     return {};
-  if (!parentIndex.isValid()) {
-    if (row == 0)
-      return createIndex(row, column, kModelRoot);
-    if (row == 1)
-      return createIndex(row, column, kDiagramRoot);
+  TreeNode *parentNode =
+      parentIndex.isValid() ? nodeForIndex(parentIndex) : m_invisibleRoot;
+  if (!parentNode || row >= static_cast<int>(parentNode->children.size()))
     return {};
-  }
-  if (parentIndex.internalId() == kModelRoot &&
-      row < m_controller->data().elements.size())
-    return createIndex(row, column, kElementBase + static_cast<quintptr>(row));
-  if (parentIndex.internalId() == kDiagramRoot &&
-      row < m_controller->data().diagrams.size())
-    return createIndex(row, column, kDiagramBase + static_cast<quintptr>(row));
-  return {};
+  return createIndex(row, column, parentNode->children.at(row));
 }
 
 QModelIndex ProjectTreeModel::parent(const QModelIndex &child) const {
-  if (!child.isValid())
+  const TreeNode *node = nodeForIndex(child);
+  if (!node || !node->parent || node->parent == m_invisibleRoot)
     return {};
-  if (child.internalId() >= kElementBase && child.internalId() < kDiagramBase)
-    return createIndex(0, 0, kModelRoot);
-  if (child.internalId() >= kDiagramBase)
-    return createIndex(1, 0, kDiagramRoot);
-  return {};
+  return indexForNode(node->parent);
 }
 
 int ProjectTreeModel::rowCount(const QModelIndex &parentIndex) const {
-  if (!parentIndex.isValid())
-    return 2;
-  if (parentIndex.internalId() == kModelRoot)
-    return m_controller->data().elements.size();
-  if (parentIndex.internalId() == kDiagramRoot)
-    return m_controller->data().diagrams.size();
-  return 0;
+  if (parentIndex.column() > 0)
+    return 0;
+  const TreeNode *parentNode =
+      parentIndex.isValid() ? nodeForIndex(parentIndex) : m_invisibleRoot;
+  return parentNode ? static_cast<int>(parentNode->children.size()) : 0;
 }
 
 int ProjectTreeModel::columnCount(const QModelIndex &) const { return 1; }
 
 QVariant ProjectTreeModel::data(const QModelIndex &item, int role) const {
-  if (!item.isValid())
+  const TreeNode *node = nodeForIndex(item);
+  if (!node)
     return {};
-  const quintptr id = item.internalId();
-  if (id == kModelRoot) {
-    if (role == Qt::DisplayRole)
-      return QStringLiteral("Model");
-    if (role == KindRole)
-      return QStringLiteral("root");
-    return {};
-  }
-  if (id == kDiagramRoot) {
-    if (role == Qt::DisplayRole)
-      return QStringLiteral("Diagrams");
-    if (role == KindRole)
-      return QStringLiteral("root");
-    return {};
-  }
-  if (id >= kElementBase && id < kDiagramBase) {
-    const int row = static_cast<int>(id - kElementBase);
-    if (row >= m_controller->data().elements.size())
-      return {};
-    const auto &element = m_controller->data().elements.at(row);
-    if (role == Qt::DisplayRole)
-      return element.name;
-    if (role == IdRole)
-      return element.id;
-    if (role == KindRole)
-      return QStringLiteral("element");
-    if (role == TypeRole)
-      return toString(element.type);
-  } else if (id >= kDiagramBase) {
-    const int row = static_cast<int>(id - kDiagramBase);
-    if (row >= m_controller->data().diagrams.size())
-      return {};
-    const auto &diagram = m_controller->data().diagrams.at(row);
-    if (role == Qt::DisplayRole)
-      return diagram.name;
-    if (role == IdRole)
-      return diagram.id;
-    if (role == KindRole)
-      return QStringLiteral("diagram");
-    if (role == TypeRole)
-      return QStringLiteral("class diagram");
-  }
+  if (role == Qt::DisplayRole)
+    return node->label;
+  if (role == IdRole)
+    return node->objectId;
+  if (role == KindRole)
+    return node->kind;
+  if (role == TypeRole)
+    return node->objectType;
   return {};
 }
 
@@ -126,30 +310,37 @@ QHash<int, QByteArray> ProjectTreeModel::roleNames() const {
 
 QModelIndex ProjectTreeModel::indexForObject(const QString &objectId,
                                              const QString &kind) const {
-  if (kind == QStringLiteral("element")) {
-    const auto &elements = m_controller->data().elements;
-    for (int row = 0; row < elements.size(); ++row)
-      if (elements.at(row).id == objectId)
-        return index(row, 0, index(0, 0));
-  } else if (kind == QStringLiteral("diagram")) {
-    const auto &diagrams = m_controller->data().diagrams;
-    for (int row = 0; row < diagrams.size(); ++row)
-      if (diagrams.at(row).id == objectId)
-        return index(row, 0, index(1, 0));
-  }
+  if (kind == QStringLiteral("element"))
+    return indexForNode(m_elementNodes.value(objectId, nullptr));
+  if (kind == QStringLiteral("folder"))
+    return indexForNode(m_folderNodes.value(objectId, nullptr));
+  if (kind == QStringLiteral("namespace"))
+    return indexForNode(m_namespaceNodes.value(objectId, nullptr));
+  if (kind == QStringLiteral("diagram"))
+    return indexForNode(m_diagramNodes.value(objectId, nullptr));
   return {};
+}
+
+void ProjectTreeModel::collectElementIds(const TreeNode *node,
+                                         QSet<QString> &ids) const {
+  if (!node)
+    return;
+  if (node->kind == QStringLiteral("element"))
+    ids.insert(node->objectId);
+  for (const TreeNode *child : node->children)
+    collectElementIds(child, ids);
 }
 
 QStringList
 ProjectTreeModel::elementIdsForIndexes(const QModelIndexList &indexes) const {
   QSet<QString> selectedIds;
   for (const auto &item : indexes) {
-    if (item.model() != this ||
-        data(item, KindRole).toString() != QStringLiteral("element"))
+    const TreeNode *node = nodeForIndex(item);
+    if (!node || (node->kind != QStringLiteral("element") &&
+                  node->kind != QStringLiteral("namespace") &&
+                  node->kind != QStringLiteral("folder")))
       continue;
-    const QString id = data(item, IdRole).toString();
-    if (!id.isEmpty())
-      selectedIds.insert(id);
+    collectElementIds(node, selectedIds);
   }
 
   // QItemSelectionModel does not promise selection-order iteration. Returning
@@ -162,20 +353,101 @@ ProjectTreeModel::elementIdsForIndexes(const QModelIndexList &indexes) const {
   return result;
 }
 
-void ProjectTreeModel::startElementDrag(const QStringList &elementIds) {
+void ProjectTreeModel::selectFromPointer(QItemSelectionModel *selectionModel,
+                                         const QModelIndex &item) {
+  selectWithModifiers(selectionModel, item,
+                      QGuiApplication::keyboardModifiers());
+}
+
+void ProjectTreeModel::selectWithModifiers(QItemSelectionModel *selectionModel,
+                                           const QModelIndex &item,
+                                           Qt::KeyboardModifiers modifiers) {
+  if (!selectionModel || selectionModel->model() != this ||
+      item.model() != this || !item.isValid())
+    return;
+
+  const QString kind = data(item, KindRole).toString();
+  if (kind != QStringLiteral("element") &&
+      kind != QStringLiteral("namespace") && kind != QStringLiteral("folder")) {
+    selectionModel->clearSelection();
+    selectionModel->setCurrentIndex(item, QItemSelectionModel::NoUpdate);
+    m_selectionAnchor = {};
+    return;
+  }
+
+  const bool extend = modifiers.testFlag(Qt::ShiftModifier);
+  const bool toggle = modifiers.testFlag(Qt::ControlModifier);
+  if (extend && m_selectionAnchor.isValid() &&
+      m_selectionAnchor.parent() == item.parent()) {
+    const int firstRow = std::min(m_selectionAnchor.row(), item.row());
+    const int lastRow = std::max(m_selectionAnchor.row(), item.row());
+    const QItemSelection range(index(firstRow, 0, item.parent()),
+                               index(lastRow, 0, item.parent()));
+    auto command = QItemSelectionModel::Select | QItemSelectionModel::Rows;
+    if (!toggle)
+      command |= QItemSelectionModel::Clear;
+    selectionModel->select(range, command);
+  } else if (toggle) {
+    selectionModel->select(item, QItemSelectionModel::Toggle |
+                                     QItemSelectionModel::Rows);
+    m_selectionAnchor = item;
+  } else {
+    selectionModel->select(item, QItemSelectionModel::ClearAndSelect |
+                                     QItemSelectionModel::Rows);
+    m_selectionAnchor = item;
+  }
+  selectionModel->setCurrentIndex(item, QItemSelectionModel::NoUpdate);
+}
+
+void ProjectTreeModel::startTreeDrag(const QModelIndexList &indexes) {
+  const QStringList elementIds = elementIdsForIndexes(indexes);
   QSet<QString> requested(elementIds.cbegin(), elementIds.cend());
   QStringList validIds;
   for (const auto &element : m_controller->data().elements) {
     if (requested.contains(element.id))
       validIds.append(element.id);
   }
-  if (validIds.isEmpty())
+  QSet<const TreeNode *> selectedNodes;
+  for (const QModelIndex &item : indexes)
+    if (const TreeNode *node = nodeForIndex(item))
+      selectedNodes.insert(node);
+
+  QJsonArray browserItems;
+  for (const QModelIndex &item : indexes) {
+    const TreeNode *node = nodeForIndex(item);
+    if (!node || (node->kind != QStringLiteral("element") &&
+                  node->kind != QStringLiteral("folder")))
+      continue;
+    bool selectedAncestor = false;
+    for (const TreeNode *ancestor = node->parent; ancestor;
+         ancestor = ancestor->parent) {
+      if (selectedNodes.contains(ancestor) &&
+          (ancestor->kind == QStringLiteral("element") ||
+           ancestor->kind == QStringLiteral("folder"))) {
+        selectedAncestor = true;
+        break;
+      }
+    }
+    if (selectedAncestor)
+      continue;
+    QJsonObject browserItem;
+    browserItem.insert(QStringLiteral("kind"), node->kind);
+    browserItem.insert(QStringLiteral("id"), node->objectId);
+    browserItems.append(browserItem);
+  }
+
+  if (validIds.isEmpty() && browserItems.isEmpty())
     return;
 
   auto *mimeData = new QMimeData;
-  mimeData->setData(QLatin1String(kElementsMimeType),
-                    QJsonDocument(QJsonArray::fromStringList(validIds))
-                        .toJson(QJsonDocument::Compact));
+  if (!validIds.isEmpty())
+    mimeData->setData(QLatin1String(kElementsMimeType),
+                      QJsonDocument(QJsonArray::fromStringList(validIds))
+                          .toJson(QJsonDocument::Compact));
+  if (!browserItems.isEmpty())
+    mimeData->setData(
+        QLatin1String(kBrowserItemsMimeType),
+        QJsonDocument(browserItems).toJson(QJsonDocument::Compact));
 
   constexpr int kPreviewWidth = 240;
   constexpr int kPreviewHeight = 46;
@@ -189,7 +461,8 @@ void ProjectTreeModel::startElementDrag(const QStringList &elementIds) {
   painter.drawRoundedRect(preview.rect().adjusted(1, 1, -1, -1), 5, 5);
   painter.setPen(palette.dragGhostText);
   const QString label =
-      validIds.size() == 1
+      validIds.isEmpty() ? QStringLiteral("Move project-tree item")
+      : validIds.size() == 1
           ? QStringLiteral("Add 1 element to diagram")
           : QStringLiteral("Add %1 elements to diagram").arg(validIds.size());
   painter.drawText(preview.rect().adjusted(12, 0, -8, 0),
@@ -204,7 +477,9 @@ void ProjectTreeModel::startElementDrag(const QStringList &elementIds) {
 }
 
 void ProjectTreeModel::reset() {
+  m_selectionAnchor = {};
   beginResetModel();
+  rebuildTree();
   endResetModel();
 }
 

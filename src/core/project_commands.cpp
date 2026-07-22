@@ -37,6 +37,18 @@ void removeRecordedValue(QList<T> &records, qsizetype expectedIndex,
     records.removeAt(index);
 }
 
+BrowserParent *browserParentFor(ProjectData &project, const QString &kind,
+                                const QString &id) {
+  if (kind == QStringLiteral("element")) {
+    if (auto *element = findElement(project, id))
+      return &element->browserParent;
+  } else if (kind == QStringLiteral("folder")) {
+    if (auto *folder = findBrowserFolder(project, id))
+      return &folder->parent;
+  }
+  return nullptr;
+}
+
 } // namespace
 
 CreateElementCommand::CreateElementCommand(
@@ -147,6 +159,131 @@ void ApplyCppImportCommand::revert(ProjectData &project) {
     } else {
       removeRecordedValue(project.elements, change->index, change->after.id);
     }
+  }
+}
+
+CreateBrowserFolderCommand::CreateBrowserFolderCommand(
+    ProjectController *controller, const ProjectData &project,
+    BrowserFolder folder)
+    : ProjectCommand(controller, QStringLiteral("Create browser folder")),
+      m_folder(std::move(folder)), m_index(project.browserFolders.size()) {}
+
+void CreateBrowserFolderCommand::execute(ProjectData &project) {
+  insertAtRecordedPosition(project.browserFolders, m_index, m_folder);
+}
+
+void CreateBrowserFolderCommand::revert(ProjectData &project) {
+  removeRecordedValue(project.browserFolders, m_index, m_folder.id);
+}
+
+RenameBrowserFolderCommand::RenameBrowserFolderCommand(
+    ProjectController *controller, QString folderId, QString before,
+    QString after)
+    : ProjectCommand(controller, QStringLiteral("Rename browser folder")),
+      m_folderId(std::move(folderId)), m_before(std::move(before)),
+      m_after(std::move(after)) {}
+
+void RenameBrowserFolderCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void RenameBrowserFolderCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void RenameBrowserFolderCommand::apply(ProjectData &project,
+                                       const QString &name) {
+  if (auto *folder = findBrowserFolder(project, m_folderId))
+    folder->name = name;
+}
+
+MoveBrowserItemsCommand::MoveBrowserItemsCommand(ProjectController *controller,
+                                                 const ProjectData &project,
+                                                 const QStringList &elementIds,
+                                                 const QStringList &folderIds,
+                                                 BrowserParent target)
+    : ProjectCommand(controller,
+                     elementIds.size() + folderIds.size() == 1
+                         ? QStringLiteral("Move project-tree item")
+                         : QStringLiteral("Move project-tree items")) {
+  QSet<QString> seenElements;
+  for (const QString &elementId : elementIds) {
+    if (seenElements.contains(elementId))
+      continue;
+    seenElements.insert(elementId);
+    const ModelElement *element = findElement(project, elementId);
+    if (element && element->browserParent != target)
+      m_changes.append({QStringLiteral("element"), elementId,
+                        element->browserParent, target});
+  }
+  QSet<QString> seenFolders;
+  for (const QString &folderId : folderIds) {
+    if (seenFolders.contains(folderId))
+      continue;
+    seenFolders.insert(folderId);
+    const BrowserFolder *folder = findBrowserFolder(project, folderId);
+    if (folder && folder->parent != target)
+      m_changes.append(
+          {QStringLiteral("folder"), folderId, folder->parent, target});
+  }
+}
+
+void MoveBrowserItemsCommand::execute(ProjectData &project) {
+  apply(project, true);
+}
+
+void MoveBrowserItemsCommand::revert(ProjectData &project) {
+  apply(project, false);
+}
+
+void MoveBrowserItemsCommand::apply(ProjectData &project, bool forward) {
+  for (const auto &change : m_changes) {
+    if (BrowserParent *parent =
+            browserParentFor(project, change.kind, change.id))
+      *parent = forward ? change.after : change.before;
+  }
+}
+
+DeleteBrowserFolderCommand::DeleteBrowserFolderCommand(
+    ProjectController *controller, const ProjectData &project, QString folderId)
+    : ProjectCommand(controller, QStringLiteral("Delete browser folder")) {
+  m_index = indexOfId(project.browserFolders, folderId);
+  if (m_index < 0)
+    return;
+  m_folder = project.browserFolders.at(m_index);
+  for (const auto &element : project.elements) {
+    if (element.browserParent.kind == QStringLiteral("folder") &&
+        element.browserParent.id == folderId)
+      m_changes.append({QStringLiteral("element"), element.id,
+                        element.browserParent, m_folder.parent});
+  }
+  for (const auto &folder : project.browserFolders) {
+    if (folder.parent.kind == QStringLiteral("folder") &&
+        folder.parent.id == folderId)
+      m_changes.append({QStringLiteral("folder"), folder.id, folder.parent,
+                        m_folder.parent});
+  }
+}
+
+void DeleteBrowserFolderCommand::execute(ProjectData &project) {
+  applyParentChanges(project, true);
+  if (m_index >= 0)
+    removeRecordedValue(project.browserFolders, m_index, m_folder.id);
+}
+
+void DeleteBrowserFolderCommand::revert(ProjectData &project) {
+  if (m_index < 0)
+    return;
+  insertAtRecordedPosition(project.browserFolders, m_index, m_folder);
+  applyParentChanges(project, false);
+}
+
+void DeleteBrowserFolderCommand::applyParentChanges(ProjectData &project,
+                                                    bool forward) {
+  for (const auto &change : m_changes) {
+    if (BrowserParent *parent =
+            browserParentFor(project, change.kind, change.id))
+      *parent = forward ? change.after : change.before;
   }
 }
 
@@ -400,9 +537,29 @@ DeleteElementCommand::DeleteElementCommand(ProjectController *controller,
     if (!records.nodes.isEmpty() || !records.connectors.isEmpty())
       m_diagrams.append(std::move(records));
   }
+
+  for (const auto &element : project.elements) {
+    if (element.id != elementId &&
+        element.browserParent.kind == QStringLiteral("element") &&
+        element.browserParent.id == elementId)
+      m_browserParentChanges.append(
+          {QStringLiteral("element"), element.id, element.browserParent, {}});
+  }
+  for (const auto &folder : project.browserFolders) {
+    if (folder.parent.kind == QStringLiteral("element") &&
+        folder.parent.id == elementId)
+      m_browserParentChanges.append({QStringLiteral("folder"),
+                                     folder.id,
+                                     folder.parent,
+                                     {QStringLiteral("model"), {}}});
+  }
 }
 
 void DeleteElementCommand::execute(ProjectData &project) {
+  for (const auto &change : m_browserParentChanges)
+    if (BrowserParent *parent =
+            browserParentFor(project, change.kind, change.id))
+      *parent = change.after;
   for (const auto &records : m_diagrams) {
     if (auto *diagram = findDiagram(project, records.diagramId)) {
       for (auto item = records.connectors.crbegin();
@@ -421,6 +578,10 @@ void DeleteElementCommand::execute(ProjectData &project) {
 
 void DeleteElementCommand::revert(ProjectData &project) {
   insertAtRecordedPosition(project.elements, m_elementIndex, m_element);
+  for (const auto &change : m_browserParentChanges)
+    if (BrowserParent *parent =
+            browserParentFor(project, change.kind, change.id))
+      *parent = change.before;
   for (const auto &item : m_relationships)
     insertAtRecordedPosition(project.relationships, item.index, item.value);
   for (const auto &records : m_diagrams) {

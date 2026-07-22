@@ -4,6 +4,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QSaveFile>
@@ -149,6 +150,20 @@ ConnectorBendPoint readBendPoint(const QJsonValue &value,
   return bendPoint;
 }
 
+QJsonObject browserParentToJson(const BrowserParent &parent) {
+  QJsonObject object;
+  object.insert(QStringLiteral("kind"), parent.kind);
+  if (!parent.id.isEmpty())
+    object.insert(QStringLiteral("id"), parent.id);
+  return object;
+}
+
+BrowserParent readBrowserParent(const QJsonValue &value) {
+  const QJsonObject object = value.toObject();
+  return {object.value(QStringLiteral("kind")).toString(),
+          object.value(QStringLiteral("id")).toString()};
+}
+
 QJsonObject elementToJson(const ModelElement &element) {
   QJsonObject object = element.extra;
   object.insert(QStringLiteral("id"), element.id);
@@ -162,6 +177,19 @@ QJsonObject elementToJson(const ModelElement &element) {
   object.insert(QStringLiteral("operations"), stringArray(element.operations));
   object.insert(QStringLiteral("enumLiterals"),
                 stringArray(element.enumLiterals));
+  if (!element.browserParent.kind.isEmpty())
+    object.insert(QStringLiteral("browserParent"),
+                  browserParentToJson(element.browserParent));
+  else
+    object.remove(QStringLiteral("browserParent"));
+  return object;
+}
+
+QJsonObject browserFolderToJson(const BrowserFolder &folder) {
+  QJsonObject object = folder.extra;
+  object.insert(QStringLiteral("id"), folder.id);
+  object.insert(QStringLiteral("name"), folder.name);
+  object.insert(QStringLiteral("parent"), browserParentToJson(folder.parent));
   return object;
 }
 
@@ -234,10 +262,17 @@ QByteArray modelBytes(const ProjectData &project) {
   QJsonArray elements;
   for (const auto &element : project.elements)
     elements.append(elementToJson(element));
+  QJsonArray browserFolders;
+  for (const auto &folder : project.browserFolders)
+    browserFolders.append(browserFolderToJson(folder));
   QJsonArray relationships;
   for (const auto &relationship : project.relationships)
     relationships.append(relationshipToJson(relationship));
   object.insert(QStringLiteral("elements"), elements);
+  if (!browserFolders.isEmpty())
+    object.insert(QStringLiteral("browserFolders"), browserFolders);
+  else
+    object.remove(QStringLiteral("browserFolders"));
   object.insert(QStringLiteral("relationships"), relationships);
   return Json5::serialize(QJsonDocument(object));
 }
@@ -416,8 +451,9 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
                  QStringLiteral("diagrams")});
 
   const QJsonObject model = modelResult.document.object();
-  project.modelExtra = withoutKeys(
-      model, {QStringLiteral("elements"), QStringLiteral("relationships")});
+  project.modelExtra = withoutKeys(model, {QStringLiteral("elements"),
+                                           QStringLiteral("browserFolders"),
+                                           QStringLiteral("relationships")});
   for (const auto &value : model.value(QStringLiteral("elements")).toArray()) {
     const QJsonObject object = value.toObject();
     ModelElement element;
@@ -437,12 +473,28 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
         readStringArray(object.value(QStringLiteral("operations")));
     element.enumLiterals =
         readStringArray(object.value(QStringLiteral("enumLiterals")));
+    element.browserParent =
+        readBrowserParent(object.value(QStringLiteral("browserParent")));
     element.extra = withoutKeys(
         object,
         {QStringLiteral("id"), QStringLiteral("type"), QStringLiteral("name"),
          QStringLiteral("packageId"), QStringLiteral("attributes"),
-         QStringLiteral("operations"), QStringLiteral("enumLiterals")});
+         QStringLiteral("operations"), QStringLiteral("enumLiterals"),
+         QStringLiteral("browserParent")});
     project.elements.append(element);
+  }
+
+  for (const auto &value :
+       model.value(QStringLiteral("browserFolders")).toArray()) {
+    const QJsonObject object = value.toObject();
+    BrowserFolder folder;
+    folder.id = object.value(QStringLiteral("id")).toString();
+    folder.name = object.value(QStringLiteral("name")).toString();
+    folder.parent = readBrowserParent(object.value(QStringLiteral("parent")));
+    folder.extra =
+        withoutKeys(object, {QStringLiteral("id"), QStringLiteral("name"),
+                             QStringLiteral("parent")});
+    project.browserFolders.append(folder);
   }
 
   for (const auto &value :
@@ -679,6 +731,164 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
                                QStringLiteral("Package reference %1 is broken")
                                    .arg(element.packageId),
                                element.id));
+  }
+
+  QSet<QString> folderIds;
+  for (const auto &folder : project.browserFolders) {
+    checkId(folder.id, QStringLiteral("browser folder"));
+    folderIds.insert(folder.id);
+    if (folder.name.trimmed().isEmpty())
+      diagnostics.append(error(QStringLiteral("validation"),
+                               QStringLiteral("A browser folder has an empty "
+                                              "name"),
+                               folder.id));
+  }
+
+  const auto validateBrowserParent = [&](const BrowserParent &parent,
+                                         const QString &subjectId,
+                                         bool parentRequired) {
+    if (parent.kind.isEmpty()) {
+      if (parentRequired)
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("A browser folder has no parent"), subjectId));
+      return;
+    }
+    if (parent.kind == QStringLiteral("model")) {
+      if (!parent.id.isEmpty())
+        diagnostics.append(error(
+            QStringLiteral("validation"),
+            QStringLiteral("The model browser parent must not have an ID"),
+            subjectId));
+      return;
+    }
+    if (parent.kind == QStringLiteral("namespace")) {
+      if (parent.id.trimmed().isEmpty())
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("A namespace browser parent has no path"),
+                  subjectId));
+      return;
+    }
+    if (parent.kind == QStringLiteral("element")) {
+      if (!elementIds.contains(parent.id) || parent.id == subjectId)
+        diagnostics.append(error(
+            QStringLiteral("validation"),
+            QStringLiteral("An element browser parent is invalid"), subjectId));
+      return;
+    }
+    if (parent.kind == QStringLiteral("folder")) {
+      if (!folderIds.contains(parent.id) || parent.id == subjectId)
+        diagnostics.append(error(
+            QStringLiteral("validation"),
+            QStringLiteral("A folder browser parent is invalid"), subjectId));
+      return;
+    }
+    diagnostics.append(error(
+        QStringLiteral("validation"),
+        QStringLiteral("Unknown browser parent kind: %1").arg(parent.kind),
+        subjectId));
+  };
+
+  for (const auto &element : project.elements)
+    validateBrowserParent(element.browserParent, element.id, false);
+  for (const auto &folder : project.browserFolders)
+    validateBrowserParent(folder.parent, folder.id, true);
+
+  // Browser ownership is a one-parent graph spanning both semantic elements
+  // and custom folders. Reject cycles before the tree model sees the data.
+  QHash<QString, QString> elementKeyByQualifiedName;
+  for (const auto &element : project.elements)
+    if (!elementKeyByQualifiedName.contains(element.name))
+      elementKeyByQualifiedName.insert(element.name,
+                                       QStringLiteral("element:") + element.id);
+  QHash<QString, QString> browserParentBySubject;
+  const auto parentKey = [](const BrowserParent &parent) {
+    if (parent.kind == QStringLiteral("element"))
+      return QStringLiteral("element:") + parent.id;
+    if (parent.kind == QStringLiteral("folder"))
+      return QStringLiteral("folder:") + parent.id;
+    if (parent.kind == QStringLiteral("namespace") && !parent.id.isEmpty())
+      return QStringLiteral("namespace:") + parent.id;
+    return QString{};
+  };
+  QSet<QString> namespacePaths;
+  const auto rememberNamespacePath = [&](const QString &path) {
+    QString current = path;
+    while (!current.isEmpty()) {
+      namespacePaths.insert(current);
+      const int separator = current.lastIndexOf(QStringLiteral("::"));
+      current = separator >= 0 ? current.left(separator) : QString{};
+    }
+  };
+  for (const auto &element : project.elements)
+    if (element.browserParent.kind == QStringLiteral("namespace"))
+      rememberNamespacePath(element.browserParent.id);
+  for (const auto &folder : project.browserFolders)
+    if (folder.parent.kind == QStringLiteral("namespace"))
+      rememberNamespacePath(folder.parent.id);
+
+  for (const QString &namespacePath : namespacePaths) {
+    const int separator = namespacePath.lastIndexOf(QStringLiteral("::"));
+    if (separator < 0)
+      continue;
+    const QString parentPath = namespacePath.left(separator);
+    const QString parent = elementKeyByQualifiedName.contains(parentPath)
+                               ? elementKeyByQualifiedName.value(parentPath)
+                               : QStringLiteral("namespace:") + parentPath;
+    browserParentBySubject.insert(QStringLiteral("namespace:") + namespacePath,
+                                  parent);
+  }
+  for (const auto &element : project.elements) {
+    QString parent;
+    if (!element.browserParent.kind.isEmpty()) {
+      parent = parentKey(element.browserParent);
+    } else if (!element.packageId.isEmpty()) {
+      parent = QStringLiteral("element:") + element.packageId;
+    } else {
+      const QStringList parts =
+          element.name.split(QStringLiteral("::"), Qt::SkipEmptyParts);
+      QString qualifiedPath;
+      for (int index = 0; index + 1 < parts.size(); ++index) {
+        if (!qualifiedPath.isEmpty())
+          qualifiedPath += QStringLiteral("::");
+        qualifiedPath += parts.at(index);
+        if (elementKeyByQualifiedName.contains(qualifiedPath))
+          parent = elementKeyByQualifiedName.value(qualifiedPath);
+        else
+          parent = QStringLiteral("namespace:") + qualifiedPath;
+      }
+    }
+    if (!parent.isEmpty())
+      browserParentBySubject.insert(QStringLiteral("element:") + element.id,
+                                    parent);
+  }
+  for (const auto &folder : project.browserFolders) {
+    const QString parent = parentKey(folder.parent);
+    if (!parent.isEmpty())
+      browserParentBySubject.insert(QStringLiteral("folder:") + folder.id,
+                                    parent);
+  }
+
+  QSet<QString> reportedCycles;
+  for (auto subject = browserParentBySubject.cbegin();
+       subject != browserParentBySubject.cend(); ++subject) {
+    QSet<QString> path;
+    QString current = subject.key();
+    while (!current.isEmpty() && browserParentBySubject.contains(current)) {
+      if (path.contains(current)) {
+        if (!reportedCycles.contains(current)) {
+          reportedCycles.insert(current);
+          diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral("Browser hierarchy contains a cycle"),
+                    current.section(u':', 1)));
+        }
+        break;
+      }
+      path.insert(current);
+      current = browserParentBySubject.value(current);
+    }
   }
 
   QSet<QString> relationshipIds;
