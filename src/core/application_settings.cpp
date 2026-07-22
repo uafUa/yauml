@@ -1,7 +1,10 @@
 #include "core/application_settings.h"
 
+#include "core/cpp_import.h"
+
 #include <QDir>
 #include <QFileInfo>
+#include <QRegularExpression>
 #include <QSet>
 #include <QSettings>
 #include <QUrl>
@@ -20,6 +23,8 @@ constexpr auto kGridSpacingKey = "gridSpacing";
 constexpr auto kConnectorSettingsGroup = "preferences/connectors";
 constexpr auto kDefaultConnectorRoutingKey = "defaultRouting";
 constexpr auto kRelationshipGestureKeySuffix = "GestureKey";
+constexpr auto kCppImportSettingsGroup = "preferences/cppImport";
+constexpr auto kCppInterfacePatternKey = "interfacePattern";
 constexpr auto kHistorySettingsGroup = "history";
 constexpr auto kRecentProjectsKey = "recentProjects";
 
@@ -127,6 +132,19 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
     m_relationshipGestureKeys = gestureDefaults;
   settings.endGroup();
 
+  settings.beginGroup(QLatin1String(kCppImportSettingsGroup));
+  const QString storedInterfacePattern =
+      settings
+          .value(QLatin1String(kCppInterfacePatternKey),
+                 defaultCppInterfacePattern())
+          .toString();
+  m_cppInterfacePattern =
+      !storedInterfacePattern.isEmpty() &&
+              QRegularExpression(storedInterfacePattern).isValid()
+          ? storedInterfacePattern
+          : defaultCppInterfacePattern();
+  settings.endGroup();
+
   settings.beginGroup(QLatin1String(kHistorySettingsGroup));
   const QStringList storedPaths =
       settings.value(QLatin1String(kRecentProjectsKey)).toStringList();
@@ -152,6 +170,10 @@ int ApplicationSettings::defaultDistributionGap() const {
 
 QVariantMap ApplicationSettings::defaultRelationshipGestureKeys() {
   return makeDefaultRelationshipGestureKeys();
+}
+
+QString ApplicationSettings::defaultCppInterfacePattern() {
+  return CppImportOptions::defaultInterfacePattern();
 }
 
 void ApplicationSettings::setDefaultDistributionGap(int gap) {
@@ -229,6 +251,26 @@ bool ApplicationSettings::setRelationshipGestureKeys(const QVariantMap &keys) {
   return true;
 }
 
+QString ApplicationSettings::cppInterfacePattern() const {
+  return m_cppInterfacePattern;
+}
+
+bool ApplicationSettings::setCppInterfacePattern(const QString &pattern) {
+  if (!isValidCppInterfacePattern(pattern))
+    return false;
+  if (m_cppInterfacePattern == pattern)
+    return true;
+  m_cppInterfacePattern = pattern;
+  persistCppImportPreferences();
+  emit cppInterfacePatternChanged();
+  return true;
+}
+
+bool ApplicationSettings::isValidCppInterfacePattern(
+    const QString &pattern) const {
+  return !pattern.isEmpty() && QRegularExpression(pattern).isValid();
+}
+
 QVariantList ApplicationSettings::recentProjects() const {
   QVariantList entries;
   entries.reserve(m_recentProjectPaths.size());
@@ -280,6 +322,7 @@ void ApplicationSettings::resetDefaults() {
   setGridSpacing(kDefaultGridSpacing);
   setDefaultConnectorRouting(toString(kDefaultConnectorRouting));
   setRelationshipGestureKeys(makeDefaultRelationshipGestureKeys());
+  setCppInterfacePattern(defaultCppInterfacePattern());
 }
 
 void ApplicationSettings::persistDiagramPreferences() const {
@@ -303,6 +346,15 @@ void ApplicationSettings::persistConnectorPreferences() const {
   for (const auto &type : relationshipGestureTypes())
     settings.setValue(type + QLatin1String(kRelationshipGestureKeySuffix),
                       m_relationshipGestureKeys.value(type));
+  settings.endGroup();
+  settings.sync();
+}
+
+void ApplicationSettings::persistCppImportPreferences() const {
+  QSettings settings;
+  settings.beginGroup(QLatin1String(kCppImportSettingsGroup));
+  settings.setValue(QLatin1String(kCppInterfacePatternKey),
+                    m_cppInterfacePattern);
   settings.endGroup();
   settings.sync();
 }

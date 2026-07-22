@@ -19,7 +19,8 @@ The MVP includes:
   points;
 - deterministic, directory-based JSON5 persistence with validation, unknown-field
   retention, and interrupted-save recovery;
-- a headless `validate` command using the same core as the GUI.
+- headless `validate`, `cpp-preview`, and `cpp-import` commands using the same
+  core services as the GUI.
 
 The accepted boundary and acceptance criteria are in
 [`docs/mvp-scope.md`](docs/mvp-scope.md). The broader product direction is in
@@ -29,22 +30,24 @@ For a step-by-step release audit, use
 
 ## Build on Windows
 
-The commands below use the Qt 6.11 MinGW kit installed by the Qt online installer.
-Adjust the two Qt paths if your kit is elsewhere.
+The primary Windows build uses MSVC 2022 and the matching Qt 6.11 kit. Adjust
+the Qt path if your kit is elsewhere.
 
 ```powershell
-$env:Path = 'C:\Qt\Tools\mingw1310_64\bin;C:\Qt\6.11.1\mingw_64\bin;' + $env:Path
-cmake -S . -B build -G Ninja `
-  -DCMAKE_PREFIX_PATH=C:/Qt/6.11.1/mingw_64 `
-  -DCMAKE_CXX_COMPILER=C:/Qt/Tools/mingw1310_64/bin/g++.exe `
-  -DCMAKE_BUILD_TYPE=Debug
-cmake --build build --parallel
-ctest --test-dir build --output-on-failure
+cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+  -DCMAKE_PREFIX_PATH=C:/Qt/6.11.1/msvc2022_64
+cmake --build build --config Debug --parallel
+ctest --test-dir build -C Debug --output-on-failure
 ```
 
 The Windows build automatically copies the required Qt runtime, QML modules,
-plugins, and MinGW runtime beside `build/uuml.exe`. The executable can therefore
-be started later from a fresh terminal without setting `PATH` again.
+and plugins beside `build/Debug/uuml.exe`. The executable can therefore be
+started later from a fresh terminal without setting `PATH` again.
+
+C++ import uses libclang when an LLVM installation is detected. CMake searches
+`LLVM_ROOT`, `LLVM_HOME`, and the standard `C:\Program Files\LLVM` location. It
+copies `libclang.dll` beside the executable. Builds without an LLVM SDK remain
+usable, but C++ import reports that the feature is unavailable.
 
 ### Release build
 
@@ -66,36 +69,95 @@ PowerShell window.
 Open a new unsaved project:
 
 ```powershell
-.\build\uuml.exe
+.\build\Debug\uuml.exe
 ```
 
 Open the included two-diagram example:
 
 ```powershell
-.\build\uuml.exe .\examples\sample.uuml
+.\build\Debug\uuml.exe .\examples\sample.uuml
 ```
 
 Open the generated performance example containing 600 nodes and 1,150
 connectors on one diagram:
 
 ```powershell
-.\build\uuml.exe .\examples\performance.uuml
+.\build\Debug\uuml.exe .\examples\performance.uuml
 ```
 
 Regenerate it with the default 600 nodes:
 
 ```powershell
-cmake --build build --target generate_performance_example
+cmake --build build --config Debug --target generate_performance_example
 ```
 
 Validate a project without opening the GUI:
 
 ```powershell
-.\build\uuml.exe validate .\examples\sample.uuml
+.\build\Debug\uuml.exe validate .\examples\sample.uuml
 ```
+
+Preview or apply C++ imports without opening the GUI:
+
+```powershell
+.\build-release\Release\uuml.exe cpp-preview `
+  .\examples\sample.uuml C:\path\to\cpp-project
+.\build-release\Release\uuml.exe cpp-import `
+  .\examples\sample.uuml C:\path\to\cpp-project
+```
+
+Select the C++ source root; no configure or build step is required. uuml scans
+common C++ source and header extensions recursively and infers the source root
+plus common `src` and `include` include paths. When a `compile_commands.json` is
+available in or below the selected folder, uuml uses it automatically for more
+accurate compiler flags instead. `cpp-import` saves non-conflicting changes and
+returns exit code `3` when conflicts need attention; user-edited model content
+is never overwritten.
+
+## C++ import
+
+- Choose **File > Import C++…**, then select the project's source folder. That
+  is the complete normal workflow: CMake files, a configured build, and a
+  compilation database are optional. Discovery runs outside the UI thread and
+  presents every create, update, conflict, unchanged, user-owned, or
+  missing-source result before import.
+- Folder-only discovery parses implementation files first and then standalone
+  headers not already reached through them. Build outputs, version-control
+  metadata, vendored dependencies, and directory symlink loops are skipped.
+  Missing external includes are reported as warnings while usable declarations
+  are still imported. If a compilation database is found automatically, the
+  preview identifies that higher-accuracy mode instead.
+- Import currently covers class and struct names, fields, methods, and direct
+  base relationships. Imported types, generalizations, and realizations enter
+  the semantic project model without being placed automatically on a diagram;
+  double-click types in the tree to add presentations where needed. A connector
+  appears automatically once both endpoints of an imported relationship are
+  present on a diagram.
+- **Preferences > General > C++ import > Interface pattern** controls whether a
+  base relationship is realization/implementation or generalization. The
+  regular expression is matched against the unqualified base name. Its default,
+  `^I[A-Z].*$`, recognizes conventional names such as `IService`; other base
+  names remain generalizations. The preview states the classification reason.
+- Each imported element and inheritance stores a Clang-derived source binding,
+  provenance, and the last imported source snapshot in extensible JSON5
+  metadata.
+- If only source changed, the next import updates the element. If only the model
+  changed, the model stays authoritative. If both changed differently, the
+  model is retained and a structured conflict is shown in the log panel.
+- Applying a GUI preview is one undoable command. The preview is re-planned
+  against current model state immediately before application. Source files are
+  read-only and are never rewritten by this workflow.
+- Source declarations or inheritance edges that disappear are reported as
+  missing but retained in the model. This deliberately avoids destructive
+  changes before rename/move matching and explicit conflict resolution exist.
 
 ## Diagram interaction
 
+- Use Ctrl-click or Shift-click in the project tree to select multiple model
+  types, then drag any selected row onto a diagram. The types are placed as a
+  grid at the drop point in one undoable action; relationships appear when both
+  of their endpoint types have become present. Types already on that diagram
+  are skipped.
 - Drag empty diagram space to select every intersecting element. Hold `Shift`
   to add to the current selection or `Ctrl` to toggle intersecting elements.
 - Right-click empty space, an element, a connector, or a diagram tab for the

@@ -2,6 +2,7 @@ import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
 import QtQuick.Dialogs
+import QtQml.Models
 
 ApplicationWindow {
     id: root
@@ -152,6 +153,12 @@ ApplicationWindow {
                              ? projectController.saveProject() : saveDialog.open()
             }
             MenuSeparator {}
+            Action {
+                text: qsTr("Import C++…")
+                enabled: !cppImportController.busy
+                onTriggered: cppImportFolderDialog.open()
+            }
+            MenuSeparator {}
             Action { text: qsTr("E&xit"); shortcut: StandardKey.Quit; onTriggered: root.close() }
         }
         Menu {
@@ -257,6 +264,13 @@ ApplicationWindow {
                     Layout.fillHeight: true
                     model: projectController.treeModel
                     clip: true
+                    selectionBehavior: TableView.SelectRows
+                    selectionMode: TableView.ExtendedSelection
+                    property bool selectionOriginatesFromTree: false
+                    selectionModel: ItemSelectionModel {
+                        id: projectTreeSelection
+                        model: projectController.treeModel
+                    }
 
                     Component.onCompleted: expandRecursively()
 
@@ -271,11 +285,23 @@ ApplicationWindow {
                     Connections {
                         target: projectController
                         function onSelectionChanged() {
+                            const originatedFromTree = projectTree.selectionOriginatesFromTree
                             Qt.callLater(function() {
                                 projectTree.expandRecursively()
                                 const itemIndex = projectController.treeModel.indexForObject(
                                                     projectController.selectedId,
                                                     projectController.selectedKind)
+                                if (!originatedFromTree
+                                        && projectController.selectedKind === "element"
+                                        && itemIndex.valid) {
+                                    projectTreeSelection.select(
+                                                itemIndex,
+                                                ItemSelectionModel.ClearAndSelect
+                                                | ItemSelectionModel.Rows)
+                                    projectTreeSelection.setCurrentIndex(
+                                                itemIndex,
+                                                ItemSelectionModel.NoUpdate)
+                                }
                                 const row = projectTree.rowAtIndex(itemIndex)
                                 if (row >= 0)
                                     projectTree.positionViewAtRow(row, TableView.Contain)
@@ -291,8 +317,7 @@ ApplicationWindow {
                         highlighted: kind !== "root" && (
                                          kind === "diagram"
                                          ? objectId === workspaceController.activeDiagramId
-                                         : objectId === projectController.selectedId
-                                           && kind === projectController.selectedKind)
+                                         : selected)
                         background: Rectangle {
                             color: treeDelegate.highlighted ? uiTheme.accent
                                  : treeDelegate.hovered ? uiTheme.hoverBackground : "transparent"
@@ -307,6 +332,33 @@ ApplicationWindow {
                                 projectController.addSelectedToDiagram(workspaceController.activeDiagramId)
                             } else if (kind === "diagram") {
                                 workspaceController.activeDiagramId = objectId
+                            }
+                        }
+
+                        onPressed: projectTree.selectionOriginatesFromTree = true
+                        onReleased: Qt.callLater(function() {
+                            projectTree.selectionOriginatesFromTree = false
+                        })
+                        onCanceled: projectTree.selectionOriginatesFromTree = false
+
+                        DragHandler {
+                            target: null
+                            enabled: treeDelegate.kind === "element"
+                            grabPermissions: PointerHandler.CanTakeOverFromAnything
+                            onActiveChanged: {
+                                if (!active)
+                                    return
+                                const itemIndex = projectTree.index(treeDelegate.row,
+                                                                    treeDelegate.column)
+                                if (!projectTreeSelection.isSelected(itemIndex)) {
+                                    projectTreeSelection.select(
+                                                itemIndex,
+                                                ItemSelectionModel.ClearAndSelect
+                                                | ItemSelectionModel.Rows)
+                                }
+                                const elementIds = projectController.treeModel.elementIdsForIndexes(
+                                                       projectTreeSelection.selectedIndexes)
+                                projectController.treeModel.startElementDrag(elementIds)
                             }
                         }
                     }
@@ -490,14 +542,18 @@ ApplicationWindow {
             }
             return true
         }
+        property bool cppInterfacePatternValid:
+            applicationSettings.isValidCppInterfacePattern(cppInterfacePattern.text)
 
         function updateOkButton() {
             const button = standardButton(Dialog.Ok)
             if (button)
                 button.enabled = connectorGestureKeysValid
+                                 && cppInterfacePatternValid
         }
 
         onConnectorGestureKeysValidChanged: updateOkButton()
+        onCppInterfacePatternValidChanged: updateOkButton()
 
         onOpened: {
             distributionGap.value = applicationSettings.defaultDistributionGap
@@ -513,6 +569,7 @@ ApplicationWindow {
             associationGestureKey.text = gestureKeys.association
             aggregationGestureKey.text = gestureKeys.aggregation
             compositionGestureKey.text = gestureKeys.composition
+            cppInterfacePattern.text = applicationSettings.cppInterfacePattern
             Qt.callLater(updateOkButton)
             colorPreferencesModel.clear()
             const roles = uiTheme.colorRoles
@@ -542,6 +599,7 @@ ApplicationWindow {
             applicationSettings.defaultConnectorRouting =
                     defaultConnectorRouting.currentIndex === 1
                     ? "orthogonal" : "straight"
+            applicationSettings.setCppInterfacePattern(cppInterfacePattern.text)
             const colors = {}
             for (let index = 0; index < colorPreferencesModel.count; ++index) {
                 const entry = colorPreferencesModel.get(index)
@@ -625,6 +683,31 @@ ApplicationWindow {
                             wrapMode: Text.Wrap
                             color: uiTheme.mutedText
                             text: qsTr("Hold Alt while dragging to temporarily disable snapping.")
+                        }
+                        Label {
+                            text: qsTr("C++ import")
+                            font.bold: true
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: qsTr("Base class names matching this regular expression are imported as realization / implementation relationships. Matching uses the unqualified name, such as IService rather than app::IService.")
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label { text: qsTr("Interface pattern") }
+                            TextField {
+                                id: cppInterfacePattern
+                                Layout.fillWidth: true
+                                selectByMouse: true
+                                placeholderText: "^I[A-Z].*$"
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: !preferencesDialog.cppInterfacePatternValid
+                            color: uiTheme.warningBorder
+                            text: qsTr("Enter a valid, non-empty regular expression.")
                         }
                         Item { Layout.fillHeight: true }
                     }
@@ -884,6 +967,105 @@ ApplicationWindow {
         onRejected: root.cancelPendingDocumentAction()
     }
 
+    Dialog {
+        id: cppImportDialog
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(780, parent.width - 40)
+        height: Math.min(620, parent.height - 40)
+        modal: true
+        focus: true
+        title: qsTr("C++ import preview")
+        standardButtons: Dialog.Apply | Dialog.Close
+
+        onOpened: {
+            const applyButton = standardButton(Dialog.Apply)
+            if (applyButton)
+                applyButton.text = qsTr("Import changes")
+        }
+        onApplied: cppImportController.applyPreview()
+
+        Connections {
+            target: cppImportController
+            function refreshApplyButton() {
+                const applyButton = cppImportDialog.standardButton(Dialog.Apply)
+                if (applyButton)
+                    applyButton.enabled = cppImportController.canApply
+            }
+            function onPreviewChanged() { refreshApplyButton() }
+            function onBusyChanged() { refreshApplyButton() }
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 8
+
+            RowLayout {
+                Layout.fillWidth: true
+                BusyIndicator {
+                    running: cppImportController.busy
+                    visible: running
+                }
+                Label {
+                    Layout.fillWidth: true
+                    text: cppImportController.summary
+                    wrapMode: Text.Wrap
+                }
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: cppImportController.compilationDatabasePath.length > 0
+                text: qsTr("Compilation database: %1")
+                      .arg(cppImportController.compilationDatabasePath)
+                color: uiTheme.mutedText
+                elide: Text.ElideMiddle
+            }
+            Rectangle {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                color: uiTheme.surface
+                border.color: uiTheme.controlBorder
+                radius: 3
+
+                ListView {
+                    anchors.fill: parent
+                    anchors.margins: 1
+                    clip: true
+                    model: cppImportController.previewItems
+                    delegate: Rectangle {
+                        required property int index
+                        required property var modelData
+                        width: ListView.view.width
+                        height: Math.max(50, importItemText.implicitHeight + 14)
+                        color: modelData.action === "conflict" ? uiTheme.warningRow
+                             : index % 2 ? uiTheme.alternateRow : uiTheme.surface
+
+                        Label {
+                            id: importItemText
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.verticalCenter: parent.verticalCenter
+                            anchors.margins: 7
+                            text: modelData.action.toUpperCase() + "  "
+                                  + modelData.name + " (" + modelData.type + ")\n"
+                                  + modelData.message + (modelData.file.length > 0
+                                    ? " — " + modelData.file + ":" + modelData.line : "")
+                                  + (modelData.classification
+                                     ? "\n" + modelData.classification : "")
+                            wrapMode: Text.Wrap
+                        }
+                    }
+                    Label {
+                        anchors.centerIn: parent
+                        visible: !cppImportController.busy
+                                 && cppImportController.previewItems.length === 0
+                        text: qsTr("No C++ model declarations were discovered")
+                        color: uiTheme.mutedText
+                    }
+                }
+            }
+        }
+    }
+
     Popup {
         id: logPopup
         parent: Overlay.overlay
@@ -954,6 +1136,11 @@ ApplicationWindow {
         function onErrorAdded() { logPopup.open() }
     }
 
+    Connections {
+        target: cppImportController
+        function onAttentionRequired() { logPopup.open() }
+    }
+
     FolderDialog {
         id: openDialog
         title: qsTr("Open u uml project directory")
@@ -969,6 +1156,15 @@ ApplicationWindow {
                 root.performDocumentAction(root.pendingDocumentAction)
         }
         onRejected: root.cancelPendingDocumentAction()
+    }
+
+    FolderDialog {
+        id: cppImportFolderDialog
+        title: qsTr("Choose C++ source directory")
+        onAccepted: {
+            cppImportDialog.open()
+            cppImportController.preview(selectedFolder)
+        }
     }
 
     Instantiator {

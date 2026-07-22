@@ -1,5 +1,6 @@
 #include "core/project_controller.h"
 
+#include "core/cpp_import.h"
 #include "core/project_command.h"
 #include "core/project_commands.h"
 #include "core/project_serializer.h"
@@ -379,6 +380,26 @@ bool ProjectController::saveProject(const QUrl &url) {
 void ProjectController::undo() { m_undoStack.undo(); }
 void ProjectController::redo() { m_undoStack.redo(); }
 
+int ProjectController::applyCppImportPlan(const CppImportPreview &preview) {
+  QList<ModelElement> desiredElements;
+  desiredElements.reserve(preview.elementApplicableCount());
+  for (const auto &item : preview.items)
+    if (item.isApplicable())
+      desiredElements.append(item.desiredElement);
+  QList<Relationship> desiredRelationships;
+  desiredRelationships.reserve(preview.relationshipApplicableCount());
+  for (const auto &item : preview.relationshipItems)
+    if (item.isApplicable())
+      desiredRelationships.append(item.desiredRelationship);
+  if (desiredElements.isEmpty() && desiredRelationships.isEmpty())
+    return 0;
+  const int count = desiredElements.size() + desiredRelationships.size();
+  pushCommand(std::make_unique<ApplyCppImportCommand>(
+      this, m_data, std::move(desiredElements),
+      std::move(desiredRelationships)));
+  return count;
+}
+
 QString ProjectController::addElement(const QString &type,
                                       const QString &diagramId) {
   return addElementAt(type, diagramId, std::numeric_limits<qreal>::quiet_NaN(),
@@ -445,26 +466,85 @@ QString ProjectController::addDiagram() {
 void ProjectController::addSelectedToDiagram(const QString &diagramId) {
   if (m_selectedKind != QStringLiteral("element"))
     return;
-  const QString elementId = m_selectedId;
+  addElementsToDiagram(diagramId, {m_selectedId},
+                       std::numeric_limits<qreal>::quiet_NaN(),
+                       std::numeric_limits<qreal>::quiet_NaN());
+}
+
+int ProjectController::addElementsToDiagram(const QString &diagramId,
+                                            const QStringList &elementIds,
+                                            qreal x, qreal y) {
   const auto *diagram = findDiagram(m_data, diagramId);
-  if (!diagram)
-    return;
-  if (std::any_of(diagram->nodes.cbegin(), diagram->nodes.cend(),
-                  [&](const NodePresentation &node) {
-                    return node.elementId == elementId;
-                  })) {
+  if (!diagram || elementIds.isEmpty())
+    return 0;
+
+  QSet<QString> existingElementIds;
+  existingElementIds.reserve(diagram->nodes.size());
+  for (const auto &node : diagram->nodes)
+    existingElementIds.insert(node.elementId);
+
+  QStringList acceptedIds;
+  QSet<QString> seenIds;
+  int duplicateCount = 0;
+  for (const auto &elementId : elementIds) {
+    if (seenIds.contains(elementId) || !findElement(m_data, elementId))
+      continue;
+    seenIds.insert(elementId);
+    if (existingElementIds.contains(elementId)) {
+      ++duplicateCount;
+      continue;
+    }
+    acceptedIds.append(elementId);
+  }
+  if (acceptedIds.isEmpty()) {
     m_diagnostics.addWarning(
         QStringLiteral("command"),
-        QStringLiteral("The element is already on this diagram"), elementId);
-    return;
+        duplicateCount == 1
+            ? QStringLiteral("The selected element is already on this diagram")
+            : QStringLiteral(
+                  "The selected elements are already on this diagram"));
+    return 0;
   }
-  NodePresentation node;
-  node.id = newId();
-  node.elementId = elementId;
-  node.geometry = firstAvailableNodeGeometry(*diagram);
-  auto connectors = connectorsForNewPresentation(m_data, *diagram, elementId);
-  pushCommand(std::make_unique<AddElementToDiagramCommand>(
-      this, m_data, diagramId, std::move(node), std::move(connectors)));
+
+  QList<NodePresentation> presentations;
+  presentations.reserve(acceptedIds.size());
+  Diagram prospective = *diagram;
+  const bool hasDropPosition = std::isfinite(x) && std::isfinite(y);
+  constexpr int kBulkPlacementColumns = 5;
+  for (int index = 0; index < acceptedIds.size(); ++index) {
+    NodePresentation node;
+    node.id = newId();
+    node.elementId = acceptedIds.at(index);
+    if (hasDropPosition) {
+      const int column = index % kBulkPlacementColumns;
+      const int row = index / kBulkPlacementColumns;
+      node.geometry = QRectF(x + column * kNodeHorizontalSpacing,
+                             y + row * kNodeVerticalSpacing, kDefaultNodeWidth,
+                             kDefaultNodeHeight);
+    } else {
+      node.geometry = firstAvailableNodeGeometry(prospective);
+    }
+    prospective.nodes.append(node);
+    presentations.append(std::move(node));
+  }
+
+  QList<ConnectorPresentation> connectors;
+  for (const auto &elementId : acceptedIds) {
+    auto additions =
+        connectorsForNewPresentation(m_data, prospective, elementId);
+    prospective.connectors.append(additions);
+    connectors.append(std::move(additions));
+  }
+  pushCommand(std::make_unique<AddElementsToDiagramCommand>(
+      this, m_data, diagramId, std::move(presentations),
+      std::move(connectors)));
+  if (duplicateCount > 0) {
+    m_diagnostics.addInfo(
+        QStringLiteral("command"),
+        QStringLiteral("Skipped %1 element(s) already present on the diagram")
+            .arg(duplicateCount));
+  }
+  return acceptedIds.size();
 }
 
 void ProjectController::removePresentations(const QString &diagramId,

@@ -1,4 +1,5 @@
 #include "core/application_settings.h"
+#include "core/cpp_import.h"
 #include "core/json5.h"
 #include "core/project_controller.h"
 #include "core/project_serializer.h"
@@ -9,6 +10,9 @@
 
 #include <QDir>
 #include <QFile>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QPersistentModelIndex>
 #include <QSettings>
 #include <QSignalSpy>
@@ -60,6 +64,12 @@ private:
   QString m_application;
 };
 
+void writeTestFile(const QString &path, const QByteArray &contents) {
+  QFile file(path);
+  QVERIFY2(file.open(QIODevice::WriteOnly), qPrintable(file.errorString()));
+  QCOMPARE(file.write(contents), contents.size());
+}
+
 } // namespace
 
 class CoreTests final : public QObject {
@@ -71,7 +81,11 @@ private slots:
   void deterministicRoundTrip();
   void validationFindsBrokenReferences();
   void commandUndoRedo();
+  void cppImportUsesClangAndProtectsUserEdits();
+  void cppInterfacePatternClassifiesRealization();
+  void cppImportScansSourceFolderWithoutBuildMetadata();
   void largeModelGeometryCommandUndoRedo();
+  void bulkDiagramPlacementIsOneUndoableCommand();
   void largeDiagramReplacementUsesFirstFreeSlot();
   void deleteElementCommandRestoresCascade();
   void reconnectRelationshipCommandUndoRedo();
@@ -240,6 +254,360 @@ void CoreTests::commandUndoRedo() {
   QCOMPARE(stateChanges.count(), 5);
 }
 
+void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
+  if (!CppImportService::available())
+    QSKIP("This build was configured without libclang");
+
+  QTemporaryDir sourceDirectory;
+  QVERIFY(sourceDirectory.isValid());
+  const QString sourcePath =
+      sourceDirectory.filePath(QStringLiteral("types.cpp"));
+  const auto writeSource = [&](bool sourceChanged, bool hasInheritance = true) {
+    const QByteArray serviceAddition =
+        sourceChanged ? QByteArray("    void stop();\n") : QByteArray{};
+    const QByteArray pointAddition =
+        sourceChanged ? QByteArray("    int z;\n") : QByteArray{};
+    const QByteArray advancedDeclaration =
+        hasInheritance
+            ? QByteArray("class AdvancedService : public Service {\n")
+            : QByteArray("class AdvancedService {\n");
+    writeTestFile(sourcePath,
+                  QByteArray("namespace demo {\n"
+                             "struct Point {\n"
+                             "    int x;\n") +
+                      pointAddition +
+                      QByteArray("private:\n"
+                                 "    double y;\n"
+                                 "public:\n"
+                                 "    double length() const;\n"
+                                 "};\n"
+                                 "class Service {\n"
+                                 "public:\n"
+                                 "    static int run(int count);\n") +
+                      serviceAddition + QByteArray("};\n") +
+                      advancedDeclaration +
+                      QByteArray("public:\n"
+                                 "    void refresh();\n"
+                                 "};\n"
+                                 "}\n"));
+  };
+  writeSource(false);
+
+  QJsonObject command;
+  command.insert(QStringLiteral("directory"), sourceDirectory.path());
+  command.insert(QStringLiteral("file"), sourcePath);
+  command.insert(QStringLiteral("arguments"),
+                 QJsonArray{QStringLiteral("clang++"),
+                            QStringLiteral("-std=c++20"), sourcePath});
+  writeTestFile(
+      sourceDirectory.filePath(QStringLiteral("compile_commands.json")),
+      QJsonDocument(QJsonArray{command}).toJson(QJsonDocument::Indented));
+
+  const CppImportPreview initial =
+      CppImportService::preview(sourceDirectory.path(), {});
+  QVERIFY(initial.ok);
+  QCOMPARE(initial.symbols.size(), 3);
+  QCOMPARE(initial.inheritances.size(), 1);
+  QCOMPARE(initial.elementApplicableCount(), 3);
+  QCOMPARE(initial.relationshipApplicableCount(), 1);
+  QCOMPARE(initial.applicableCount(), 4);
+  QCOMPARE(initial.conflictCount(), 0);
+  QCOMPARE(initial.inheritances.first().derivedName,
+           QStringLiteral("demo::AdvancedService"));
+  QCOMPARE(initial.inheritances.first().baseName,
+           QStringLiteral("demo::Service"));
+  const auto initialPoint = std::find_if(
+      initial.items.cbegin(), initial.items.cend(),
+      [](const CppImportItem &item) {
+        return item.symbol.qualifiedName == QStringLiteral("demo::Point");
+      });
+  QVERIFY(initialPoint != initial.items.cend());
+  QVERIFY(initialPoint->symbol.attributes.contains(QStringLiteral("+ x: int")));
+  QVERIFY(
+      initialPoint->symbol.attributes.contains(QStringLiteral("- y: double")));
+  QVERIFY(initialPoint->symbol.operations.contains(
+      QStringLiteral("+ length(): double const")));
+
+  ProjectController controller;
+  QCOMPARE(controller.applyCppImportPlan(initial), 4);
+  QCOMPARE(controller.data().elements.size(), 3);
+  QCOMPARE(controller.data().relationships.size(), 1);
+  QVERIFY(controller.data().elements.first().extra.contains(
+      QStringLiteral("sourceBinding")));
+  QVERIFY(controller.data().relationships.first().extra.contains(
+      QStringLiteral("sourceBinding")));
+  QVERIFY(controller.data().relationships.first().type ==
+          RelationshipType::Generalization);
+  QCOMPARE(controller.undoText(), QStringLiteral("Import C++ changes"));
+  controller.undo();
+  QVERIFY(controller.data().elements.isEmpty());
+  QVERIFY(controller.data().relationships.isEmpty());
+  controller.redo();
+  QCOMPARE(controller.data().elements.size(), 3);
+  QCOMPARE(controller.data().relationships.size(), 1);
+
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto serviceElement = std::find_if(
+      controller.data().elements.cbegin(), controller.data().elements.cend(),
+      [](const ModelElement &element) {
+        return element.name == QStringLiteral("demo::Service");
+      });
+  const auto advancedElement = std::find_if(
+      controller.data().elements.cbegin(), controller.data().elements.cend(),
+      [](const ModelElement &element) {
+        return element.name == QStringLiteral("demo::AdvancedService");
+      });
+  QVERIFY(serviceElement != controller.data().elements.cend());
+  QVERIFY(advancedElement != controller.data().elements.cend());
+  controller.selectObject(serviceElement->id, QStringLiteral("element"));
+  controller.addSelectedToDiagram(diagramId);
+  QVERIFY(controller.data().diagrams.first().connectors.isEmpty());
+  controller.selectObject(advancedElement->id, QStringLiteral("element"));
+  controller.addSelectedToDiagram(diagramId);
+  QCOMPARE(controller.data().diagrams.first().connectors.size(), 1);
+
+  ProjectData imported = createStarterProject();
+  QCOMPARE(CppImportService::apply(imported, initial), 4);
+  QTemporaryDir importedProjectDirectory;
+  QVERIFY(importedProjectDirectory.isValid());
+  QVERIFY(
+      ProjectSerializer::save(importedProjectDirectory.path(), imported).ok);
+  const LoadOutcome reloaded =
+      ProjectSerializer::load(importedProjectDirectory.path());
+  QVERIFY(reloaded.ok);
+  imported = reloaded.project;
+  QCOMPARE(imported.relationships.size(), 1);
+  QVERIFY(imported.relationships.first().extra.contains(
+      QStringLiteral("sourceBinding")));
+
+  auto point =
+      std::find_if(imported.elements.begin(), imported.elements.end(),
+                   [](const ModelElement &element) {
+                     return element.name == QStringLiteral("demo::Point");
+                   });
+  QVERIFY(point != imported.elements.end());
+  QVERIFY(point->extra.contains(QStringLiteral("sourceBinding")));
+  point->attributes.append(QStringLiteral("+ manual: bool"));
+  imported.relationships.first().name =
+      QStringLiteral("user relationship label");
+
+  writeSource(true);
+  const CppImportPreview changed = CppImportService::preview(
+      sourceDirectory.path(), imported.elements, imported.relationships);
+  QCOMPARE(changed.conflictCount(), 1);
+  QCOMPARE(changed.applicableCount(), 1);
+  const auto changedPoint = std::find_if(
+      changed.items.cbegin(), changed.items.cend(),
+      [](const CppImportItem &item) {
+        return item.symbol.qualifiedName == QStringLiteral("demo::Point");
+      });
+  QVERIFY(changedPoint != changed.items.cend());
+  QVERIFY(changedPoint->action == CppImportAction::Conflict);
+  QCOMPARE(changed.relationshipItems.size(), 1);
+  QVERIFY(changed.relationshipItems.first().action ==
+          CppImportAction::UserModified);
+
+  QCOMPARE(CppImportService::apply(imported, changed), 1);
+  point = std::find_if(imported.elements.begin(), imported.elements.end(),
+                       [](const ModelElement &element) {
+                         return element.name == QStringLiteral("demo::Point");
+                       });
+  QVERIFY(point != imported.elements.end());
+  QVERIFY(point->attributes.contains(QStringLiteral("+ manual: bool")));
+  QVERIFY(!point->attributes.contains(QStringLiteral("+ z: int")));
+  const auto service =
+      std::find_if(imported.elements.cbegin(), imported.elements.cend(),
+                   [](const ModelElement &element) {
+                     return element.name == QStringLiteral("demo::Service");
+                   });
+  QVERIFY(service != imported.elements.cend());
+  QVERIFY(service->operations.contains(QStringLiteral("+ stop(): void")));
+  QCOMPARE(imported.relationships.first().name,
+           QStringLiteral("user relationship label"));
+
+  writeSource(true, false);
+  const CppImportPreview inheritanceRemoved = CppImportService::preview(
+      sourceDirectory.path(), imported.elements, imported.relationships);
+  QCOMPARE(inheritanceRemoved.inheritances.size(), 0);
+  QCOMPARE(inheritanceRemoved.relationshipItems.size(), 1);
+  QVERIFY(inheritanceRemoved.relationshipItems.first().action ==
+          CppImportAction::MissingSource);
+  QCOMPARE(CppImportService::apply(imported, inheritanceRemoved), 0);
+  QCOMPARE(imported.relationships.size(), 1);
+}
+
+void CoreTests::cppInterfacePatternClassifiesRealization() {
+  if (!CppImportService::available())
+    QSKIP("This build was configured without libclang");
+
+  QTemporaryDir sourceDirectory;
+  QVERIFY(sourceDirectory.isValid());
+  const QString sourcePath =
+      sourceDirectory.filePath(QStringLiteral("interfaces.cpp"));
+  writeTestFile(sourcePath,
+                QByteArray("namespace naming {\n"
+                           "class IService {\n"
+                           "public:\n"
+                           "    virtual ~IService() = default;\n"
+                           "    virtual void run() = 0;\n"
+                           "};\n"
+                           "class Base {};\n"
+                           "class Worker : public IService, public Base {};\n"
+                           "}\n"));
+
+  QJsonObject command;
+  command.insert(QStringLiteral("directory"), sourceDirectory.path());
+  command.insert(QStringLiteral("file"), sourcePath);
+  command.insert(QStringLiteral("arguments"),
+                 QJsonArray{QStringLiteral("clang++"),
+                            QStringLiteral("-std=c++20"), sourcePath});
+  writeTestFile(
+      sourceDirectory.filePath(QStringLiteral("compile_commands.json")),
+      QJsonDocument(QJsonArray{command}).toJson(QJsonDocument::Indented));
+
+  const CppImportPreview conventional =
+      CppImportService::preview(sourceDirectory.path(), {});
+  QVERIFY(conventional.ok);
+  QCOMPARE(conventional.inheritances.size(), 2);
+  const auto relationshipTo = [&](const CppImportPreview &preview,
+                                  const QString &baseName) {
+    return std::find_if(preview.inheritances.cbegin(),
+                        preview.inheritances.cend(),
+                        [&](const CppSourceInheritance &inheritance) {
+                          return inheritance.baseName == baseName;
+                        });
+  };
+  auto interfaceEdge =
+      relationshipTo(conventional, QStringLiteral("naming::IService"));
+  auto baseEdge = relationshipTo(conventional, QStringLiteral("naming::Base"));
+  QVERIFY(interfaceEdge != conventional.inheritances.cend());
+  QVERIFY(baseEdge != conventional.inheritances.cend());
+  QVERIFY(interfaceEdge->relationshipType == RelationshipType::Realization);
+  QVERIFY(baseEdge->relationshipType == RelationshipType::Generalization);
+  QVERIFY(interfaceEdge->classificationReason.contains(
+      CppImportOptions::defaultInterfacePattern()));
+
+  ProjectData imported = createStarterProject();
+  QCOMPARE(CppImportService::apply(imported, conventional), 5);
+
+  CppImportOptions customOptions;
+  customOptions.interfacePattern = QStringLiteral("^Base$");
+  const CppImportPreview custom =
+      CppImportService::preview(sourceDirectory.path(), imported.elements,
+                                imported.relationships, customOptions);
+  QVERIFY(custom.ok);
+  QCOMPARE(custom.relationshipApplicableCount(), 2);
+  for (const auto &item : custom.relationshipItems)
+    QVERIFY(item.action == CppImportAction::Update);
+  QCOMPARE(CppImportService::apply(imported, custom), 2);
+
+  const auto relationshipTypeForTarget = [&](const QString &targetName) {
+    const auto target =
+        std::find_if(imported.elements.cbegin(), imported.elements.cend(),
+                     [&](const ModelElement &element) {
+                       return element.name == targetName;
+                     });
+    if (target == imported.elements.cend())
+      return std::optional<RelationshipType>{};
+    const auto relationship = std::find_if(
+        imported.relationships.cbegin(), imported.relationships.cend(),
+        [&](const Relationship &candidate) {
+          return candidate.targetId == target->id;
+        });
+    if (relationship == imported.relationships.cend())
+      return std::optional<RelationshipType>{};
+    return std::optional<RelationshipType>{relationship->type};
+  };
+  const auto interfaceType =
+      relationshipTypeForTarget(QStringLiteral("naming::IService"));
+  const auto baseType =
+      relationshipTypeForTarget(QStringLiteral("naming::Base"));
+  QVERIFY(interfaceType.has_value());
+  QVERIFY(baseType.has_value());
+  QVERIFY(*interfaceType == RelationshipType::Generalization);
+  QVERIFY(*baseType == RelationshipType::Realization);
+
+  CppImportOptions invalidOptions;
+  invalidOptions.interfacePattern = QStringLiteral("[");
+  const CppImportPreview invalid =
+      CppImportService::preview(sourceDirectory.path(), {}, {}, invalidOptions);
+  QVERIFY(!invalid.ok);
+  QVERIFY(!invalid.diagnostics.isEmpty());
+}
+
+void CoreTests::cppImportScansSourceFolderWithoutBuildMetadata() {
+  if (!CppImportService::available())
+    QSKIP("This build was configured without libclang");
+
+  QTemporaryDir sourceDirectory;
+  QVERIFY(sourceDirectory.isValid());
+  QDir root(sourceDirectory.path());
+  QVERIFY(root.mkpath(QStringLiteral("include/model")));
+  QVERIFY(root.mkpath(QStringLiteral("src")));
+  QVERIFY(root.mkpath(QStringLiteral("build")));
+
+  writeTestFile(root.filePath(QStringLiteral("include/model/IWorker.h")),
+                QByteArray("#pragma once\n"
+                           "namespace quick {\n"
+                           "class IWorker {\n"
+                           "public:\n"
+                           "    virtual void run() = 0;\n"
+                           "};\n"
+                           "}\n"));
+  writeTestFile(root.filePath(QStringLiteral("include/model/Worker.h")),
+                QByteArray("#pragma once\n"
+                           "#include \"model/IWorker.h\"\n"
+                           "namespace quick {\n"
+                           "class Worker : public IWorker {\n"
+                           "public:\n"
+                           "    void run();\n"
+                           "};\n"
+                           "}\n"));
+  writeTestFile(root.filePath(QStringLiteral("src/Worker.cpp")),
+                QByteArray("#include \"model/Worker.h\"\n"
+                           "void quick::Worker::run() {}\n"));
+  writeTestFile(
+      root.filePath(QStringLiteral("include/model/Standalone.h")),
+      QByteArray("#pragma once\n"
+                 "#include <dependency-not-installed.hpp>\n"
+                 "namespace quick { struct Standalone { int value; }; }\n"));
+  writeTestFile(root.filePath(QStringLiteral("build/GeneratedNoise.h")),
+                QByteArray("class GeneratedNoise {};\n"));
+
+  const CppImportPreview preview =
+      CppImportService::preview(sourceDirectory.path(), {});
+  QVERIFY(preview.ok);
+  QVERIFY(!preview.usedCompilationDatabase);
+  QVERIFY(preview.compilationDatabasePath.isEmpty());
+  QCOMPARE(preview.symbols.size(), 3);
+  QCOMPARE(preview.inheritances.size(), 1);
+  QCOMPARE(preview.applicableCount(), 4);
+  const auto hasSymbol = [&](const QString &name) {
+    return std::any_of(preview.symbols.cbegin(), preview.symbols.cend(),
+                       [&](const CppSourceSymbol &symbol) {
+                         return symbol.qualifiedName == name;
+                       });
+  };
+  QVERIFY(hasSymbol(QStringLiteral("quick::IWorker")));
+  QVERIFY(hasSymbol(QStringLiteral("quick::Worker")));
+  QVERIFY(hasSymbol(QStringLiteral("quick::Standalone")));
+  QVERIFY(!hasSymbol(QStringLiteral("GeneratedNoise")));
+  QVERIFY(preview.inheritances.first().relationshipType ==
+          RelationshipType::Realization);
+  QVERIFY(std::none_of(preview.diagnostics.cbegin(), preview.diagnostics.cend(),
+                       [](const Diagnostic &diagnostic) {
+                         return diagnostic.severity ==
+                                DiagnosticSeverity::Error;
+                       }));
+  QVERIFY(std::any_of(preview.diagnostics.cbegin(), preview.diagnostics.cend(),
+                      [](const Diagnostic &diagnostic) {
+                        return diagnostic.severity ==
+                                   DiagnosticSeverity::Warning &&
+                               diagnostic.message.contains(
+                                   QStringLiteral("dependency-not-installed"));
+                      }));
+}
+
 void CoreTests::largeModelGeometryCommandUndoRedo() {
   QTemporaryDir temporary;
   QVERIFY(temporary.isValid());
@@ -262,6 +630,59 @@ void CoreTests::largeModelGeometryCommandUndoRedo() {
   QCOMPARE(controller.data(), before);
   controller.redo();
   QCOMPARE(controller.data(), after);
+}
+
+void CoreTests::bulkDiagramPlacementIsOneUndoableCommand() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString firstElement =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const QString secondElement =
+      controller.addElement(QStringLiteral("struct"), diagramId);
+  const QModelIndex firstTreeIndex = controller.treeModel()->indexForObject(
+      firstElement, QStringLiteral("element"));
+  const QModelIndex secondTreeIndex = controller.treeModel()->indexForObject(
+      secondElement, QStringLiteral("element"));
+  QCOMPARE(controller.treeModel()->elementIdsForIndexes(
+               {secondTreeIndex, firstTreeIndex}),
+           QStringList({firstElement, secondElement}));
+  const auto initialNodes = controller.data().diagrams.first().nodes;
+  QCOMPARE(initialNodes.size(), 2);
+  QVERIFY(!controller
+               .createRelationship(diagramId, initialNodes.at(0).id,
+                                   initialNodes.at(1).id,
+                                   QStringLiteral("dependency"))
+               .isEmpty());
+
+  controller.removePresentations(
+      diagramId, {initialNodes.at(0).id, initialNodes.at(1).id});
+  const ProjectData beforeDrop = controller.data();
+  QVERIFY(beforeDrop.diagrams.first().nodes.isEmpty());
+  QVERIFY(beforeDrop.diagrams.first().connectors.isEmpty());
+  QCOMPARE(beforeDrop.relationships.size(), 1);
+
+  QCOMPARE(controller.addElementsToDiagram(
+               diagramId, {firstElement, secondElement}, 100.0, 200.0),
+           2);
+  const ProjectData afterDrop = controller.data();
+  QCOMPARE(afterDrop.diagrams.first().nodes.size(), 2);
+  QCOMPARE(afterDrop.diagrams.first().connectors.size(), 1);
+  QCOMPARE(afterDrop.diagrams.first().nodes.at(0).geometry,
+           QRectF(100.0, 200.0, 220.0, 120.0));
+  QCOMPARE(afterDrop.diagrams.first().nodes.at(1).geometry,
+           QRectF(350.0, 200.0, 220.0, 120.0));
+
+  // A whole tree drop is one command regardless of how many presentations and
+  // automatically materialized connectors it contains.
+  controller.undo();
+  QCOMPARE(controller.data(), beforeDrop);
+  controller.redo();
+  QCOMPARE(controller.data(), afterDrop);
+
+  QCOMPARE(controller.addElementsToDiagram(
+               diagramId, {firstElement, secondElement}, 0.0, 0.0),
+           0);
+  QCOMPARE(controller.data(), afterDrop);
 }
 
 void CoreTests::largeDiagramReplacementUsesFirstFreeSlot() {
@@ -824,6 +1245,8 @@ void CoreTests::applicationPreferencesPersist() {
              ApplicationSettings::kDefaultAlignmentGuidesEnabled);
     QCOMPARE(settings.gridSpacing(), ApplicationSettings::kDefaultGridSpacing);
     QCOMPARE(settings.defaultConnectorRouting(), QStringLiteral("straight"));
+    QCOMPARE(settings.cppInterfacePattern(),
+             ApplicationSettings::defaultCppInterfacePattern());
     QCOMPARE(settings.relationshipGestureKeys(),
              ApplicationSettings::defaultRelationshipGestureKeys());
     QSignalSpy changes(&settings,
@@ -833,6 +1256,9 @@ void CoreTests::applicationPreferencesPersist() {
     settings.setAlignmentGuidesEnabled(false);
     settings.setGridSpacing(35);
     settings.setDefaultConnectorRouting(QStringLiteral("orthogonal"));
+    QVERIFY(settings.setCppInterfacePattern(QStringLiteral("^Abstract.*$")));
+    QVERIFY(!settings.setCppInterfacePattern(QStringLiteral("[")));
+    QCOMPARE(settings.cppInterfacePattern(), QStringLiteral("^Abstract.*$"));
     QVariantMap gestureKeys =
         ApplicationSettings::defaultRelationshipGestureKeys();
     gestureKeys.insert(QStringLiteral("dependency"), QStringLiteral("X"));
@@ -853,6 +1279,7 @@ void CoreTests::applicationPreferencesPersist() {
     QVERIFY(!restored.alignmentGuidesEnabled());
     QCOMPARE(restored.gridSpacing(), 35);
     QCOMPARE(restored.defaultConnectorRouting(), QStringLiteral("orthogonal"));
+    QCOMPARE(restored.cppInterfacePattern(), QStringLiteral("^Abstract.*$"));
     QVariantMap expectedGestureKeys =
         ApplicationSettings::defaultRelationshipGestureKeys();
     expectedGestureKeys.insert(QStringLiteral("dependency"),
@@ -876,6 +1303,8 @@ void CoreTests::applicationPreferencesPersist() {
              ApplicationSettings::kDefaultAlignmentGuidesEnabled);
     QCOMPARE(restored.gridSpacing(), ApplicationSettings::kDefaultGridSpacing);
     QCOMPARE(restored.defaultConnectorRouting(), QStringLiteral("straight"));
+    QCOMPARE(restored.cppInterfacePattern(),
+             ApplicationSettings::defaultCppInterfacePattern());
     QCOMPARE(restored.relationshipGestureKeys(),
              ApplicationSettings::defaultRelationshipGestureKeys());
   }

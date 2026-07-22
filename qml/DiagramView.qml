@@ -7,6 +7,10 @@ Item {
     id: root
     required property string diagramId
 
+    function addElementsAt(elementIds, x, y) {
+        canvas.addElementsAt(elementIds, x, y)
+    }
+
     DiagramCanvas {
         id: canvas
         anchors.fill: parent

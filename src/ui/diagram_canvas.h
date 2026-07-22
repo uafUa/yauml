@@ -79,6 +79,8 @@ public:
   void setRelationshipGestureKeys(const QVariantMap &keys);
 
   Q_INVOKABLE void fitToContent();
+  Q_INVOKABLE void addElementsAt(const QStringList &elementIds, qreal x,
+                                 qreal y);
   Q_INVOKABLE void createElementAtContextPosition(const QString &type);
   Q_INVOKABLE void createElementAtViewportCenter(const QString &type);
   Q_INVOKABLE void createRelationship(const QString &type);

@@ -5,6 +5,7 @@ import QtQuick.Layouts
 Rectangle {
     id: root
     readonly property string diagramMimeType: "application/x-uuml-diagram-id"
+    readonly property string elementsMimeType: "application/x-uuml-element-ids"
     required property string hostId
     property int modelRevision: 0
     property var diagramIds: {
@@ -40,6 +41,25 @@ Rectangle {
         drop.acceptProposedAction()
     }
 
+    function acceptElementDrop(drop) {
+        if (drop.formats.indexOf(root.elementsMimeType) < 0)
+            return
+        let elementIds = []
+        try {
+            elementIds = JSON.parse(drop.getDataAsString(root.elementsMimeType))
+        } catch (error) {
+            return
+        }
+        const diagramIndex = root.diagramIds.indexOf(root.currentDiagramId)
+        const view = diagramIndex >= 0 ? diagramViews.itemAt(diagramIndex) : null
+        if (!view || elementIds.length === 0)
+            return
+        const point = view.mapFromItem(root, drop.x, drop.y)
+        view.addElementsAt(elementIds, point.x, point.y)
+        workspaceController.activeDiagramId = root.currentDiagramId
+        drop.acceptProposedAction()
+    }
+
     onDiagramIdsChanged: {
         if (diagramIds.indexOf(currentDiagramId) < 0)
             currentDiagramId = diagramIds.length > 0 ? diagramIds[0] : ""
@@ -63,9 +83,12 @@ Rectangle {
         anchors.fill: parent
         // Native drags expose MIME formats to DropArea.keys. Using the same
         // value here and in Drag.mimeData keeps cross-window drops eligible.
-        keys: [root.diagramMimeType]
+        keys: [root.diagramMimeType, root.elementsMimeType]
         onDropped: function(drop) {
-            root.acceptDiagramDrop(drop)
+            if (drop.formats.indexOf(root.elementsMimeType) >= 0)
+                root.acceptElementDrop(drop)
+            else
+                root.acceptDiagramDrop(drop)
         }
     }
 
@@ -209,6 +232,7 @@ Rectangle {
             currentIndex: Math.max(0, root.diagramIds.indexOf(root.currentDiagramId))
 
             Repeater {
+                id: diagramViews
                 model: root.diagramIds
                 DiagramView {
                     required property var modelData

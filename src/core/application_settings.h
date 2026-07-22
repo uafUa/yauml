@@ -27,6 +27,8 @@ class ApplicationSettings final : public QObject {
           setDefaultConnectorRouting NOTIFY defaultConnectorRoutingChanged)
   Q_PROPERTY(QVariantMap relationshipGestureKeys READ relationshipGestureKeys
                  NOTIFY relationshipGestureKeysChanged)
+  Q_PROPERTY(QString cppInterfacePattern READ cppInterfacePattern NOTIFY
+                 cppInterfacePatternChanged)
   Q_PROPERTY(QVariantList recentProjects READ recentProjects NOTIFY
                  recentProjectsChanged)
 
@@ -44,6 +46,7 @@ public:
   static constexpr int kMaximumRecentProjects = 10;
 
   static QVariantMap defaultRelationshipGestureKeys();
+  static QString defaultCppInterfacePattern();
 
   explicit ApplicationSettings(QObject *parent = nullptr);
 
@@ -59,6 +62,9 @@ public:
   void setDefaultConnectorRouting(const QString &routing);
   QVariantMap relationshipGestureKeys() const;
   Q_INVOKABLE bool setRelationshipGestureKeys(const QVariantMap &keys);
+  QString cppInterfacePattern() const;
+  Q_INVOKABLE bool setCppInterfacePattern(const QString &pattern);
+  Q_INVOKABLE bool isValidCppInterfacePattern(const QString &pattern) const;
   QVariantList recentProjects() const;
   Q_INVOKABLE void addRecentProject(const QString &projectPath);
   Q_INVOKABLE void clearRecentProjects();
@@ -71,11 +77,13 @@ signals:
   void gridSpacingChanged();
   void defaultConnectorRoutingChanged();
   void relationshipGestureKeysChanged();
+  void cppInterfacePatternChanged();
   void recentProjectsChanged();
 
 private:
   void persistDiagramPreferences() const;
   void persistConnectorPreferences() const;
+  void persistCppImportPreferences() const;
   void persistRecentProjects() const;
 
   int m_defaultDistributionGap = kDefaultDistributionGap;
@@ -84,6 +92,7 @@ private:
   int m_gridSpacing = kDefaultGridSpacing;
   ConnectorRouting m_defaultConnectorRouting = kDefaultConnectorRouting;
   QVariantMap m_relationshipGestureKeys;
+  QString m_cppInterfacePattern;
   QStringList m_recentProjectPaths;
 };
 

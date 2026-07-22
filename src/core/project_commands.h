@@ -26,6 +26,32 @@ private:
   qsizetype m_presentationIndex = -1;
 };
 
+class ApplyCppImportCommand final : public ProjectCommand {
+public:
+  ApplyCppImportCommand(ProjectController *controller,
+                        const ProjectData &project,
+                        QList<ModelElement> desiredElements,
+                        QList<Relationship> desiredRelationships);
+
+private:
+  struct ElementChange {
+    qsizetype index = -1;
+    std::optional<ModelElement> before;
+    ModelElement after;
+  };
+  struct RelationshipChange {
+    qsizetype index = -1;
+    std::optional<Relationship> before;
+    Relationship after;
+  };
+
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QList<ElementChange> m_changes;
+  QList<RelationshipChange> m_relationshipChanges;
+};
+
 class CreateDiagramCommand final : public ProjectCommand {
 public:
   CreateDiagramCommand(ProjectController *controller,
@@ -58,6 +84,34 @@ private:
   QString m_diagramId;
   NodePresentation m_presentation;
   qsizetype m_index;
+  QList<PositionedConnector> m_connectors;
+};
+
+// A tree drop is one user action even when it places hundreds of elements.
+// Store only the inserted presentations and connector positions so undo stays
+// proportional to the change instead of copying the complete project model.
+class AddElementsToDiagramCommand final : public ProjectCommand {
+public:
+  AddElementsToDiagramCommand(ProjectController *controller,
+                              const ProjectData &project, QString diagramId,
+                              QList<NodePresentation> presentations,
+                              QList<ConnectorPresentation> connectors);
+
+private:
+  struct PositionedNode {
+    qsizetype index;
+    NodePresentation value;
+  };
+  struct PositionedConnector {
+    qsizetype index;
+    ConnectorPresentation value;
+  };
+
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  QList<PositionedNode> m_presentations;
   QList<PositionedConnector> m_connectors;
 };
 

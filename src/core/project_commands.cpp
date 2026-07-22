@@ -73,6 +73,83 @@ void CreateElementCommand::revert(ProjectData &project) {
   removeRecordedValue(project.elements, m_elementIndex, m_element.id);
 }
 
+ApplyCppImportCommand::ApplyCppImportCommand(
+    ProjectController *controller, const ProjectData &project,
+    QList<ModelElement> desiredElements,
+    QList<Relationship> desiredRelationships)
+    : ProjectCommand(controller, QStringLiteral("Import C++ changes")) {
+  m_changes.reserve(desiredElements.size());
+  qsizetype nextInsertionIndex = project.elements.size();
+  for (auto &desired : desiredElements) {
+    const qsizetype index = indexOfId(project.elements, desired.id);
+    if (index >= 0) {
+      if (project.elements.at(index) != desired)
+        m_changes.append(
+            {index, project.elements.at(index), std::move(desired)});
+    } else {
+      m_changes.append(
+          {nextInsertionIndex++, std::nullopt, std::move(desired)});
+    }
+  }
+
+  m_relationshipChanges.reserve(desiredRelationships.size());
+  qsizetype nextRelationshipIndex = project.relationships.size();
+  for (auto &desired : desiredRelationships) {
+    const qsizetype index = indexOfId(project.relationships, desired.id);
+    if (index >= 0) {
+      if (project.relationships.at(index) != desired) {
+        m_relationshipChanges.append(
+            {index, project.relationships.at(index), std::move(desired)});
+      }
+    } else {
+      m_relationshipChanges.append(
+          {nextRelationshipIndex++, std::nullopt, std::move(desired)});
+    }
+  }
+}
+
+void ApplyCppImportCommand::execute(ProjectData &project) {
+  for (const auto &change : m_changes) {
+    if (change.before) {
+      if (auto *element = findElement(project, change.after.id))
+        *element = change.after;
+    } else {
+      insertAtRecordedPosition(project.elements, change.index, change.after);
+    }
+  }
+  for (const auto &change : m_relationshipChanges) {
+    if (change.before) {
+      if (auto *relationship = findRelationship(project, change.after.id))
+        *relationship = change.after;
+    } else {
+      insertAtRecordedPosition(project.relationships, change.index,
+                               change.after);
+    }
+  }
+}
+
+void ApplyCppImportCommand::revert(ProjectData &project) {
+  for (auto change = m_relationshipChanges.crbegin();
+       change != m_relationshipChanges.crend(); ++change) {
+    if (change->before) {
+      if (auto *relationship = findRelationship(project, change->after.id))
+        *relationship = *change->before;
+    } else {
+      removeRecordedValue(project.relationships, change->index,
+                          change->after.id);
+    }
+  }
+  for (auto change = m_changes.crbegin(); change != m_changes.crend();
+       ++change) {
+    if (change->before) {
+      if (auto *element = findElement(project, change->after.id))
+        *element = *change->before;
+    } else {
+      removeRecordedValue(project.elements, change->index, change->after.id);
+    }
+  }
+}
+
 CreateDiagramCommand::CreateDiagramCommand(ProjectController *controller,
                                            const ProjectData &project,
                                            Diagram diagram)
@@ -122,6 +199,56 @@ void AddElementToDiagramCommand::revert(ProjectData &project) {
       removeRecordedValue(diagram->connectors, connector->index,
                           connector->value.id);
     removeRecordedValue(diagram->nodes, m_index, m_presentation.id);
+  }
+}
+
+AddElementsToDiagramCommand::AddElementsToDiagramCommand(
+    ProjectController *controller, const ProjectData &project,
+    QString diagramId, QList<NodePresentation> presentations,
+    QList<ConnectorPresentation> connectors)
+    : ProjectCommand(controller,
+                     presentations.size() == 1
+                         ? QStringLiteral("Add element to diagram")
+                         : QStringLiteral("Add %1 elements to diagram")
+                               .arg(presentations.size())),
+      m_diagramId(std::move(diagramId)) {
+  const auto *diagram = findDiagram(project, m_diagramId);
+  Q_ASSERT(diagram);
+  if (!diagram)
+    return;
+
+  qsizetype nodeIndex = diagram->nodes.size();
+  m_presentations.reserve(presentations.size());
+  for (auto &presentation : presentations)
+    m_presentations.append({nodeIndex++, std::move(presentation)});
+
+  qsizetype connectorIndex = diagram->connectors.size();
+  m_connectors.reserve(connectors.size());
+  for (auto &connector : connectors)
+    m_connectors.append({connectorIndex++, std::move(connector)});
+}
+
+void AddElementsToDiagramCommand::execute(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    for (const auto &presentation : m_presentations)
+      insertAtRecordedPosition(diagram->nodes, presentation.index,
+                               presentation.value);
+    for (const auto &connector : m_connectors)
+      insertAtRecordedPosition(diagram->connectors, connector.index,
+                               connector.value);
+  }
+}
+
+void AddElementsToDiagramCommand::revert(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    for (auto connector = m_connectors.crbegin();
+         connector != m_connectors.crend(); ++connector)
+      removeRecordedValue(diagram->connectors, connector->index,
+                          connector->value.id);
+    for (auto presentation = m_presentations.crbegin();
+         presentation != m_presentations.crend(); ++presentation)
+      removeRecordedValue(diagram->nodes, presentation->index,
+                          presentation->value.id);
   }
 }
 

@@ -1,4 +1,6 @@
 #include "core/application_settings.h"
+#include "core/cpp_import.h"
+#include "core/cpp_import_controller.h"
 #include "core/project_controller.h"
 #include "core/project_serializer.h"
 #include "core/workspace_controller.h"
@@ -18,6 +20,19 @@
 
 namespace {
 
+void writeDiagnostics(const QList<uuml::Diagnostic> &diagnostics,
+                      QTextStream &out, QTextStream &err) {
+  for (const auto &diagnostic : diagnostics) {
+    QTextStream &stream =
+        diagnostic.severity == uuml::DiagnosticSeverity::Error ? err : out;
+    stream << uuml::toString(diagnostic.severity).toUpper() << " ["
+           << diagnostic.category << "] " << diagnostic.message;
+    if (!diagnostic.elementId.isEmpty())
+      stream << " (" << diagnostic.elementId << ")";
+    stream << '\n';
+  }
+}
+
 int runValidation(int argc, char *argv[]) {
   QCoreApplication application(argc, argv);
   application.setApplicationName(QStringLiteral("uuml"));
@@ -30,15 +45,7 @@ int runValidation(int argc, char *argv[]) {
   }
 
   const auto outcome = uuml::ProjectSerializer::load(arguments.at(2));
-  for (const auto &diagnostic : outcome.diagnostics) {
-    QTextStream &stream =
-        diagnostic.severity == uuml::DiagnosticSeverity::Error ? err : out;
-    stream << uuml::toString(diagnostic.severity).toUpper() << " ["
-           << diagnostic.category << "] " << diagnostic.message;
-    if (!diagnostic.elementId.isEmpty())
-      stream << " (" << diagnostic.elementId << ")";
-    stream << '\n';
-  }
+  writeDiagnostics(outcome.diagnostics, out, err);
   if (outcome.ok) {
     out << "Valid uuml project: " << outcome.project.name << " ("
         << outcome.project.elements.size() << " elements, "
@@ -48,11 +55,94 @@ int runValidation(int argc, char *argv[]) {
   return 2;
 }
 
+int runCppImportCommand(int argc, char *argv[], bool apply) {
+  QCoreApplication application(argc, argv);
+  application.setApplicationName(QStringLiteral("uuml"));
+  application.setOrganizationName(QStringLiteral("uuml"));
+  QTextStream out(stdout);
+  QTextStream err(stderr);
+  const QStringList arguments = application.arguments();
+  if (arguments.size() < 4) {
+    err << "Usage: uuml " << (apply ? "cpp-import" : "cpp-preview")
+        << " <project-directory> <source-directory>\n";
+    return 64;
+  }
+
+  const QString projectPath = arguments.at(2);
+  const auto load = uuml::ProjectSerializer::load(projectPath);
+  writeDiagnostics(load.diagnostics, out, err);
+  if (!load.ok)
+    return 2;
+
+  uuml::ApplicationSettings settings;
+  uuml::CppImportOptions options;
+  options.interfacePattern = settings.cppInterfacePattern();
+  uuml::CppImportPreview preview =
+      uuml::CppImportService::preview(arguments.at(3), load.project.elements,
+                                      load.project.relationships, options);
+  writeDiagnostics(preview.diagnostics, out, err);
+  for (const auto &item : preview.items) {
+    out << uuml::toString(item.action).toUpper() << " "
+        << item.symbol.qualifiedName;
+    if (!item.symbol.filePath.isEmpty())
+      out << " — " << item.symbol.filePath << ':' << item.symbol.line;
+    if (!item.message.isEmpty())
+      out << " — " << item.message;
+    out << '\n';
+  }
+  for (const auto &item : preview.relationshipItems) {
+    out << uuml::toString(item.action).toUpper() << " "
+        << item.source.derivedName << " -> " << item.source.baseName << " ("
+        << uuml::toString(item.source.relationshipType) << ')';
+    if (!item.source.filePath.isEmpty())
+      out << " — " << item.source.filePath << ':' << item.source.line;
+    if (!item.message.isEmpty())
+      out << " — " << item.message;
+    if (!item.source.classificationReason.isEmpty())
+      out << " — " << item.source.classificationReason;
+    out << '\n';
+  }
+  if (!preview.ok)
+    return 2;
+
+  if (!apply) {
+    out << "C++ preview ("
+        << (preview.usedCompilationDatabase ? "compilation database"
+                                            : "best-effort source scan")
+        << "): " << preview.symbols.size() << " type(s), "
+        << preview.inheritances.size() << " inheritance relationship(s), "
+        << preview.applicableCount() << " applicable change(s), "
+        << preview.conflictCount() << " conflict(s)\n";
+    return preview.conflictCount() > 0 ? 3 : 0;
+  }
+
+  uuml::ProjectData imported = load.project;
+  const int appliedCount = uuml::CppImportService::apply(imported, preview);
+  if (appliedCount > 0) {
+    const auto save = uuml::ProjectSerializer::save(projectPath, imported);
+    writeDiagnostics(save.diagnostics, out, err);
+    if (!save.ok)
+      return 2;
+  }
+  out << "Imported " << appliedCount << " C++ model change(s)";
+  if (preview.conflictCount() > 0)
+    out << "; " << preview.conflictCount()
+        << " conflict(s) retained the user model";
+  out << '\n';
+  return preview.conflictCount() > 0 ? 3 : 0;
+}
+
 } // namespace
 
 int main(int argc, char *argv[]) {
   if (argc > 1 && QString::fromLocal8Bit(argv[1]) == QStringLiteral("validate"))
     return runValidation(argc, argv);
+  if (argc > 1 &&
+      QString::fromLocal8Bit(argv[1]) == QStringLiteral("cpp-preview"))
+    return runCppImportCommand(argc, argv, false);
+  if (argc > 1 &&
+      QString::fromLocal8Bit(argv[1]) == QStringLiteral("cpp-import"))
+    return runCppImportCommand(argc, argv, true);
 
   // Connector and shape geometry is rendered as batched triangles. Requesting
   // multisampling before the GUI application exists smooths their edges on all
@@ -70,8 +160,9 @@ int main(int argc, char *argv[]) {
   qmlRegisterType<uuml::DiagramCanvas>("Uuml.Native", 1, 0, "DiagramCanvas");
 
   uuml::ProjectController project;
-  uuml::WorkspaceController workspace(&project, true);
   uuml::ApplicationSettings applicationSettings;
+  uuml::CppImportController cppImport(&project, &applicationSettings);
+  uuml::WorkspaceController workspace(&project, true);
   uuml::ui::UiTheme uiTheme;
   QObject::connect(&project, &uuml::ProjectController::projectOpened,
                    &applicationSettings,
@@ -90,6 +181,8 @@ int main(int argc, char *argv[]) {
       QStringLiteral("workspaceController"), &workspace);
   engine.rootContext()->setContextProperty(
       QStringLiteral("applicationSettings"), &applicationSettings);
+  engine.rootContext()->setContextProperty(
+      QStringLiteral("cppImportController"), &cppImport);
   engine.rootContext()->setContextProperty(QStringLiteral("uiTheme"), &uiTheme);
   QObject::connect(
       &engine, &QQmlApplicationEngine::objectCreationFailed, &application,

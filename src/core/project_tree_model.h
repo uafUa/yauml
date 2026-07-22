@@ -23,6 +23,9 @@ public:
   QHash<int, QByteArray> roleNames() const override;
   Q_INVOKABLE QModelIndex indexForObject(const QString &objectId,
                                          const QString &kind) const;
+  Q_INVOKABLE QStringList
+  elementIdsForIndexes(const QModelIndexList &indexes) const;
+  Q_INVOKABLE void startElementDrag(const QStringList &elementIds);
 
 public slots:
   void reset();

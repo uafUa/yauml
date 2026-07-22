@@ -1,0 +1,61 @@
+#pragma once
+
+#include "core/cpp_import.h"
+
+#include <QFutureWatcher>
+#include <QObject>
+#include <QUrl>
+#include <QVariantList>
+
+namespace uuml {
+
+class ApplicationSettings;
+class ProjectController;
+
+// QML-facing orchestration only. Clang discovery and import planning remain in
+// CppImportService so the GUI and headless commands use identical behavior.
+class CppImportController final : public QObject {
+  Q_OBJECT
+  Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
+  Q_PROPERTY(bool canApply READ canApply NOTIFY previewChanged)
+  Q_PROPERTY(QString summary READ summary NOTIFY previewChanged)
+  Q_PROPERTY(QString compilationDatabasePath READ compilationDatabasePath NOTIFY
+                 previewChanged)
+  Q_PROPERTY(QVariantList previewItems READ previewItems NOTIFY previewChanged)
+
+public:
+  explicit CppImportController(ProjectController *project,
+                               ApplicationSettings *settings,
+                               QObject *parent = nullptr);
+
+  bool busy() const;
+  bool canApply() const;
+  QString summary() const;
+  QString compilationDatabasePath() const;
+  QVariantList previewItems() const;
+
+  Q_INVOKABLE void preview(const QUrl &sourceOrBuildDirectory);
+  Q_INVOKABLE void applyPreview();
+  Q_INVOKABLE void clearPreview();
+
+signals:
+  void busyChanged();
+  void previewChanged();
+  void attentionRequired();
+  void importApplied(int count);
+
+private:
+  void finishPreview();
+  void publishDiagnostics(const QList<Diagnostic> &diagnostics);
+  void rebuildViewState();
+
+  ProjectController *m_project;
+  ApplicationSettings *m_settings;
+  QFutureWatcher<CppImportPreview> m_watcher;
+  CppImportPreview m_preview;
+  QVariantList m_previewItems;
+  QString m_summary;
+  bool m_busy = false;
+};
+
+} // namespace uuml

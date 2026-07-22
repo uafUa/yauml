@@ -13,6 +13,7 @@
 namespace uuml {
 
 class ProjectCommand;
+struct CppImportPreview;
 
 class ProjectController final : public QObject {
   Q_OBJECT
@@ -69,12 +70,20 @@ public:
   Q_INVOKABLE void undo();
   Q_INVOKABLE void redo();
 
+  // Applies a previously discovered C++ plan as one compact undo command.
+  // Callers re-plan immediately before invoking this method so user edits made
+  // while a preview was open are never overwritten by stale state.
+  int applyCppImportPlan(const CppImportPreview &preview);
+
   Q_INVOKABLE QString addElement(const QString &type,
                                  const QString &diagramId = {});
   Q_INVOKABLE QString addElementAt(const QString &type,
                                    const QString &diagramId, qreal x, qreal y);
   Q_INVOKABLE QString addDiagram();
   Q_INVOKABLE void addSelectedToDiagram(const QString &diagramId);
+  Q_INVOKABLE int addElementsToDiagram(const QString &diagramId,
+                                       const QStringList &elementIds, qreal x,
+                                       qreal y);
   Q_INVOKABLE void removePresentations(const QString &diagramId,
                                        const QStringList &nodeIds);
   Q_INVOKABLE void deleteSelected();

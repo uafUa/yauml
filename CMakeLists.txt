@@ -10,8 +10,27 @@ set(CMAKE_AUTORCC ON)
 set(CMAKE_AUTOUIC ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
-find_package(Qt6 6.8 REQUIRED COMPONENTS Core Gui Qml Quick QuickControls2 Test)
+find_package(Qt6 6.8 REQUIRED COMPONENTS
+    Concurrent Core Gui Qml Quick QuickControls2 Test)
 qt_standard_project_setup(REQUIRES 6.8)
+
+# C++ import is built around Clang's stable C API. Keep the dependency optional
+# so the diagram editor remains buildable on machines without an LLVM SDK; the
+# import service then reports a precise runtime diagnostic instead of silently
+# falling back to an incomplete handwritten parser.
+set(UUML_LLVM_HINTS
+    "$ENV{LLVM_ROOT}"
+    "$ENV{LLVM_HOME}"
+    "C:/Program Files/LLVM"
+    "/usr/local/opt/llvm"
+    "/opt/homebrew/opt/llvm"
+)
+find_path(UUML_LIBCLANG_INCLUDE_DIR clang-c/Index.h
+    HINTS ${UUML_LLVM_HINTS}
+    PATH_SUFFIXES include)
+find_library(UUML_LIBCLANG_LIBRARY NAMES libclang clang
+    HINTS ${UUML_LLVM_HINTS}
+    PATH_SUFFIXES lib)
 
 add_library(uuml_theme STATIC
     src/ui/ui_theme.cpp
@@ -29,6 +48,10 @@ endif()
 add_library(uuml_core STATIC
     src/core/application_settings.cpp
     src/core/application_settings.h
+    src/core/cpp_import.cpp
+    src/core/cpp_import.h
+    src/core/cpp_import_controller.cpp
+    src/core/cpp_import_controller.h
     src/core/diagnostic_model.cpp
     src/core/diagnostic_model.h
     src/core/json5.cpp
@@ -50,7 +73,22 @@ add_library(uuml_core STATIC
 )
 
 target_include_directories(uuml_core PUBLIC src)
-target_link_libraries(uuml_core PUBLIC uuml_theme Qt6::Core Qt6::Gui)
+target_link_libraries(uuml_core PUBLIC
+    uuml_theme
+    Qt6::Concurrent
+    Qt6::Core
+    Qt6::Gui
+)
+if(UUML_LIBCLANG_INCLUDE_DIR AND UUML_LIBCLANG_LIBRARY)
+    target_compile_definitions(uuml_core PRIVATE UUML_HAS_LIBCLANG=1)
+    target_include_directories(uuml_core PRIVATE ${UUML_LIBCLANG_INCLUDE_DIR})
+    target_link_libraries(uuml_core PUBLIC ${UUML_LIBCLANG_LIBRARY})
+    message(STATUS "C++ import enabled with ${UUML_LIBCLANG_LIBRARY}")
+else()
+    target_compile_definitions(uuml_core PRIVATE UUML_HAS_LIBCLANG=0)
+    message(WARNING
+        "libclang was not found; C++ import will report that it is unavailable")
+endif()
 
 add_library(uuml_ui_support STATIC
     src/ui/connector_routing.cpp
@@ -114,6 +152,16 @@ qt_add_executable(uuml
     src/app/main.cpp
 )
 
+if(WIN32 AND UUML_LIBCLANG_LIBRARY)
+    get_filename_component(UUML_LLVM_LIBRARY_DIRECTORY
+        "${UUML_LIBCLANG_LIBRARY}" DIRECTORY)
+    get_filename_component(UUML_LLVM_ROOT
+        "${UUML_LLVM_LIBRARY_DIRECTORY}" DIRECTORY)
+    find_file(UUML_LIBCLANG_RUNTIME libclang.dll
+        HINTS "${UUML_LLVM_ROOT}/bin" ${UUML_LLVM_HINTS}
+        PATH_SUFFIXES bin)
+endif()
+
 qt_add_qml_module(uuml
     URI Uuml
     VERSION 1.0
@@ -164,6 +212,19 @@ endif()
 
 include(CTest)
 if(BUILD_TESTING)
+    file(TO_CMAKE_PATH
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/cpp_import"
+        UUML_CPP_IMPORT_FIXTURE_SOURCE_DIR)
+    file(TO_CMAKE_PATH
+        "${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/cpp_import/types.cpp"
+        UUML_CPP_IMPORT_FIXTURE_SOURCE)
+    set(UUML_CPP_IMPORT_FIXTURE_BUILD_DIR
+        "${CMAKE_CURRENT_BINARY_DIR}/cpp-import-fixture")
+    file(MAKE_DIRECTORY "${UUML_CPP_IMPORT_FIXTURE_BUILD_DIR}")
+    file(GENERATE
+        OUTPUT "${UUML_CPP_IMPORT_FIXTURE_BUILD_DIR}/compile_commands.json"
+        CONTENT
+            "[{\"directory\":\"${UUML_CPP_IMPORT_FIXTURE_SOURCE_DIR}\",\"file\":\"${UUML_CPP_IMPORT_FIXTURE_SOURCE}\",\"arguments\":[\"clang++\",\"-std=c++20\",\"${UUML_CPP_IMPORT_FIXTURE_SOURCE}\"]}]\n")
     qt_add_executable(uuml_core_tests
         tests/core_tests.cpp
     )
@@ -205,6 +266,12 @@ if(BUILD_TESTING)
     add_test(NAME uuml_performance_example_validate
         COMMAND uuml validate
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/performance.uuml)
+    if(UUML_LIBCLANG_INCLUDE_DIR AND UUML_LIBCLANG_LIBRARY)
+        add_test(NAME uuml_cpp_preview
+            COMMAND uuml cpp-preview
+                ${CMAKE_CURRENT_SOURCE_DIR}/examples/sample.uuml
+                ${UUML_CPP_IMPORT_FIXTURE_BUILD_DIR})
+    endif()
     add_test(NAME uuml_ui_smoke COMMAND uuml --smoke-test)
     add_test(NAME uuml_color_literal_guard
         COMMAND ${CMAKE_COMMAND}
@@ -217,4 +284,18 @@ if(BUILD_TESTING)
         set_tests_properties(uuml_canvas_tests uuml_ui_smoke PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
     endif()
+endif()
+
+if(WIN32 AND UUML_LIBCLANG_RUNTIME)
+    foreach(UUML_CLANG_RUNTIME_TARGET
+            uuml uuml_core_tests uuml_canvas_tests)
+        if(TARGET ${UUML_CLANG_RUNTIME_TARGET})
+            add_custom_command(TARGET ${UUML_CLANG_RUNTIME_TARGET} POST_BUILD
+                COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                    "${UUML_LIBCLANG_RUNTIME}"
+                    "$<TARGET_FILE_DIR:${UUML_CLANG_RUNTIME_TARGET}>"
+                COMMENT "Deploying libclang for C++ import"
+                VERBATIM)
+        endif()
+    endforeach()
 endif()

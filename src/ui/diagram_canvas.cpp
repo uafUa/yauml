@@ -2229,6 +2229,16 @@ void DiagramCanvas::fitToContent() {
   update();
 }
 
+void DiagramCanvas::addElementsAt(const QStringList &elementIds, qreal x,
+                                  qreal y) {
+  if (!m_project || m_diagramId.isEmpty() || elementIds.isEmpty())
+    return;
+  forceActiveFocus();
+  const QPointF scenePoint = toScene({x, y});
+  m_project->addElementsToDiagram(m_diagramId, elementIds, scenePoint.x(),
+                                  scenePoint.y());
+}
+
 void DiagramCanvas::createElementAtContextPosition(const QString &type) {
   createElementAt(type, m_contextScenePoint);
 }

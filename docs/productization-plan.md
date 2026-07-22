@@ -1,7 +1,7 @@
 # uuml Productization Plan
 
-Status: command foundation and Phase 3.1–3.5 implemented; project and
-presentation styling is next
+Status: command foundation and Phase 3.1–3.5 implemented; Phase 3.6 and Phase 4
+C++ import foundation are in progress
 
 The product owner accepted the MVP on 2026-07-21. This plan turns the broader
 architecture roadmap into bounded, testable delivery tranches. MVP audit notes
@@ -135,21 +135,64 @@ history memory grow with total project size rather than the size of each edit.
 - Keep routing mode, semantic direction, endpoint attachments, bend constraints,
   and self-connections intact across save/load and exact command undo/redo.
 
-### 3.6 Project and presentation styling
+### 3.6 Hierarchical project browser and diagram containers — in progress
+
+- Extended selection and native cross-window drag/drop are implemented for
+  model types. Ctrl toggles rows, Shift selects ranges, and one drop creates a
+  deterministic grid at the pointer. Existing presentations are skipped,
+  newly eligible semantic connectors appear, and the complete drop is one
+  compact undo command.
+- Represent semantic ownership independently from browser organization. C++
+  namespaces, UML packages, and nested types participate in qualified identity;
+  custom folders do not. A browser folder therefore stores only grouping and
+  ordering metadata and may be nested at any visible semantic level without
+  changing source bindings or UML meaning.
+- Resolve every tree drag to a de-duplicated set of leaf subjects. Dragging a
+  namespace, package, custom folder, or type with nested types includes all its
+  descendants; overlapping selections place each subject once.
+- Persist diagram containment explicitly rather than inferring it permanently
+  from rectangle overlap. A container presentation owns child presentation IDs,
+  rejects cycles, renders below its descendants, and moves descendants by the
+  same delta. Dropping or moving a child across a container boundary updates
+  membership through one undoable command; resizing a container does not scale
+  its children.
+- Treat a namespace/package frame as a diagram-specific view of semantic
+  ownership. A diagram may show only a chosen subset of the package or
+  namespace contents. Tree-drop expansion initializes that subset, but later
+  source imports do not silently add presentations. C++ namespaces and UML
+  packages remain distinct semantic kinds even if their frames share rendering
+  and containment mechanics.
+
+### 3.7 Project and presentation styling — deferred
 
 - The application palette is centralized behind semantic roles shared by QML
   controls and the native scene-graph renderer. All roles are editable through
   the persisted Colors preferences page, with staged apply/cancel behavior and
   render-thread-safe palette snapshots.
-- Introduce project styles and presentation-local overrides behind stable style
-  interfaces.
+- Project styles and presentation-local overrides are deliberately deferred
+  until concrete product use cases make the right inheritance model clearer.
 
-## Phase 4: C++ import and synchronization
+## Phase 4: C++ import and synchronization — in progress
 
-- Compilation-database discovery and Clang AST indexing.
-- Change-set preview, source bindings, rename matching, provenance, and
-  user-authoritative conflict handling.
-- Shared GUI/headless import services and structured conflict diagnostics.
+- Folder-first libclang AST indexing is implemented for classes, structs,
+  fields, methods, and direct base relationships. A user selects only the source
+  root: the importer recursively discovers C++ files, infers common include
+  roots, tolerates missing external dependencies, and avoids build or vendored
+  trees. If a compilation database is present, it is discovered and used
+  automatically for higher accuracy. A persisted, validated interface-name
+  regular expression classifies matching bases as UML realizations and other
+  bases as generalizations. System declarations are excluded and repeated
+  header discoveries are deduplicated by Clang symbol identity.
+- A shared asynchronous GUI/headless service implements change-set preview,
+  persistent source bindings and provenance, last-imported baselines, and
+  user-authoritative conflict handling. GUI apply is one undoable command;
+  `cpp-preview` and `cpp-import` expose the same rules headlessly. Imported
+  inheritance is semantic relationship data and gains diagram connectors only
+  where both endpoint presentations exist. Conflicts are structured log entries
+  and never overwrite manual model edits.
+- Add explicit conflict-resolution choices, rename/move matching, further
+  relationship discovery, and repeatable synchronization controls in subsequent
+  slices.
 
 ## Phase 5: scale and hardening
 
