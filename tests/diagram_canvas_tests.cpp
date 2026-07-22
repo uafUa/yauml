@@ -1,6 +1,7 @@
 #include "core/project_controller.h"
 #include "ui/diagram_arrangement.h"
 #include "ui/diagram_canvas.h"
+#include "ui/diagram_snapping.h"
 
 #include <QKeyEvent>
 #include <QMouseEvent>
@@ -65,6 +66,10 @@ void configureCanvas(TestDiagramCanvas &canvas, ProjectController &controller) {
   canvas.setHeight(600);
   canvas.setProject(&controller);
   canvas.setDiagramId(controller.data().diagrams.first().id);
+  // Most interaction tests assert exact free-drag deltas. Snapping is enabled
+  // explicitly by its focused tests below.
+  canvas.setSnapToGridEnabled(false);
+  canvas.setAlignmentGuidesEnabled(false);
 }
 
 } // namespace
@@ -74,11 +79,13 @@ class DiagramCanvasTests final : public QObject {
 
 private slots:
   void arrangementGeometryRulesAreDeterministic();
+  void snappingGeometryRulesAreDeterministic();
   void lassoSelectsAndMovesMultipleNodesAsOneCommand();
   void lassoModifiersAddAndToggleSelection();
   void arrangementAndNudgingAreUndoableTransactions();
   void contextCreationUsesTheClickedDiagramAndPosition();
   void connectorBendPointCanBeAddedMovedAndRemoved();
+  void liveDragSnappingIsUndoableAndAltSuppressesIt();
 };
 
 void DiagramCanvasTests::arrangementGeometryRulesAreDeterministic() {
@@ -122,6 +129,38 @@ void DiagramCanvasTests::arrangementGeometryRulesAreDeterministic() {
   QCOMPARE(fallback.at(1).geometry.left(), 112.0);
   QCOMPARE(fallback.at(2).geometry.left(), 224.0);
   QVERIFY(!ui::arrangementOperationFromKey(QStringLiteral("unknown")));
+}
+
+void DiagramCanvasTests::snappingGeometryRulesAreDeterministic() {
+  const QList<ui::DiagramNodeGeometry> moving = {
+      {QStringLiteral("moving"), QRectF(10, 10, 100, 60)}};
+  const QList<ui::DiagramNodeGeometry> stationary = {
+      {QStringLiteral("stationary"), QRectF(200, 20, 100, 60)}};
+
+  ui::DiagramSnapOptions alignmentOptions;
+  alignmentOptions.snapToGrid = false;
+  alignmentOptions.snapToAlignment = true;
+  alignmentOptions.tolerance = 6.0;
+  const auto aligned =
+      ui::snapDiagramMove(moving, stationary, QStringLiteral("moving"),
+                          QPointF(86, 8), alignmentOptions);
+  QCOMPARE(aligned.delta, QPointF(90, 10));
+  QCOMPARE(aligned.guides.size(), 2);
+  QCOMPARE(aligned.guides.at(0).x1(), 200.0);
+  QCOMPARE(aligned.guides.at(0).x2(), 200.0);
+  QCOMPARE(aligned.guides.at(1).y1(), 20.0);
+  QCOMPARE(aligned.guides.at(1).y2(), 20.0);
+
+  ui::DiagramSnapOptions gridOptions;
+  gridOptions.snapToGrid = true;
+  gridOptions.snapToAlignment = false;
+  gridOptions.gridSpacing = 20.0;
+  gridOptions.tolerance = 4.0;
+  const auto onGrid =
+      ui::snapDiagramMove(moving, stationary, QStringLiteral("moving"),
+                          QPointF(27, 33), gridOptions);
+  QCOMPARE(onGrid.delta, QPointF(30, 30));
+  QVERIFY(onGrid.guides.isEmpty());
 }
 
 void DiagramCanvasTests::lassoSelectsAndMovesMultipleNodesAsOneCommand() {
@@ -280,6 +319,34 @@ void DiagramCanvasTests::connectorBendPointCanBeAddedMovedAndRemoved() {
   QVERIFY(connector()->bendPoints.isEmpty());
   controller.undo();
   QCOMPARE(connector()->bendPoints.first().position, QPointF(285.0, 170.0));
+}
+
+void DiagramCanvasTests::liveDragSnappingIsUndoableAndAltSuppressesIt() {
+  ProjectController controller;
+  populate(controller, 2);
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  canvas.setSnapToGridEnabled(true);
+  canvas.setAlignmentGuidesEnabled(true);
+  canvas.setGridSpacing(20);
+
+  const auto before = controller.data().diagrams.first().nodes;
+  // A raw (26, 3) move puts the first node's right edge four units from the
+  // second node's left edge. Alignment wins the grid tie on X, while the top
+  // edges align on Y, producing a snapped (30, 0) move.
+  canvas.drag({130, 130}, {156, 133});
+  QCOMPARE(controller.data().diagrams.first().nodes.at(0).geometry,
+           before.at(0).geometry.translated(30, 0));
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Move or resize diagram elements"));
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first().nodes, before);
+
+  canvas.drag({130, 130}, {156, 133}, Qt::AltModifier);
+  QCOMPARE(controller.data().diagrams.first().nodes.at(0).geometry,
+           before.at(0).geometry.translated(26, 3));
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first().nodes, before);
 }
 
 QTEST_MAIN(DiagramCanvasTests)

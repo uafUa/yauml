@@ -3,6 +3,7 @@
 #include "core/project_controller.h"
 
 #include <QHash>
+#include <QLineF>
 #include <QQuickItem>
 #include <QSet>
 #include <QStringList>
@@ -32,6 +33,12 @@ class DiagramCanvas : public QQuickItem {
                  canvasSelectionChanged)
   Q_PROPERTY(int defaultDistributionGap READ defaultDistributionGap WRITE
                  setDefaultDistributionGap NOTIFY defaultDistributionGapChanged)
+  Q_PROPERTY(bool snapToGridEnabled READ snapToGridEnabled WRITE
+                 setSnapToGridEnabled NOTIFY snapToGridEnabledChanged)
+  Q_PROPERTY(bool alignmentGuidesEnabled READ alignmentGuidesEnabled WRITE
+                 setAlignmentGuidesEnabled NOTIFY alignmentGuidesEnabledChanged)
+  Q_PROPERTY(int gridSpacing READ gridSpacing WRITE setGridSpacing NOTIFY
+                 gridSpacingChanged)
 
 public:
   explicit DiagramCanvas(QQuickItem *parent = nullptr);
@@ -48,6 +55,12 @@ public:
   QString reconnectPrompt() const;
   int defaultDistributionGap() const;
   void setDefaultDistributionGap(int gap);
+  bool snapToGridEnabled() const;
+  void setSnapToGridEnabled(bool enabled);
+  bool alignmentGuidesEnabled() const;
+  void setAlignmentGuidesEnabled(bool enabled);
+  int gridSpacing() const;
+  void setGridSpacing(int spacing);
 
   Q_INVOKABLE void fitToContent();
   Q_INVOKABLE void createElementAtContextPosition(const QString &type);
@@ -72,6 +85,9 @@ signals:
   void viewportChanged();
   void canvasSelectionChanged();
   void defaultDistributionGapChanged();
+  void snapToGridEnabledChanged();
+  void alignmentGuidesEnabledChanged();
+  void gridSpacingChanged();
   void contextMenuRequested(const QString &target, qreal x, qreal y);
   void editRequested(const QString &objectId, const QString &field, int index,
                      const QString &text, qreal x, qreal y, qreal width,
@@ -186,6 +202,10 @@ private:
   // expensive text atlases. Model and geometry changes set both dirty flags.
   bool m_textDirty = true;
   int m_defaultDistributionGap;
+  bool m_snapToGridEnabled;
+  bool m_alignmentGuidesEnabled;
+  int m_gridSpacing;
+  QVector<QLineF> m_alignmentGuides;
   quint64 m_themeRevision = 0;
 };
 

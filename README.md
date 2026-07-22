@@ -112,6 +112,11 @@ Validate a project without opening the GUI:
 - Use an arrow key to nudge the selection by one diagram unit, or hold `Shift`
   to nudge by ten. Every nudge and arrangement action is independently
   undoable.
+- Dragged elements snap to the configured grid and to the edges and centers of
+  other elements. Alignment matches display as live guide lines, and a
+  multi-selection keeps its internal layout while snapping as one unit. Hold
+  `Alt` during a drag to temporarily suppress all snapping. Grid spacing and
+  both snapping modes are configured under **Edit > Preferences > General**.
 - Open **Edit > Preferences** to change general settings or edit the semantic
   color palette. The Colors page groups roles in a scrollable grid and supports
   both a color picker and hexadecimal values. Changes are applied on **OK**,

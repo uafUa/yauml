@@ -41,6 +41,7 @@ struct UiPalette {
   QColor alternateRow;
 
   QColor canvasGrid;
+  QColor alignmentGuide;
   QColor selectionOverlay;
   QColor connector;
   QColor nodeBorder;
@@ -93,6 +94,7 @@ class UiTheme final : public QObject {
   Q_PROPERTY(QColor warningRow READ warningRow NOTIFY paletteChanged)
   Q_PROPERTY(QColor alternateRow READ alternateRow NOTIFY paletteChanged)
   Q_PROPERTY(QColor canvasGrid READ canvasGrid NOTIFY paletteChanged)
+  Q_PROPERTY(QColor alignmentGuide READ alignmentGuide NOTIFY paletteChanged)
   Q_PROPERTY(
       QColor selectionOverlay READ selectionOverlay NOTIFY paletteChanged)
   Q_PROPERTY(QColor connector READ connector NOTIFY paletteChanged)
@@ -139,6 +141,7 @@ public:
   QColor warningRow() const;
   QColor alternateRow() const;
   QColor canvasGrid() const;
+  QColor alignmentGuide() const;
   QColor selectionOverlay() const;
   QColor connector() const;
   QColor nodeBorder() const;

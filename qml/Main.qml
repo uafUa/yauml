@@ -480,6 +480,9 @@ ApplicationWindow {
 
         onOpened: {
             distributionGap.value = applicationSettings.defaultDistributionGap
+            snapToGrid.checked = applicationSettings.snapToGridEnabled
+            alignmentGuides.checked = applicationSettings.alignmentGuidesEnabled
+            gridSpacing.value = applicationSettings.gridSpacing
             colorPreferencesModel.clear()
             const roles = uiTheme.colorRoles
             for (let index = 0; index < roles.length; ++index) {
@@ -494,6 +497,9 @@ ApplicationWindow {
         }
         onAccepted: {
             applicationSettings.defaultDistributionGap = distributionGap.value
+            applicationSettings.snapToGridEnabled = snapToGrid.checked
+            applicationSettings.alignmentGuidesEnabled = alignmentGuides.checked
+            applicationSettings.gridSpacing = gridSpacing.value
             const colors = {}
             for (let index = 0; index < colorPreferencesModel.count; ++index) {
                 const entry = colorPreferencesModel.get(index)
@@ -545,6 +551,37 @@ ApplicationWindow {
                                 editable: true
                             }
                             Label { text: qsTr("px") }
+                        }
+                        Label {
+                            text: qsTr("Diagram snapping")
+                            font.bold: true
+                        }
+                        CheckBox {
+                            id: snapToGrid
+                            text: qsTr("Snap element positions to the grid")
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            enabled: snapToGrid.checked
+                            Label { text: qsTr("Grid spacing") }
+                            Item { Layout.fillWidth: true }
+                            SpinBox {
+                                id: gridSpacing
+                                from: 5
+                                to: 200
+                                editable: true
+                            }
+                            Label { text: qsTr("px") }
+                        }
+                        CheckBox {
+                            id: alignmentGuides
+                            text: qsTr("Snap to element edges and centers and show guides")
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            color: uiTheme.mutedText
+                            text: qsTr("Hold Alt while dragging to temporarily disable snapping.")
                         }
                         Item { Layout.fillHeight: true }
                     }

@@ -74,12 +74,17 @@ Unless explicitly included in [`mvp-scope.md`](mvp-scope.md), they are post-MVP.
 - Multiple visual presentations of one semantic element.
 - Selection, multi-selection, move, resize, pan, zoom, and fit-to-content.
 - Straight, manually bent, and automatically maintained orthogonal connectors.
-  Orthogonal routes contain only horizontal/vertical segments and 90-degree
-  bends; obstacle avoidance is a later routing refinement.
+  The application preference for new-connector shape defaults to straight, and
+  each connector presentation retains its selected routing mode. Orthogonal
+  routes contain only horizontal/vertical segments and 90-degree bends;
+  obstacle avoidance is a later routing refinement.
 - Add, remove, and move connector bend points.
 - Create a typed connector by holding the pointer on a node edge, pressing its
   relationship hotkey, and dragging to any node, including the originating
-  node. The initial pointer position becomes its persisted perimeter attachment.
+  node. Default keys are `D` dependency, `I` implementation, `H` inheritance,
+  `A` association, `G` aggregation, and `C` composition; all are editable
+  application preferences. The initial pointer position becomes its persisted
+  perimeter attachment only when the gesture commits.
 - Reconnect either end directly by dragging its endpoint handle to another node;
   do not rely on modal source/target reconnection actions.
 - Straighten, make horizontal, and make vertical actions.
@@ -430,12 +435,13 @@ route to an arbitrary polyline. Obstacle avoidance can be layered onto the same
 route interface later.
 
 Connector creation and reconnection use direct manipulation. A pointer press on
-a node edge establishes an exact candidate attachment. Pressing the relationship
-hotkey while that pointer is held starts the typed connection preview; release
-over a compatible node commits both semantic relationship and presentation in
-one command. A selected connector's endpoint handles use the same attachment
-resolution path for reconnection. Self-connections are valid, while Escape and
-invalid drops leave the model unchanged.
+a node edge establishes an exact candidate attachment. Pressing the configured
+relationship hotkey while that pointer is held starts the typed connection
+preview; release over a compatible node commits both semantic relationship and
+presentation in one command. A selected connector's endpoint handles use the
+same attachment resolution path for reconnection. Self-connections are valid.
+Escape and invalid drops discard an uncommitted new relationship; for an
+existing relationship they restore the original endpoint and attachment.
 
 ## 12. Undo and transaction architecture
 
@@ -593,6 +599,10 @@ initial state -> command -> expected state -> undo -> exact initial state
   moves, and shared project and selection context.
 - Exact undo/redo coverage for semantic and diagram editing.
 
+The phase order below is also the current product priority: complete interactive
+modeling first, then C++ synchronization, then hardening. Export is deliberately
+deferred because it is less important than a reliable source-to-model workflow.
+
 ### Phase 3: post-MVP manual-modeling productivity
 
 - Persisted workspace, tab-group, and detached-window restoration.
@@ -601,7 +611,6 @@ initial state -> command -> expected state -> undo -> exact initial state
 - Orthogonal routing, the complete structural relationship set, edge-and-hotkey
   connector creation, and direct endpoint-drag reconnection.
 - Stylesheets and presentation overrides.
-- SVG, PNG, and PDF export.
 
 ### Phase 4: post-MVP C++ import and synchronization
 
@@ -616,6 +625,11 @@ initial state -> command -> expected state -> undo -> exact initial state
 - Large-diagram virtualization and rendering optimization.
 - Schema migrations, crash recovery, and merge diagnostics.
 - Cross-platform packaging and release automation.
+
+### Phase 6: lower-priority diagram export
+
+- PNG and PDF export through the shared diagram renderer.
+- SVG export only if later product demand justifies it.
 
 ## 19. Early architectural decisions to record as ADRs
 

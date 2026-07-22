@@ -12,12 +12,20 @@ namespace {
 
 constexpr auto kSettingsGroup = "preferences/diagram";
 constexpr auto kDefaultDistributionGapKey = "defaultDistributionGap";
+constexpr auto kSnapToGridEnabledKey = "snapToGridEnabled";
+constexpr auto kAlignmentGuidesEnabledKey = "alignmentGuidesEnabled";
+constexpr auto kGridSpacingKey = "gridSpacing";
 constexpr auto kHistorySettingsGroup = "history";
 constexpr auto kRecentProjectsKey = "recentProjects";
 
 int validDistributionGap(int gap) {
   return std::clamp(gap, ApplicationSettings::kMinimumDistributionGap,
                     ApplicationSettings::kMaximumDistributionGap);
+}
+
+int validGridSpacing(int spacing) {
+  return std::clamp(spacing, ApplicationSettings::kMinimumGridSpacing,
+                    ApplicationSettings::kMaximumGridSpacing);
 }
 
 QString normalizedProjectPath(const QString &path) {
@@ -46,6 +54,18 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
                                .value(QLatin1String(kDefaultDistributionGapKey),
                                       kDefaultDistributionGap)
                                .toInt());
+  m_snapToGridEnabled = settings
+                            .value(QLatin1String(kSnapToGridEnabledKey),
+                                   kDefaultSnapToGridEnabled)
+                            .toBool();
+  m_alignmentGuidesEnabled =
+      settings
+          .value(QLatin1String(kAlignmentGuidesEnabledKey),
+                 kDefaultAlignmentGuidesEnabled)
+          .toBool();
+  m_gridSpacing = validGridSpacing(
+      settings.value(QLatin1String(kGridSpacingKey), kDefaultGridSpacing)
+          .toInt());
   settings.endGroup();
 
   settings.beginGroup(QLatin1String(kHistorySettingsGroup));
@@ -78,6 +98,41 @@ void ApplicationSettings::setDefaultDistributionGap(int gap) {
   m_defaultDistributionGap = validGap;
   persistDiagramPreferences();
   emit defaultDistributionGapChanged();
+}
+
+bool ApplicationSettings::snapToGridEnabled() const {
+  return m_snapToGridEnabled;
+}
+
+void ApplicationSettings::setSnapToGridEnabled(bool enabled) {
+  if (m_snapToGridEnabled == enabled)
+    return;
+  m_snapToGridEnabled = enabled;
+  persistDiagramPreferences();
+  emit snapToGridEnabledChanged();
+}
+
+bool ApplicationSettings::alignmentGuidesEnabled() const {
+  return m_alignmentGuidesEnabled;
+}
+
+void ApplicationSettings::setAlignmentGuidesEnabled(bool enabled) {
+  if (m_alignmentGuidesEnabled == enabled)
+    return;
+  m_alignmentGuidesEnabled = enabled;
+  persistDiagramPreferences();
+  emit alignmentGuidesEnabledChanged();
+}
+
+int ApplicationSettings::gridSpacing() const { return m_gridSpacing; }
+
+void ApplicationSettings::setGridSpacing(int spacing) {
+  const int validSpacing = validGridSpacing(spacing);
+  if (m_gridSpacing == validSpacing)
+    return;
+  m_gridSpacing = validSpacing;
+  persistDiagramPreferences();
+  emit gridSpacingChanged();
 }
 
 QVariantList ApplicationSettings::recentProjects() const {
@@ -126,6 +181,9 @@ void ApplicationSettings::clearRecentProjects() {
 
 void ApplicationSettings::resetDefaults() {
   setDefaultDistributionGap(kDefaultDistributionGap);
+  setSnapToGridEnabled(kDefaultSnapToGridEnabled);
+  setAlignmentGuidesEnabled(kDefaultAlignmentGuidesEnabled);
+  setGridSpacing(kDefaultGridSpacing);
 }
 
 void ApplicationSettings::persistDiagramPreferences() const {
@@ -133,6 +191,10 @@ void ApplicationSettings::persistDiagramPreferences() const {
   settings.beginGroup(QLatin1String(kSettingsGroup));
   settings.setValue(QLatin1String(kDefaultDistributionGapKey),
                     m_defaultDistributionGap);
+  settings.setValue(QLatin1String(kSnapToGridEnabledKey), m_snapToGridEnabled);
+  settings.setValue(QLatin1String(kAlignmentGuidesEnabledKey),
+                    m_alignmentGuidesEnabled);
+  settings.setValue(QLatin1String(kGridSpacingKey), m_gridSpacing);
   settings.endGroup();
   settings.sync();
 }

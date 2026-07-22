@@ -1,11 +1,18 @@
 # uuml Productization Plan
 
-Status: command foundation and Phase 3.1–3.3 implemented; Phase 3.4 arrangement
-tools implemented, with snapping guides and advanced connector interaction next
+Status: command foundation and Phase 3.1–3.4 implemented; advanced connector
+routing and direct interaction are next
 
 The product owner accepted the MVP on 2026-07-21. This plan turns the broader
 architecture roadmap into bounded, testable delivery tranches. MVP audit notes
 remain useful regression input, but they no longer reopen the MVP boundary.
+
+Delivery priority after the accepted MVP is:
+
+1. Complete the manual-modeling UI and diagram-productivity features.
+2. Implement C++ import and repeatable synchronization.
+3. Scale, recovery, and release hardening.
+4. Diagram export, which is useful but not currently a product priority.
 
 ## Product interaction direction
 
@@ -75,16 +82,23 @@ history memory grow with total project size rather than the size of each edit.
   nudging are implemented through diagram-local actions and shortcuts. The
   distribution fallback gap is an application preference persisted through
   the settings service.
-- Live snapping and alignment guides are next.
+- Live move snapping is implemented for the configurable grid and for other
+  elements' left/center/right and top/center/bottom features. Matching features
+  display themed alignment guides, multi-selections retain their internal
+  geometry, and holding Alt temporarily suppresses snapping. Grid spacing and
+  both snapping modes are persisted application preferences.
 - Treat a multi-object operation as one undoable transaction.
 
 ### 3.5 Connector routing and direct interaction
 
-- Add an orthogonal routing mode that automatically creates horizontal and
-  vertical segments joined by 90-degree bends. Moving or resizing an endpoint
-  node must update the route while preserving its attachment constraints.
-  User-adjusted bend points remain orthogonal. Basic Manhattan routing is the
-  first acceptance level; obstacle avoidance is a separate enhancement.
+- Add straight and orthogonal connector shapes. The default shape for newly
+  created connectors is an application preference and defaults to **Straight**;
+  individual connector presentations retain their chosen routing mode.
+  Orthogonal routing automatically creates horizontal and vertical segments
+  joined by 90-degree bends. Moving or resizing an endpoint node must update the
+  route while preserving its attachment constraints. User-adjusted bend points
+  remain orthogonal. Basic Manhattan routing is the first acceptance level;
+  obstacle avoidance is a separate enhancement.
 - Complete the structural relationship vocabulary used by supported class and
   package diagrams: dependency, generalization/inheritance,
   realization/implementation, association with navigability, aggregation, and
@@ -92,22 +106,28 @@ history memory grow with total project size rather than the size of each edit.
   validation, creation commands, and undo/redo. Behavioral-diagram connectors
   remain outside the current product direction.
 - Add edge-gesture connector creation. While the pointer button is held on a
-  node edge, pressing the relationship hotkey enters a drag-to-connect gesture
-  (`D` dependency, `I` implementation/realization, `H` inheritance/
-  generalization, with corresponding keys for the other supported types). The
-  initial press position creates the persisted perimeter attachment; dragging
-  previews the connector, and releasing over any compatible node—including the
-  originating node—commits the relationship as one command. Escape or an
-  invalid drop cancels without changing the model.
+  node edge, pressing the relationship hotkey enters a drag-to-connect gesture.
+  Defaults are `D` dependency, `I` implementation/realization, `H` inheritance/
+  generalization, `A` association, `G` aggregation, and `C` composition. All
+  relationship hotkeys are application preferences editable through the
+  Preferences UI. The initial press position creates the candidate perimeter
+  attachment; dragging previews the connector, and releasing over any
+  compatible node—including the originating node—commits the relationship as
+  one command. Escape or a drop on empty/incompatible space discards a new
+  relationship without changing the model.
 - Replace the modal **Reconnect source…** and **Reconnect target…** actions with
   direct endpoint manipulation. A selected connector exposes draggable endpoint
   handles. Starting a drag provisionally detaches that end; dropping it on any
   compatible node creates or updates the perimeter attachment and commits one
-  undoable reconnection. Invalid drops restore the original connection.
+  undoable reconnection. Escape and empty/incompatible drops restore the
+  original connection.
+- Add a Connectors preferences page for the default connector shape and the six
+  relationship gesture keys. Validate assignments so two relationship types
+  cannot silently use the same key, and persist them as application settings.
 - Keep routing mode, semantic direction, endpoint attachments, bend constraints,
   and self-connections intact across save/load and exact command undo/redo.
 
-### 3.6 Styling and export
+### 3.6 Project and presentation styling
 
 - The application palette is centralized behind semantic roles shared by QML
   controls and the native scene-graph renderer. All roles are editable through
@@ -115,7 +135,6 @@ history memory grow with total project size rather than the size of each edit.
   render-thread-safe palette snapshots.
 - Introduce project styles and presentation-local overrides behind stable style
   interfaces.
-- Add SVG, PNG, and PDF export after rendered-output regression tests exist.
 
 ## Phase 4: C++ import and synchronization
 
@@ -130,6 +149,13 @@ history memory grow with total project size rather than the size of each edit.
   expanded recovery testing.
 - Performance benchmarks and rendered-image regression coverage.
 - Windows packaging automation followed by cross-platform packaging.
+
+## Phase 6: diagram export — lower priority
+
+- Add PNG and PDF export through the shared diagram renderer after
+  rendered-output regression tests exist.
+- Add SVG export only when there is concrete product demand; it remains outside
+  the critical productization path.
 
 ## Release gates for every tranche
 

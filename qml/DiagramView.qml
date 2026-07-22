@@ -13,6 +13,9 @@ Item {
         project: projectController
         diagramId: root.diagramId
         defaultDistributionGap: applicationSettings.defaultDistributionGap
+        snapToGridEnabled: applicationSettings.snapToGridEnabled
+        alignmentGuidesEnabled: applicationSettings.alignmentGuidesEnabled
+        gridSpacing: applicationSettings.gridSpacing
 
         onContextMenuRequested: function(target, menuX, menuY) {
             const menu = target === "element" ? elementMenu

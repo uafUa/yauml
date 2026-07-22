@@ -70,6 +70,8 @@ constexpr std::array kColorRoles = {
 
     ColorRoleDescriptor{"canvasGrid", "Canvas grid", "Diagram",
                         &UiPalette::canvasGrid},
+    ColorRoleDescriptor{"alignmentGuide", "Alignment guide", "Diagram",
+                        &UiPalette::alignmentGuide},
     ColorRoleDescriptor{"selectionOverlay", "Selection overlay", "Diagram",
                         &UiPalette::selectionOverlay},
     ColorRoleDescriptor{"connector", "Connector", "Diagram",
@@ -131,6 +133,7 @@ UiPalette makeDefaultPalette() {
   value.alternateRow = QColor(QStringLiteral("#f7f9fb"));
 
   value.canvasGrid = QColor(QStringLiteral("#dce2e8"));
+  value.alignmentGuide = QColor(QStringLiteral("#d23c8e"));
   value.selectionOverlay = QColor(23, 105, 210, 28);
   value.connector = QColor(QStringLiteral("#52606d"));
   value.nodeBorder = QColor(QStringLiteral("#3f4b56"));
@@ -225,6 +228,7 @@ UUML_THEME_GETTER(errorRow)
 UUML_THEME_GETTER(warningRow)
 UUML_THEME_GETTER(alternateRow)
 UUML_THEME_GETTER(canvasGrid)
+UUML_THEME_GETTER(alignmentGuide)
 UUML_THEME_GETTER(selectionOverlay)
 UUML_THEME_GETTER(connector)
 UUML_THEME_GETTER(nodeBorder)

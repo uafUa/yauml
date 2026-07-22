@@ -785,21 +785,39 @@ void CoreTests::applicationPreferencesPersist() {
     ApplicationSettings settings;
     QCOMPARE(settings.defaultDistributionGap(),
              ApplicationSettings::kDefaultDistributionGap);
+    QCOMPARE(settings.snapToGridEnabled(),
+             ApplicationSettings::kDefaultSnapToGridEnabled);
+    QCOMPARE(settings.alignmentGuidesEnabled(),
+             ApplicationSettings::kDefaultAlignmentGuidesEnabled);
+    QCOMPARE(settings.gridSpacing(), ApplicationSettings::kDefaultGridSpacing);
     QSignalSpy changes(&settings,
                        &ApplicationSettings::defaultDistributionGapChanged);
     settings.setDefaultDistributionGap(24);
+    settings.setSnapToGridEnabled(false);
+    settings.setAlignmentGuidesEnabled(false);
+    settings.setGridSpacing(35);
     QCOMPARE(changes.count(), 1);
   }
 
   {
     ApplicationSettings restored;
     QCOMPARE(restored.defaultDistributionGap(), 24);
+    QVERIFY(!restored.snapToGridEnabled());
+    QVERIFY(!restored.alignmentGuidesEnabled());
+    QCOMPARE(restored.gridSpacing(), 35);
     restored.setDefaultDistributionGap(-10);
+    restored.setGridSpacing(-10);
     QCOMPARE(restored.defaultDistributionGap(),
              ApplicationSettings::kMinimumDistributionGap);
+    QCOMPARE(restored.gridSpacing(), ApplicationSettings::kMinimumGridSpacing);
     restored.resetDefaults();
     QCOMPARE(restored.defaultDistributionGap(),
              ApplicationSettings::kDefaultDistributionGap);
+    QCOMPARE(restored.snapToGridEnabled(),
+             ApplicationSettings::kDefaultSnapToGridEnabled);
+    QCOMPARE(restored.alignmentGuidesEnabled(),
+             ApplicationSettings::kDefaultAlignmentGuidesEnabled);
+    QCOMPARE(restored.gridSpacing(), ApplicationSettings::kDefaultGridSpacing);
   }
 }
 

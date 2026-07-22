@@ -3,6 +3,7 @@
 #include "core/application_settings.h"
 #include "core/project_controller.h"
 #include "ui/diagram_arrangement.h"
+#include "ui/diagram_snapping.h"
 #include "ui/text_occlusion.h"
 #include "ui/triangle_batch.h"
 #include "ui/ui_theme.h"
@@ -30,6 +31,7 @@ namespace {
 constexpr qreal kHeaderHeight = 30.0;
 constexpr qreal kLineHeight = 21.0;
 constexpr qreal kPadding = 8.0;
+constexpr qreal kSnapToleranceViewPixels = 8.0;
 constexpr int kTextAtlasSize = 2048;
 constexpr int kTextAtlasPadding = 2;
 
@@ -54,6 +56,7 @@ struct RenderConnector {
 struct SceneSnapshot {
   QVector<RenderNode> nodes;
   QVector<RenderConnector> connectors;
+  QVector<QLineF> alignmentGuides;
   QRectF lassoRect;
   bool lassoVisible = false;
 };
@@ -386,10 +389,9 @@ createColoredNodeBatches(const QVector<QSGGeometry::ColoredPoint2D> &vertices) {
   return group;
 }
 
-qreal adaptiveGridStep(qreal zoom) {
-  constexpr qreal kBaseStep = 20.0;
+qreal adaptiveGridStep(qreal zoom, qreal baseStep) {
   constexpr qreal kMinimumViewSpacing = 16.0;
-  qreal step = kBaseStep;
+  qreal step = baseStep;
   while (step * zoom < kMinimumViewSpacing)
     step *= 2.0;
   return step;
@@ -401,12 +403,12 @@ qreal snapToPhysicalPixelCenter(qreal position, qreal devicePixelRatio) {
 
 QSGGeometryNode *buildGridGeometry(const QSizeF &viewportSize,
                                    const QPointF &pan, qreal zoom,
-                                   qreal devicePixelRatio) {
+                                   qreal devicePixelRatio, qreal baseStep) {
   QVector<QSGGeometry::ColoredPoint2D> vertices;
   if (viewportSize.isEmpty() || zoom <= 0.0 || devicePixelRatio <= 0.0)
     return createColoredNode(vertices);
 
-  const qreal sceneStep = adaptiveGridStep(zoom);
+  const qreal sceneStep = adaptiveGridStep(zoom, baseStep);
   const qreal left = -pan.x() / zoom;
   const qreal right = (viewportSize.width() - pan.x()) / zoom;
   const qreal top = -pan.y() / zoom;
@@ -678,22 +680,26 @@ public:
   }
 
   void updateGrid(const QSizeF &viewportSize, const QPointF &pan, qreal zoom,
-                  qreal devicePixelRatio, quint64 themeRevision) {
+                  qreal devicePixelRatio, qreal baseStep,
+                  quint64 themeRevision) {
     if (viewportSize == m_gridViewportSize && pan == m_gridPan &&
         qFuzzyCompare(zoom, m_gridZoom) &&
         qFuzzyCompare(devicePixelRatio, m_gridDevicePixelRatio) &&
+        qFuzzyCompare(baseStep, m_gridBaseStep) &&
         themeRevision == m_gridThemeRevision)
       return;
     m_gridViewportSize = viewportSize;
     m_gridPan = pan;
     m_gridZoom = zoom;
     m_gridDevicePixelRatio = devicePixelRatio;
+    m_gridBaseStep = baseStep;
     m_gridThemeRevision = themeRevision;
     if (m_grid) {
       removeChildNode(m_grid);
       delete m_grid;
     }
-    m_grid = buildGridGeometry(viewportSize, pan, zoom, devicePixelRatio);
+    m_grid =
+        buildGridGeometry(viewportSize, pan, zoom, devicePixelRatio, baseStep);
     insertChildNodeBefore(m_grid, m_transform);
   }
 
@@ -744,6 +750,7 @@ private:
   QPointF m_gridPan;
   qreal m_gridZoom = 0.0;
   qreal m_gridDevicePixelRatio = 0.0;
+  qreal m_gridBaseStep = 0.0;
   quint64 m_gridThemeRevision = 0;
   QSGGeometryNode *m_grid = nullptr;
   QSGTransformNode *m_transform = nullptr;
@@ -864,6 +871,10 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
                  palette.accent);
     }
   }
+  for (const auto &guide : snapshot.alignmentGuides) {
+    appendDashedLine(vertices, guide.p1(), guide.p2(), 1.5 / zoom, 1.0 / zoom,
+                     palette.alignmentGuide, zoom);
+  }
   if (snapshot.lassoVisible)
     appendBorder(vertices, snapshot.lassoRect, 1.5 / zoom, palette.accent);
   return createColoredNodeBatches(vertices);
@@ -949,7 +960,11 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
 
 DiagramCanvas::DiagramCanvas(QQuickItem *parent)
     : QQuickItem(parent),
-      m_defaultDistributionGap(ApplicationSettings::kDefaultDistributionGap) {
+      m_defaultDistributionGap(ApplicationSettings::kDefaultDistributionGap),
+      m_snapToGridEnabled(ApplicationSettings::kDefaultSnapToGridEnabled),
+      m_alignmentGuidesEnabled(
+          ApplicationSettings::kDefaultAlignmentGuidesEnabled),
+      m_gridSpacing(ApplicationSettings::kDefaultGridSpacing) {
   setFlag(QQuickItem::ItemHasContents, true);
   setClip(true);
   setAcceptedMouseButtons(Qt::AllButtons);
@@ -1032,6 +1047,44 @@ void DiagramCanvas::setDefaultDistributionGap(int gap) {
     return;
   m_defaultDistributionGap = validGap;
   emit defaultDistributionGapChanged();
+}
+
+bool DiagramCanvas::snapToGridEnabled() const { return m_snapToGridEnabled; }
+
+void DiagramCanvas::setSnapToGridEnabled(bool enabled) {
+  if (m_snapToGridEnabled == enabled)
+    return;
+  m_snapToGridEnabled = enabled;
+  emit snapToGridEnabledChanged();
+}
+
+bool DiagramCanvas::alignmentGuidesEnabled() const {
+  return m_alignmentGuidesEnabled;
+}
+
+void DiagramCanvas::setAlignmentGuidesEnabled(bool enabled) {
+  if (m_alignmentGuidesEnabled == enabled)
+    return;
+  m_alignmentGuidesEnabled = enabled;
+  if (!enabled) {
+    m_alignmentGuides.clear();
+    m_sceneDirty = true;
+    update();
+  }
+  emit alignmentGuidesEnabledChanged();
+}
+
+int DiagramCanvas::gridSpacing() const { return m_gridSpacing; }
+
+void DiagramCanvas::setGridSpacing(int spacing) {
+  const int validSpacing =
+      std::clamp(spacing, ApplicationSettings::kMinimumGridSpacing,
+                 ApplicationSettings::kMaximumGridSpacing);
+  if (m_gridSpacing == validSpacing)
+    return;
+  m_gridSpacing = validSpacing;
+  emit gridSpacingChanged();
+  update();
 }
 
 void DiagramCanvas::refreshTheme() {
@@ -1256,7 +1309,7 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
   const qreal devicePixelRatio =
       quickWindow ? quickWindow->devicePixelRatio() : 1.0;
   root->updateGrid({width(), height()}, m_pan, m_zoom, devicePixelRatio,
-                   m_themeRevision);
+                   m_gridSpacing, m_themeRevision);
   root->updateTransform(m_pan, m_zoom);
 
   const int detail = detailLevel(m_zoom);
@@ -1343,6 +1396,7 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
     }
     snapshot.lassoRect = m_lassoRect.normalized();
     snapshot.lassoVisible = m_lassoActive && !snapshot.lassoRect.isEmpty();
+    snapshot.alignmentGuides = m_alignmentGuides;
     if (geometryDirty)
       root->replaceGeometry(buildSceneGeometry(snapshot, m_zoom, detail));
 
@@ -1462,6 +1516,7 @@ DiagramCanvas::TextHit DiagramCanvas::hitText(const QPointF &scenePoint) const {
 
 void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
   forceActiveFocus();
+  m_alignmentGuides.clear();
   m_pressView = event->position();
   m_pressScene = toScene(m_pressView);
   if (event->button() == Qt::MiddleButton) {
@@ -1616,10 +1671,34 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
   }
   const QPointF delta = toScene(event->position()) - m_pressScene;
   if (m_interaction == Interaction::Move) {
+    ui::DiagramSnapResult snapResult{delta, {}};
+    const auto *d = diagram();
+    const bool suppressSnapping = event->modifiers().testFlag(Qt::AltModifier);
+    if (d && !suppressSnapping &&
+        (m_snapToGridEnabled || m_alignmentGuidesEnabled)) {
+      QList<ui::DiagramNodeGeometry> moving;
+      QList<ui::DiagramNodeGeometry> stationary;
+      moving.reserve(m_originalGeometry.size());
+      stationary.reserve(d->nodes.size() - m_originalGeometry.size());
+      for (const auto &node : d->nodes) {
+        const auto original = m_originalGeometry.constFind(node.id);
+        if (original != m_originalGeometry.cend())
+          moving.append({node.id, *original});
+        else
+          stationary.append({node.id, node.geometry});
+      }
+      const ui::DiagramSnapOptions options{
+          m_snapToGridEnabled, m_alignmentGuidesEnabled,
+          static_cast<qreal>(m_gridSpacing), kSnapToleranceViewPixels / m_zoom};
+      snapResult = ui::snapDiagramMove(moving, stationary, m_interactionNode,
+                                       delta, options);
+    }
     m_previewGeometry.clear();
     for (auto it = m_originalGeometry.cbegin(); it != m_originalGeometry.cend();
          ++it)
-      m_previewGeometry.insert(it.key(), it.value().translated(delta));
+      m_previewGeometry.insert(it.key(),
+                               it.value().translated(snapResult.delta));
+    m_alignmentGuides = std::move(snapResult.guides);
     m_sceneDirty = true;
     m_textDirty = true;
     update();
@@ -1666,6 +1745,7 @@ void DiagramCanvas::mouseReleaseEvent(QMouseEvent *event) {
   m_interaction = Interaction::None;
   m_originalGeometry.clear();
   m_previewGeometry.clear();
+  m_alignmentGuides.clear();
   m_portPreviewActive = false;
   m_bendPointPreview.clear();
   m_bendPointPreviewActive = false;
