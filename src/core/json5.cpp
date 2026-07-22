@@ -1,6 +1,7 @@
 #include "core/json5.h"
 
 #include <QJsonParseError>
+#include <algorithm>
 
 namespace uuml {
 namespace {
@@ -11,6 +12,21 @@ bool isIdentifierStart(QChar c) {
 
 bool isIdentifierPart(QChar c) {
   return c.isLetterOrNumber() || c == u'_' || c == u'$';
+}
+
+bool isSafeSerializedIdentifier(const QStringView &value) {
+  if (value.isEmpty())
+    return false;
+  const auto isAsciiLetter = [](QChar c) {
+    return (c >= u'a' && c <= u'z') || (c >= u'A' && c <= u'Z');
+  };
+  if (!isAsciiLetter(value.first()) && value.first() != u'_' &&
+      value.first() != u'$')
+    return false;
+  return std::all_of(value.cbegin() + 1, value.cend(), [&](QChar c) {
+    return isAsciiLetter(c) || (c >= u'0' && c <= u'9') || c == u'_' ||
+           c == u'$';
+  });
 }
 
 QString normalizeStringsAndComments(const QString &input, bool &hadComments,
@@ -193,6 +209,48 @@ Json5Result Json5::parse(const QByteArray &source) {
                        .arg(parseError.errorString());
   }
   return result;
+}
+
+QByteArray Json5::serialize(const QJsonDocument &document,
+                            QJsonDocument::JsonFormat format) {
+  const QString json = QString::fromUtf8(document.toJson(format));
+  QString json5;
+  json5.reserve(json.size());
+
+  for (qsizetype index = 0; index < json.size();) {
+    if (json.at(index) != u'"') {
+      json5 += json.at(index++);
+      continue;
+    }
+
+    qsizetype end = index + 1;
+    while (end < json.size()) {
+      if (json.at(end) == u'\\' && end + 1 < json.size()) {
+        end += 2;
+        continue;
+      }
+      if (json.at(end++) == u'"')
+        break;
+    }
+    if (end > json.size() || json.at(end - 1) != u'"') {
+      // QJsonDocument always emits complete strings. Retaining the remainder
+      // is safer than producing malformed output if that invariant changes.
+      json5 += json.mid(index);
+      break;
+    }
+
+    qsizetype next = end;
+    while (next < json.size() && json.at(next).isSpace())
+      ++next;
+    const QStringView contents(json.constData() + index + 1, end - index - 2);
+    const bool objectKey = next < json.size() && json.at(next) == u':';
+    if (objectKey && isSafeSerializedIdentifier(contents))
+      json5 += contents;
+    else
+      json5 += QStringView(json).mid(index, end - index);
+    index = end;
+  }
+  return json5.toUtf8();
 }
 
 } // namespace uuml

@@ -1,9 +1,11 @@
+#include "core/application_settings.h"
 #include "core/json5.h"
 #include "core/project_controller.h"
 #include "core/project_serializer.h"
 #include "core/workspace_controller.h"
 #include "ui/text_occlusion.h"
 #include "ui/triangle_batch.h"
+#include "ui/ui_theme.h"
 
 #include <QDir>
 #include <QFile>
@@ -37,6 +39,27 @@ ProjectData createGridProject(int nodeCount) {
   return project;
 }
 
+class IsolatedSettingsScope final {
+public:
+  IsolatedSettingsScope()
+      : m_organization(QCoreApplication::organizationName()),
+        m_application(QCoreApplication::applicationName()) {
+    QCoreApplication::setOrganizationName(
+        QStringLiteral("uuml-preferences-test-%1").arg(newId()));
+    QCoreApplication::setApplicationName(QStringLiteral("uuml-core-tests"));
+  }
+
+  ~IsolatedSettingsScope() {
+    QSettings().clear();
+    QCoreApplication::setOrganizationName(m_organization);
+    QCoreApplication::setApplicationName(m_application);
+  }
+
+private:
+  QString m_organization;
+  QString m_application;
+};
+
 } // namespace
 
 class CoreTests final : public QObject {
@@ -44,6 +67,7 @@ class CoreTests final : public QObject {
 
 private slots:
   void json5Profile();
+  void json5SerializationUsesReadableKeys();
   void deterministicRoundTrip();
   void validationFindsBrokenReferences();
   void commandUndoRedo();
@@ -60,6 +84,9 @@ private slots:
   void detachedWindowModelAndGeometryRemainStable();
   void closingAllDetachedWindowsReturnsTheirDiagrams();
   void persistedWorkspaceRestoresTabGroups();
+  void applicationPreferencesPersist();
+  void recentProjectHistoryPersists();
+  void themePreferencesPersistAndReset();
   void interruptedSaveRecovery();
   void fullyCoveredTextHasNoVisibleFragments();
   void partialTextCoveragePreservesOnlyExposedArea();
@@ -83,6 +110,24 @@ void CoreTests::json5Profile() {
   QCOMPARE(
       parsed.document.object().value(QStringLiteral("list")).toArray().size(),
       2);
+}
+
+void CoreTests::json5SerializationUsesReadableKeys() {
+  QJsonObject object;
+  object.insert(QStringLiteral("ordinaryKey"), 1);
+  object.insert(QStringLiteral("$metadata"), true);
+  object.insert(QStringLiteral("hyphenated-key"), 2);
+  object.insert(QStringLiteral("123numeric"), 3);
+
+  const QByteArray serialized = Json5::serialize(QJsonDocument(object));
+  QVERIFY(serialized.contains("ordinaryKey: 1"));
+  QVERIFY(serialized.contains("$metadata: true"));
+  QVERIFY(serialized.contains("\"hyphenated-key\": 2"));
+  QVERIFY(serialized.contains("\"123numeric\": 3"));
+
+  const auto parsed = Json5::parse(serialized);
+  QVERIFY2(parsed, qPrintable(parsed.error));
+  QCOMPARE(parsed.document.object(), object);
 }
 
 void CoreTests::deterministicRoundTrip() {
@@ -731,6 +776,141 @@ void CoreTests::persistedWorkspaceRestoresTabGroups() {
     QCOMPARE(restored.mainWindowWidth(), 1500);
     QCOMPARE(restored.mainWindowHeight(), 960);
   }
+}
+
+void CoreTests::applicationPreferencesPersist() {
+  IsolatedSettingsScope settingsScope;
+
+  {
+    ApplicationSettings settings;
+    QCOMPARE(settings.defaultDistributionGap(),
+             ApplicationSettings::kDefaultDistributionGap);
+    QSignalSpy changes(&settings,
+                       &ApplicationSettings::defaultDistributionGapChanged);
+    settings.setDefaultDistributionGap(24);
+    QCOMPARE(changes.count(), 1);
+  }
+
+  {
+    ApplicationSettings restored;
+    QCOMPARE(restored.defaultDistributionGap(), 24);
+    restored.setDefaultDistributionGap(-10);
+    QCOMPARE(restored.defaultDistributionGap(),
+             ApplicationSettings::kMinimumDistributionGap);
+    restored.resetDefaults();
+    QCOMPARE(restored.defaultDistributionGap(),
+             ApplicationSettings::kDefaultDistributionGap);
+  }
+}
+
+void CoreTests::recentProjectHistoryPersists() {
+  IsolatedSettingsScope settingsScope;
+  QTemporaryDir projectDirectory;
+  QVERIFY(projectDirectory.isValid());
+  QVERIFY(
+      ProjectSerializer::save(projectDirectory.path(),
+                              createStarterProject(QStringLiteral("Recent")))
+          .ok);
+
+  ApplicationSettings settings;
+  ProjectController controller;
+  QObject::connect(&controller, &ProjectController::projectOpened, &settings,
+                   &ApplicationSettings::addRecentProject);
+  QSignalSpy opened(&controller, &ProjectController::projectOpened);
+  QSignalSpy historyChanges(&settings,
+                            &ApplicationSettings::recentProjectsChanged);
+
+  QVERIFY(!controller.openProject(QUrl::fromLocalFile(
+      QDir(projectDirectory.path()).filePath(QStringLiteral("missing")))));
+  QCOMPARE(opened.count(), 0);
+  QVERIFY(settings.recentProjects().isEmpty());
+
+  QVERIFY(controller.openProject(QUrl::fromLocalFile(projectDirectory.path())));
+  QCOMPARE(opened.count(), 1);
+  QCOMPARE(historyChanges.count(), 1);
+  QCOMPARE(settings.recentProjects().first().toMap().value("path").toString(),
+           QDir::cleanPath(projectDirectory.path()));
+
+  for (int index = 0; index <= ApplicationSettings::kMaximumRecentProjects;
+       ++index) {
+    settings.addRecentProject(
+        QDir(projectDirectory.path())
+            .filePath(QStringLiteral("project-%1.uuml").arg(index)));
+  }
+  const QVariantList capped = settings.recentProjects();
+  QCOMPARE(capped.size(), ApplicationSettings::kMaximumRecentProjects);
+  const QString newestPath =
+      QDir(projectDirectory.path())
+          .filePath(QStringLiteral("project-%1.uuml")
+                        .arg(ApplicationSettings::kMaximumRecentProjects));
+  QCOMPARE(capped.first().toMap().value("path").toString(),
+           QDir::cleanPath(newestPath));
+
+  const QString movedPath = capped.last().toMap().value("path").toString();
+  settings.addRecentProject(movedPath);
+  QCOMPARE(settings.recentProjects().first().toMap().value("path").toString(),
+           movedPath);
+  const int changesBeforeNoOp = historyChanges.count();
+  settings.addRecentProject(movedPath);
+  QCOMPARE(historyChanges.count(), changesBeforeNoOp);
+
+  ApplicationSettings restored;
+  QCOMPARE(restored.recentProjects(), settings.recentProjects());
+  restored.clearRecentProjects();
+  QVERIFY(restored.recentProjects().isEmpty());
+  QVERIFY(!QSettings().contains(QStringLiteral("history/recentProjects")));
+}
+
+void CoreTests::themePreferencesPersistAndReset() {
+  IsolatedSettingsScope settingsScope;
+  const QColor customClassFill(QStringLiteral("#123456"));
+  const QColor customSelectionOverlay(1, 2, 3, 4);
+
+  {
+    ui::UiTheme theme;
+    QVERIFY(theme.colorRoles().size() > 30);
+    QVERIFY(theme.defaultColor(QStringLiteral("classFill")).isValid());
+    QCOMPARE(theme.normalizeColor(QStringLiteral("#aBcDeF")),
+             QStringLiteral("#ABCDEF"));
+    QCOMPARE(theme.colorText(customSelectionOverlay),
+             QStringLiteral("#04010203"));
+
+    QSignalSpy changes(&theme, &ui::UiTheme::paletteChanged);
+    QVariantMap colors;
+    colors.insert(QStringLiteral("classFill"), customClassFill);
+    colors.insert(QStringLiteral("selectionOverlay"), customSelectionOverlay);
+    theme.setColors(colors);
+    QCOMPARE(changes.count(), 1);
+    QCOMPARE(theme.classFill(), customClassFill);
+    QCOMPARE(theme.selectionOverlay(), customSelectionOverlay);
+    QCOMPARE(ui::uiPalette().classFill, customClassFill);
+  }
+
+  {
+    ui::UiTheme restored;
+    QCOMPARE(restored.classFill(), customClassFill);
+    QCOMPARE(restored.selectionOverlay(), customSelectionOverlay);
+    const QColor defaultClassFill =
+        restored.defaultColor(QStringLiteral("classFill"));
+    QVERIFY(defaultClassFill != customClassFill);
+    QVariantMap defaults;
+    defaults.insert(QStringLiteral("classFill"), defaultClassFill);
+    defaults.insert(QStringLiteral("selectionOverlay"),
+                    restored.defaultColor(QStringLiteral("selectionOverlay")));
+    restored.setColors(defaults);
+    QVERIFY(!QSettings().contains(
+        QStringLiteral("preferences/theme/colors/classFill")));
+    QVERIFY(!QSettings().contains(
+        QStringLiteral("preferences/theme/colors/selectionOverlay")));
+
+    restored.setColor(QStringLiteral("classFill"), customClassFill);
+    restored.resetDefaultColors();
+    QCOMPARE(restored.classFill(), defaultClassFill);
+  }
+
+  ui::UiTheme defaults;
+  QCOMPARE(defaults.classFill(),
+           defaults.defaultColor(QStringLiteral("classFill")));
 }
 
 void CoreTests::interruptedSaveRecovery() {

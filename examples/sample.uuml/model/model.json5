@@ -1,78 +1,78 @@
 {
-    "elements": [
+    elements: [
         {
-            "attributes": [
+            attributes: [
                 "+ port: int"
             ],
-            "enumLiterals": [
+            enumLiterals: [
             ],
-            "id": "019b0000-0000-7000-8000-000000000010",
-            "name": "ApiService",
-            "operations": [
+            id: "019b0000-0000-7000-8000-000000000010",
+            name: "ApiService",
+            operations: [
                 "+ handle(): Response"
             ],
-            "type": "class"
+            type: "class"
         },
         {
-            "attributes": [
+            attributes: [
                 "+ connectionString: string"
             ],
-            "enumLiterals": [
+            enumLiterals: [
             ],
-            "id": "019b0000-0000-7000-8000-000000000011",
-            "name": "Repository",
-            "operations": [
+            id: "019b0000-0000-7000-8000-000000000011",
+            name: "Repository",
+            operations: [
                 "+ load(): Entity"
             ],
-            "type": "class"
+            type: "class"
         },
         {
-            "attributes": [
+            attributes: [
                 "+ attribute: Type"
             ],
-            "enumLiterals": [
+            enumLiterals: [
             ],
-            "id": "f845a372-9c0f-455b-b5a0-2d7a170dc837",
-            "name": "Class3",
-            "operations": [
+            id: "f845a372-9c0f-455b-b5a0-2d7a170dc837",
+            name: "Class3",
+            operations: [
                 "+ operation(): void"
             ],
-            "type": "class"
+            type: "class"
         },
         {
-            "attributes": [
+            attributes: [
                 "+ attribute: Type"
             ],
-            "enumLiterals": [
+            enumLiterals: [
             ],
-            "id": "bf082cc9-3b3c-455c-a224-b473d303be67",
-            "name": "Class4",
-            "operations": [
+            id: "bf082cc9-3b3c-455c-a224-b473d303be67",
+            name: "Class4",
+            operations: [
                 "+ operation(): void"
             ],
-            "type": "class"
+            type: "class"
         },
         {
-            "attributes": [
+            attributes: [
                 "+ attribute: Type"
             ],
-            "enumLiterals": [
+            enumLiterals: [
             ],
-            "id": "e9285840-4e09-48e9-91c7-6992007e4643",
-            "name": "Class5",
-            "operations": [
+            id: "e9285840-4e09-48e9-91c7-6992007e4643",
+            name: "Class5",
+            operations: [
                 "+ operation(): void"
             ],
-            "type": "class"
+            type: "class"
         }
     ],
-    "relationships": [
+    relationships: [
         {
-            "id": "019b0000-0000-7000-8000-000000000020",
-            "name": "depends on",
-            "sourceId": "019b0000-0000-7000-8000-000000000010",
-            "targetId": "019b0000-0000-7000-8000-000000000011",
-            "type": "dependency"
+            id: "019b0000-0000-7000-8000-000000000020",
+            name: "depends on",
+            sourceId: "019b0000-0000-7000-8000-000000000010",
+            targetId: "019b0000-0000-7000-8000-000000000011",
+            type: "dependency"
         }
     ]
 }

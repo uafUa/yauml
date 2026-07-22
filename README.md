@@ -103,6 +103,22 @@ Validate a project without opening the GUI:
 - Drag any selected element to move the complete selection as one undoable
   command. Press `Delete` to remove selected presentations from the diagram;
   deleting a selected connector removes its relationship.
+- Right-click a multi-selection and use **Arrange** to align elements, match
+  their size, or distribute three or more elements evenly. The displayed
+  shortcuts are local to that diagram window. Distribution uses the smallest
+  positive gap already present in the selection. If all elements overlap or
+  touch, change the fallback spacing under **Edit > Preferences** (10 px by
+  default).
+- Use an arrow key to nudge the selection by one diagram unit, or hold `Shift`
+  to nudge by ten. Every nudge and arrangement action is independently
+  undoable.
+- Open **Edit > Preferences** to change general settings or edit the semantic
+  color palette. The Colors page groups roles in a scrollable grid and supports
+  both a color picker and hexadecimal values. Changes are applied on **OK**,
+  persisted for the application, and refreshed across all diagram windows.
+- Use **File > Open Recent…** to reopen one of the ten most recently opened
+  projects. Successful opens move a project to the top; failed opens are not
+  added. The submenu also provides an action to clear the history.
 - Right-click a connector segment and choose `Add bend point here`, or
   double-click a segment. Drag a selected bend handle to shape the route;
   `Delete` removes the selected bend before it removes the relationship.
@@ -112,5 +128,7 @@ Validate a project without opening the GUI:
 Project directories contain `manifest.json5`, `model/model.json5`, and
 `diagrams/diagrams.json5`. Strict JSON is accepted because it is a valid JSON5
 subset; the loader additionally accepts comments, trailing commas, single-quoted
-strings, and unquoted keys. To avoid silently destroying hand-written comments,
-the MVP reads and validates commented files but refuses to rewrite them.
+strings, and unquoted keys. Newly written files omit quotes from identifier-safe
+keys while retaining them for unusual or forward-compatible keys that require
+quoting. To avoid silently destroying hand-written comments, the MVP reads and
+validates commented files but refuses to rewrite them.

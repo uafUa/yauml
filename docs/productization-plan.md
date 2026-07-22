@@ -1,6 +1,7 @@
 # uuml Productization Plan
 
-Status: command foundation and Phase 3.1–3.3 implemented; Phase 3.4 is next
+Status: command foundation and Phase 3.1–3.3 implemented; Phase 3.4 arrangement
+tools implemented, with snapping guides and advanced connector interaction next
 
 The product owner accepted the MVP on 2026-07-21. This plan turns the broader
 architecture roadmap into bounded, testable delivery tranches. MVP audit notes
@@ -70,11 +71,48 @@ history memory grow with total project size rather than the size of each edit.
 - Rectangular lasso selection is implemented as the multi-object interaction
   foundation. Plain drag replaces selection, Shift adds, and Ctrl toggles;
   selection-only frames retain text atlases for large-diagram responsiveness.
-- Alignment, equal sizing, distribution, snapping guides, and keyboard nudging.
+- Alignment, equal sizing, minimum-gap edge-to-edge distribution, and keyboard
+  nudging are implemented through diagram-local actions and shortcuts. The
+  distribution fallback gap is an application preference persisted through
+  the settings service.
+- Live snapping and alignment guides are next.
 - Treat a multi-object operation as one undoable transaction.
 
-### 3.5 Styling and export
+### 3.5 Connector routing and direct interaction
 
+- Add an orthogonal routing mode that automatically creates horizontal and
+  vertical segments joined by 90-degree bends. Moving or resizing an endpoint
+  node must update the route while preserving its attachment constraints.
+  User-adjusted bend points remain orthogonal. Basic Manhattan routing is the
+  first acceptance level; obstacle avoidance is a separate enhancement.
+- Complete the structural relationship vocabulary used by supported class and
+  package diagrams: dependency, generalization/inheritance,
+  realization/implementation, association with navigability, aggregation, and
+  composition. Each type has distinct persisted semantics, decorations,
+  validation, creation commands, and undo/redo. Behavioral-diagram connectors
+  remain outside the current product direction.
+- Add edge-gesture connector creation. While the pointer button is held on a
+  node edge, pressing the relationship hotkey enters a drag-to-connect gesture
+  (`D` dependency, `I` implementation/realization, `H` inheritance/
+  generalization, with corresponding keys for the other supported types). The
+  initial press position creates the persisted perimeter attachment; dragging
+  previews the connector, and releasing over any compatible node—including the
+  originating node—commits the relationship as one command. Escape or an
+  invalid drop cancels without changing the model.
+- Replace the modal **Reconnect source…** and **Reconnect target…** actions with
+  direct endpoint manipulation. A selected connector exposes draggable endpoint
+  handles. Starting a drag provisionally detaches that end; dropping it on any
+  compatible node creates or updates the perimeter attachment and commits one
+  undoable reconnection. Invalid drops restore the original connection.
+- Keep routing mode, semantic direction, endpoint attachments, bend constraints,
+  and self-connections intact across save/load and exact command undo/redo.
+
+### 3.6 Styling and export
+
+- The application palette is centralized behind semantic roles shared by QML
+  controls and the native scene-graph renderer. All roles are editable through
+  the persisted Colors preferences page, with staged apply/cancel behavior and
+  render-thread-safe palette snapshots.
 - Introduce project styles and presentation-local overrides behind stable style
   interfaces.
 - Add SVG, PNG, and PDF export after rendered-output regression tests exist.

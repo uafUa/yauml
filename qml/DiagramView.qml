@@ -12,6 +12,7 @@ Item {
         anchors.fill: parent
         project: projectController
         diagramId: root.diagramId
+        defaultDistributionGap: applicationSettings.defaultDistributionGap
 
         onContextMenuRequested: function(target, menuX, menuY) {
             const menu = target === "element" ? elementMenu
@@ -46,6 +47,11 @@ Item {
             editor.forceActiveFocus()
             editor.selectAll()
         }
+    }
+
+    Connections {
+        target: uiTheme
+        function onPaletteChanged() { canvas.refreshTheme() }
     }
 
     Label {
@@ -89,6 +95,30 @@ Item {
             MenuItem { text: qsTr("Association"); onTriggered: canvas.createRelationship("association") }
         }
         MenuSeparator {}
+        Menu {
+            title: qsTr("Arrange")
+            enabled: canvas.selectedNodeCount >= 2
+            Menu {
+                title: qsTr("Align")
+                MenuItem { action: alignLeftAction }
+                MenuItem { action: alignHorizontalCenterAction }
+                MenuItem { action: alignRightAction }
+                MenuSeparator {}
+                MenuItem { action: alignTopAction }
+                MenuItem { action: alignVerticalCenterAction }
+                MenuItem { action: alignBottomAction }
+            }
+            Menu {
+                title: qsTr("Make same size")
+                MenuItem { action: matchWidthAction }
+                MenuItem { action: matchHeightAction }
+                MenuItem { action: matchSizeAction }
+            }
+            MenuSeparator {}
+            MenuItem { action: distributeHorizontallyAction }
+            MenuItem { action: distributeVerticallyAction }
+        }
+        MenuSeparator {}
         MenuItem {
             text: canvas.selectedNodeCount > 1
                   ? qsTr("Remove presentations from diagram")
@@ -116,6 +146,84 @@ Item {
         MenuItem { text: qsTr("Reconnect target…"); onTriggered: canvas.reconnectTarget() }
         MenuSeparator {}
         MenuItem { text: qsTr("Delete relationship"); onTriggered: canvas.deleteSelectedConnector() }
+    }
+
+    Action {
+        id: alignLeftAction
+        text: qsTr("Left")
+        shortcut: "Ctrl+Shift+Left"
+        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        onTriggered: canvas.arrangeSelection("alignLeft")
+    }
+    Action {
+        id: alignHorizontalCenterAction
+        text: qsTr("Horizontal centers")
+        shortcut: "Ctrl+Shift+H"
+        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        onTriggered: canvas.arrangeSelection("alignHorizontalCenter")
+    }
+    Action {
+        id: alignRightAction
+        text: qsTr("Right")
+        shortcut: "Ctrl+Shift+Right"
+        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        onTriggered: canvas.arrangeSelection("alignRight")
+    }
+    Action {
+        id: alignTopAction
+        text: qsTr("Top")
+        shortcut: "Ctrl+Shift+Up"
+        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        onTriggered: canvas.arrangeSelection("alignTop")
+    }
+    Action {
+        id: alignVerticalCenterAction
+        text: qsTr("Vertical centers")
+        shortcut: "Ctrl+Shift+V"
+        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        onTriggered: canvas.arrangeSelection("alignVerticalCenter")
+    }
+    Action {
+        id: alignBottomAction
+        text: qsTr("Bottom")
+        shortcut: "Ctrl+Shift+Down"
+        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        onTriggered: canvas.arrangeSelection("alignBottom")
+    }
+    Action {
+        id: matchWidthAction
+        text: qsTr("Width")
+        shortcut: "Ctrl+Alt+W"
+        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        onTriggered: canvas.arrangeSelection("matchWidth")
+    }
+    Action {
+        id: matchHeightAction
+        text: qsTr("Height")
+        shortcut: "Ctrl+Alt+H"
+        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        onTriggered: canvas.arrangeSelection("matchHeight")
+    }
+    Action {
+        id: matchSizeAction
+        text: qsTr("Width and height")
+        shortcut: "Ctrl+Alt+E"
+        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        onTriggered: canvas.arrangeSelection("matchSize")
+    }
+    Action {
+        id: distributeHorizontallyAction
+        text: qsTr("Distribute horizontally")
+        shortcut: "Ctrl+Alt+Shift+H"
+        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 3
+        onTriggered: canvas.arrangeSelection("distributeHorizontally")
+    }
+    Action {
+        id: distributeVerticallyAction
+        text: qsTr("Distribute vertically")
+        shortcut: "Ctrl+Alt+Shift+V"
+        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 3
+        onTriggered: canvas.arrangeSelection("distributeVertically")
     }
 
     Shortcut { sequences: ["Ctrl+0"]; context: Qt.WindowShortcut; enabled: root.visible; onActivated: canvas.fitToContent() }

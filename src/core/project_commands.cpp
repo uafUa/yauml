@@ -308,9 +308,8 @@ void DeleteElementCommand::revert(ProjectData &project) {
 
 UpdateNodeGeometriesCommand::UpdateNodeGeometriesCommand(
     ProjectController *controller, QString diagramId,
-    QList<NodeGeometryChange> changes)
-    : ProjectCommand(controller,
-                     QStringLiteral("Move or resize diagram elements")),
+    QList<NodeGeometryChange> changes, QString description)
+    : ProjectCommand(controller, description),
       m_diagramId(std::move(diagramId)), m_changes(std::move(changes)) {}
 
 void UpdateNodeGeometriesCommand::execute(ProjectData &project) {

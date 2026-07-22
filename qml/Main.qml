@@ -20,6 +20,7 @@ ApplicationWindow {
     property bool closeAuthorized: false
     property bool quitScheduled: false
     property string pendingDocumentAction: ""
+    property url pendingRecentProjectUrl: ""
 
     Component.onCompleted: geometryReady = true
     onXChanged: if (geometryReady) workspaceController.updateMainWindowGeometry(x, y, width, height)
@@ -35,23 +36,39 @@ ApplicationWindow {
     }
 
     function performDocumentAction(action) {
+        const recentProjectUrl = pendingRecentProjectUrl
         pendingDocumentAction = ""
+        pendingRecentProjectUrl = ""
         if (action === "close") {
             finishClose()
         } else if (action === "new") {
             projectController.newProject()
         } else if (action === "open") {
             openDialog.open()
+        } else if (action === "openRecent") {
+            projectController.openProject(recentProjectUrl)
         }
     }
 
     function requestDocumentAction(action) {
+        if (action !== "openRecent")
+            pendingRecentProjectUrl = ""
         if (projectController.dirty) {
             pendingDocumentAction = action
             unsavedChangesDialog.open()
         } else {
             performDocumentAction(action)
         }
+    }
+
+    function requestRecentProject(projectUrl) {
+        pendingRecentProjectUrl = projectUrl
+        requestDocumentAction("openRecent")
+    }
+
+    function cancelPendingDocumentAction() {
+        pendingDocumentAction = ""
+        pendingRecentProjectUrl = ""
     }
 
     function saveAndContinue() {
@@ -89,6 +106,45 @@ ApplicationWindow {
             title: qsTr("&File")
             Action { text: qsTr("&New"); shortcut: StandardKey.New; onTriggered: root.requestDocumentAction("new") }
             Action { text: qsTr("&Open…"); shortcut: StandardKey.Open; onTriggered: root.requestDocumentAction("open") }
+            Menu {
+                id: recentProjectsMenu
+                title: qsTr("Open &Recent…")
+
+                Instantiator {
+                    model: applicationSettings.recentProjects
+                    delegate: MenuItem {
+                        required property int index
+                        required property var modelData
+                        text: qsTr("%1. %2 — %3")
+                              .arg(index + 1)
+                              .arg(modelData.name)
+                              .arg(modelData.displayPath)
+                        onTriggered: root.requestRecentProject(modelData.url)
+                    }
+                    onObjectAdded: function(index, object) {
+                        recentProjectsMenu.insertItem(index, object)
+                    }
+                    onObjectRemoved: function(index, object) {
+                        recentProjectsMenu.removeItem(object)
+                    }
+                }
+                MenuItem {
+                    visible: applicationSettings.recentProjects.length === 0
+                    height: visible ? implicitHeight : 0
+                    text: qsTr("No recent projects")
+                    enabled: false
+                }
+                MenuSeparator {
+                    visible: applicationSettings.recentProjects.length > 0
+                    height: visible ? implicitHeight : 0
+                }
+                MenuItem {
+                    visible: applicationSettings.recentProjects.length > 0
+                    height: visible ? implicitHeight : 0
+                    text: qsTr("Clear Recent Projects")
+                    onTriggered: applicationSettings.clearRecentProjects()
+                }
+            }
             Action {
                 text: qsTr("&Save")
                 shortcut: StandardKey.Save
@@ -106,6 +162,12 @@ ApplicationWindow {
             Action {
                 text: qsTr("Delete selected project object")
                 onTriggered: projectController.deleteSelected()
+            }
+            MenuSeparator {}
+            Action {
+                text: qsTr("&Preferences…")
+                shortcut: "Ctrl+,"
+                onTriggered: preferencesDialog.open()
             }
         }
         Menu {
@@ -405,6 +467,217 @@ ApplicationWindow {
     }
 
     Dialog {
+        id: preferencesDialog
+        objectName: "preferencesDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(720, parent.width - 40)
+        height: Math.min(680, parent.height - 40)
+        modal: true
+        focus: true
+        title: qsTr("Preferences")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        onOpened: {
+            distributionGap.value = applicationSettings.defaultDistributionGap
+            colorPreferencesModel.clear()
+            const roles = uiTheme.colorRoles
+            for (let index = 0; index < roles.length; ++index) {
+                const role = roles[index]
+                colorPreferencesModel.append({
+                    roleKey: role.key,
+                    displayName: role.label,
+                    groupName: role.group,
+                    themeColor: uiTheme.color(role.key)
+                })
+            }
+        }
+        onAccepted: {
+            applicationSettings.defaultDistributionGap = distributionGap.value
+            const colors = {}
+            for (let index = 0; index < colorPreferencesModel.count; ++index) {
+                const entry = colorPreferencesModel.get(index)
+                colors[entry.roleKey] = entry.themeColor
+            }
+            uiTheme.setColors(colors)
+        }
+
+        ColumnLayout {
+            anchors.fill: parent
+            spacing: 8
+
+            TabBar {
+                id: preferencesTabs
+                objectName: "preferencesTabs"
+                Layout.fillWidth: true
+                TabButton { text: qsTr("General") }
+                TabButton { text: qsTr("Colors") }
+            }
+
+            StackLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                currentIndex: preferencesTabs.currentIndex
+
+                Item {
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 12
+
+                        Label {
+                            text: qsTr("Diagram arrangement")
+                            font.bold: true
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: qsTr("When distributed elements have no positive gap, this spacing is used between their edges.")
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label { text: qsTr("Default distribution gap") }
+                            Item { Layout.fillWidth: true }
+                            SpinBox {
+                                id: distributionGap
+                                from: 1
+                                to: 1000
+                                editable: true
+                            }
+                            Label { text: qsTr("px") }
+                        }
+                        Item { Layout.fillHeight: true }
+                    }
+                }
+
+                Item {
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 8
+                        spacing: 8
+
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: qsTr("Edit semantic color roles using the swatch or hexadecimal value. Eight-digit values use #AARRGGBB order.")
+                        }
+                        ListView {
+                            id: colorPreferencesList
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            model: colorPreferencesModel
+                            spacing: 2
+                            section.property: "groupName"
+                            section.criteria: ViewSection.FullString
+                            ScrollBar.vertical: ScrollBar {}
+
+                            section.delegate: Rectangle {
+                                required property string section
+                                width: colorPreferencesList.width
+                                height: 32
+                                color: uiTheme.panelHeader
+
+                                Label {
+                                    anchors.left: parent.left
+                                    anchors.verticalCenter: parent.verticalCenter
+                                    anchors.leftMargin: 8
+                                    text: parent.section
+                                    font.bold: true
+                                }
+                            }
+
+                            delegate: Item {
+                                required property int index
+                                required property string roleKey
+                                required property string displayName
+                                required property var themeColor
+                                width: colorPreferencesList.width
+                                height: 40
+                                onThemeColorChanged: colorValueEditor.text =
+                                                         uiTheme.colorText(themeColor)
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 8
+                                    spacing: 10
+
+                                    Label {
+                                        Layout.fillWidth: true
+                                        text: displayName
+                                        elide: Text.ElideRight
+                                    }
+                                    Button {
+                                        Layout.preferredWidth: 54
+                                        Layout.preferredHeight: 28
+                                        Accessible.name: qsTr("Choose %1 color").arg(displayName)
+                                        onClicked: {
+                                            colorPicker.modelIndex = index
+                                            colorPicker.selectedColor = themeColor
+                                            colorPicker.open()
+                                        }
+                                        background: Rectangle {
+                                            color: themeColor
+                                            border.color: uiTheme.controlBorder
+                                            radius: 3
+                                        }
+                                    }
+                                    TextField {
+                                        id: colorValueEditor
+                                        Layout.preferredWidth: 116
+                                        text: uiTheme.colorText(themeColor)
+                                        selectByMouse: true
+                                        validator: RegularExpressionValidator {
+                                            regularExpression: /^#[0-9A-Fa-f]{6}([0-9A-Fa-f]{2})?$/
+                                        }
+                                        onEditingFinished: {
+                                            const normalized = uiTheme.normalizeColor(text)
+                                            if (acceptableInput && normalized.length > 0)
+                                                colorPreferencesModel.setProperty(index, "themeColor", normalized)
+                                            else
+                                                text = uiTheme.colorText(themeColor)
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Item { Layout.fillWidth: true }
+                            Button {
+                                text: qsTr("Reset colors")
+                                onClicked: {
+                                    for (let index = 0; index < colorPreferencesModel.count; ++index) {
+                                        const role = colorPreferencesModel.get(index).roleKey
+                                        colorPreferencesModel.setProperty(
+                                                    index, "themeColor", uiTheme.defaultColor(role))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        ListModel { id: colorPreferencesModel }
+    }
+
+    ColorDialog {
+        id: colorPicker
+        property int modelIndex: -1
+        title: qsTr("Choose theme color")
+        options: ColorDialog.ShowAlphaChannel
+        onAccepted: {
+            if (modelIndex >= 0)
+                colorPreferencesModel.setProperty(modelIndex, "themeColor", selectedColor)
+            modelIndex = -1
+        }
+        onRejected: modelIndex = -1
+    }
+
+    Dialog {
         id: unsavedChangesDialog
         parent: Overlay.overlay
         anchors.centerIn: parent
@@ -424,7 +697,7 @@ ApplicationWindow {
 
         onAccepted: root.saveAndContinue()
         onDiscarded: root.performDocumentAction(root.pendingDocumentAction)
-        onRejected: root.pendingDocumentAction = ""
+        onRejected: root.cancelPendingDocumentAction()
     }
 
     Popup {
@@ -511,7 +784,7 @@ ApplicationWindow {
             if (saved && root.pendingDocumentAction.length > 0)
                 root.performDocumentAction(root.pendingDocumentAction)
         }
-        onRejected: root.pendingDocumentAction = ""
+        onRejected: root.cancelPendingDocumentAction()
     }
 
     Instantiator {

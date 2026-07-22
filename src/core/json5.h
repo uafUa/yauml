@@ -19,6 +19,9 @@ struct Json5Result {
 class Json5 {
 public:
   static Json5Result parse(const QByteArray &source);
+  static QByteArray
+  serialize(const QJsonDocument &document,
+            QJsonDocument::JsonFormat format = QJsonDocument::Indented);
 };
 
 } // namespace uuml

@@ -222,7 +222,7 @@ QByteArray manifestBytes(const ProjectData &project) {
   object.insert(QStringLiteral("name"), project.name);
   object.insert(QStringLiteral("model"), QString::fromLatin1(kModelName));
   object.insert(QStringLiteral("diagrams"), QString::fromLatin1(kDiagramsName));
-  return QJsonDocument(object).toJson(QJsonDocument::Indented);
+  return Json5::serialize(QJsonDocument(object));
 }
 
 QByteArray modelBytes(const ProjectData &project) {
@@ -235,7 +235,7 @@ QByteArray modelBytes(const ProjectData &project) {
     relationships.append(relationshipToJson(relationship));
   object.insert(QStringLiteral("elements"), elements);
   object.insert(QStringLiteral("relationships"), relationships);
-  return QJsonDocument(object).toJson(QJsonDocument::Indented);
+  return Json5::serialize(QJsonDocument(object));
 }
 
 QByteArray diagramsBytes(const ProjectData &project) {
@@ -256,7 +256,7 @@ QByteArray diagramsBytes(const ProjectData &project) {
     diagrams.append(object);
   }
   root.insert(QStringLiteral("diagrams"), diagrams);
-  return QJsonDocument(root).toJson(QJsonDocument::Indented);
+  return Json5::serialize(QJsonDocument(root));
 }
 
 bool recoverIfPending(const QString &root, QString &message) {

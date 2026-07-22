@@ -1,6 +1,8 @@
 #include "ui/diagram_canvas.h"
 
+#include "core/application_settings.h"
 #include "core/project_controller.h"
+#include "ui/diagram_arrangement.h"
 #include "ui/text_occlusion.h"
 #include "ui/triangle_batch.h"
 #include "ui/ui_theme.h"
@@ -658,10 +660,11 @@ public:
     appendChildNode(m_transform);
   }
 
-  void updateBackground(const QSizeF &size) {
-    if (size == m_backgroundSize)
+  void updateBackground(const QSizeF &size, quint64 themeRevision) {
+    if (size == m_backgroundSize && themeRevision == m_backgroundThemeRevision)
       return;
     m_backgroundSize = size;
+    m_backgroundThemeRevision = themeRevision;
     if (m_background) {
       removeChildNode(m_background);
       delete m_background;
@@ -675,15 +678,17 @@ public:
   }
 
   void updateGrid(const QSizeF &viewportSize, const QPointF &pan, qreal zoom,
-                  qreal devicePixelRatio) {
+                  qreal devicePixelRatio, quint64 themeRevision) {
     if (viewportSize == m_gridViewportSize && pan == m_gridPan &&
         qFuzzyCompare(zoom, m_gridZoom) &&
-        qFuzzyCompare(devicePixelRatio, m_gridDevicePixelRatio))
+        qFuzzyCompare(devicePixelRatio, m_gridDevicePixelRatio) &&
+        themeRevision == m_gridThemeRevision)
       return;
     m_gridViewportSize = viewportSize;
     m_gridPan = pan;
     m_gridZoom = zoom;
     m_gridDevicePixelRatio = devicePixelRatio;
+    m_gridThemeRevision = themeRevision;
     if (m_grid) {
       removeChildNode(m_grid);
       delete m_grid;
@@ -727,16 +732,19 @@ public:
   }
 
   int renderedDetail = -1;
+  quint64 renderedThemeRevision = 0;
   qreal renderedTextScale = 0.0;
   QRectF textCoverage;
 
 private:
   QSizeF m_backgroundSize;
+  quint64 m_backgroundThemeRevision = 0;
   QSGGeometryNode *m_background = nullptr;
   QSizeF m_gridViewportSize;
   QPointF m_gridPan;
   qreal m_gridZoom = 0.0;
   qreal m_gridDevicePixelRatio = 0.0;
+  quint64 m_gridThemeRevision = 0;
   QSGGeometryNode *m_grid = nullptr;
   QSGTransformNode *m_transform = nullptr;
   QSGNode *m_geometry = nullptr;
@@ -893,9 +901,8 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
     const QPointF middle = polylineMiddle(connector.points);
     const QRectF target(middle.x() - 70, middle.y() - 12, 140, 24);
     if (!coverage.isValid() || coverage.intersects(target))
-      appendVisibleText(target, target, connector.name, base,
-                        palette.bodyText, Qt::AlignCenter,
-                        allNodeRects);
+      appendVisibleText(target, target, connector.name, base, palette.bodyText,
+                        Qt::AlignCenter, allNodeRects);
   }
 
   for (qsizetype nodeIndex = 0; nodeIndex < snapshot.nodes.size();
@@ -913,8 +920,7 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
     const QRectF headerTarget(node.rect.left() + kPadding, node.rect.top(),
                               node.rect.width() - 2 * kPadding, kHeaderHeight);
     appendVisibleText(headerTarget, nodeTextClip, node.name, header,
-                      palette.nodeTitleText, Qt::AlignCenter,
-                      laterNodeRects);
+                      palette.nodeTitleText, Qt::AlignCenter, laterNodeRects);
     if (detail != 2)
       continue;
     int line = 0;
@@ -924,8 +930,7 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
                             node.rect.top() + kHeaderHeight +
                                 lineNumber * kLineHeight,
                             node.rect.width() - 2 * kPadding, kLineHeight);
-        appendVisibleText(target, nodeTextClip, text, base,
-                          palette.bodyText,
+        appendVisibleText(target, nodeTextClip, text, base, palette.bodyText,
                           Qt::AlignVCenter | Qt::AlignLeft, laterNodeRects);
         ++lineNumber;
       }
@@ -942,7 +947,9 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
 
 } // namespace
 
-DiagramCanvas::DiagramCanvas(QQuickItem *parent) : QQuickItem(parent) {
+DiagramCanvas::DiagramCanvas(QQuickItem *parent)
+    : QQuickItem(parent),
+      m_defaultDistributionGap(ApplicationSettings::kDefaultDistributionGap) {
   setFlag(QQuickItem::ItemHasContents, true);
   setClip(true);
   setAcceptedMouseButtons(Qt::AllButtons);
@@ -1011,6 +1018,27 @@ QString DiagramCanvas::reconnectPrompt() const {
   if (m_reconnectEndpoint == ReconnectEndpoint::Target)
     return QStringLiteral("Click the new target node");
   return {};
+}
+
+int DiagramCanvas::defaultDistributionGap() const {
+  return m_defaultDistributionGap;
+}
+
+void DiagramCanvas::setDefaultDistributionGap(int gap) {
+  const int validGap =
+      std::clamp(gap, ApplicationSettings::kMinimumDistributionGap,
+                 ApplicationSettings::kMaximumDistributionGap);
+  if (m_defaultDistributionGap == validGap)
+    return;
+  m_defaultDistributionGap = validGap;
+  emit defaultDistributionGapChanged();
+}
+
+void DiagramCanvas::refreshTheme() {
+  ++m_themeRevision;
+  m_sceneDirty = true;
+  m_textDirty = true;
+  update();
 }
 
 const Diagram *DiagramCanvas::diagram() const {
@@ -1222,11 +1250,13 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
   auto *root = static_cast<DiagramSceneRoot *>(oldNode);
   if (!root)
     root = new DiagramSceneRoot;
-  root->updateBackground({width(), height()});
+  const bool themeChanged = root->renderedThemeRevision != m_themeRevision;
+  root->updateBackground({width(), height()}, m_themeRevision);
   auto *quickWindow = window();
   const qreal devicePixelRatio =
       quickWindow ? quickWindow->devicePixelRatio() : 1.0;
-  root->updateGrid({width(), height()}, m_pan, m_zoom, devicePixelRatio);
+  root->updateGrid({width(), height()}, m_pan, m_zoom, devicePixelRatio,
+                   m_themeRevision);
   root->updateTransform(m_pan, m_zoom);
 
   const int detail = detailLevel(m_zoom);
@@ -1234,15 +1264,15 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
   const QRectF visibleScene =
       QRectF(toScene({0, 0}), toScene({width(), height()})).normalized();
   const bool detailChanged = root->renderedDetail != detail;
-  const bool geometryDirty = m_sceneDirty || detailChanged;
+  const bool geometryDirty = m_sceneDirty || detailChanged || themeChanged;
   const bool scaleChanged =
       !qFuzzyCompare(rasterScale, root->renderedTextScale);
   const bool needsTextCoverage = detail > 0 && rasterScale > 1.0;
   const bool coverageExpired =
       needsTextCoverage && (!root->textCoverage.isValid() ||
                             !root->textCoverage.contains(visibleScene));
-  const bool textDirty =
-      m_textDirty || detailChanged || scaleChanged || coverageExpired;
+  const bool textDirty = m_textDirty || detailChanged || scaleChanged ||
+                         coverageExpired || themeChanged;
   if (geometryDirty || textDirty) {
     SceneSnapshot snapshot;
     const auto *d = diagram();
@@ -1332,6 +1362,7 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
       m_textDirty = false;
     }
     root->renderedDetail = detail;
+    root->renderedThemeRevision = m_themeRevision;
     root->renderedTextScale = rasterScale;
     root->textCoverage = textCoverage;
     m_sceneDirty = false;
@@ -1924,6 +1955,66 @@ void DiagramCanvas::clearSelectedConnectorBendPoints() {
   update();
 }
 
+void DiagramCanvas::arrangeSelection(const QString &operation) {
+  if (!m_project || m_selectedNodes.size() < 2)
+    return;
+  const auto parsedOperation = ui::arrangementOperationFromKey(operation);
+  const auto *d = diagram();
+  if (!parsedOperation || !d)
+    return;
+
+  QList<ui::DiagramNodeGeometry> selected;
+  selected.reserve(m_selectedNodeOrder.size());
+  for (const QString &nodeId : m_selectedNodeOrder) {
+    if (const auto *node = findNode(*d, nodeId))
+      selected.append({nodeId, nodeGeometry(*node)});
+  }
+  const auto arranged = ui::arrangeDiagramNodes(selected, *parsedOperation,
+                                                m_defaultDistributionGap);
+  QVariantList geometries;
+  geometries.reserve(arranged.size());
+  for (const auto &node : arranged) {
+    QVariantMap geometry;
+    geometry.insert(QStringLiteral("id"), node.id);
+    geometry.insert(QStringLiteral("x"), node.geometry.x());
+    geometry.insert(QStringLiteral("y"), node.geometry.y());
+    geometry.insert(QStringLiteral("width"), node.geometry.width());
+    geometry.insert(QStringLiteral("height"), node.geometry.height());
+    geometries.append(geometry);
+  }
+  m_project->updateNodeGeometries(m_diagramId, geometries,
+                                  ui::arrangementDescription(*parsedOperation));
+}
+
+void DiagramCanvas::nudgeSelection(qreal deltaX, qreal deltaY) {
+  if (!m_project || m_selectedNodes.isEmpty() ||
+      (qFuzzyIsNull(deltaX) && qFuzzyIsNull(deltaY)))
+    return;
+  const auto *d = diagram();
+  if (!d)
+    return;
+
+  QVariantList geometries;
+  geometries.reserve(m_selectedNodeOrder.size());
+  for (const QString &nodeId : m_selectedNodeOrder) {
+    const auto *node = findNode(*d, nodeId);
+    if (!node)
+      continue;
+    const QRectF geometry = nodeGeometry(*node).translated(deltaX, deltaY);
+    QVariantMap value;
+    value.insert(QStringLiteral("id"), nodeId);
+    value.insert(QStringLiteral("x"), geometry.x());
+    value.insert(QStringLiteral("y"), geometry.y());
+    value.insert(QStringLiteral("width"), geometry.width());
+    value.insert(QStringLiteral("height"), geometry.height());
+    geometries.append(value);
+  }
+  m_project->updateNodeGeometries(
+      m_diagramId, geometries,
+      m_selectedNodes.size() == 1 ? QStringLiteral("Nudge diagram element")
+                                  : QStringLiteral("Nudge diagram elements"));
+}
+
 void DiagramCanvas::removeSelectedPresentations() {
   if (!m_project || m_selectedNodes.isEmpty())
     return;
@@ -2038,6 +2129,27 @@ void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
   if (event->key() == Qt::Key_Delete && !m_selectedConnector.isEmpty() &&
       m_project) {
     deleteSelectedConnector();
+    event->accept();
+    return;
+  }
+  const bool arrowKey =
+      event->key() == Qt::Key_Left || event->key() == Qt::Key_Right ||
+      event->key() == Qt::Key_Up || event->key() == Qt::Key_Down;
+  Qt::KeyboardModifiers modifiers = event->modifiers();
+  modifiers.setFlag(Qt::KeypadModifier, false);
+  if (arrowKey && !m_selectedNodes.isEmpty() &&
+      (modifiers == Qt::NoModifier || modifiers == Qt::ShiftModifier)) {
+    const qreal distance = modifiers == Qt::ShiftModifier ? 10.0 : 1.0;
+    QPointF delta;
+    if (event->key() == Qt::Key_Left)
+      delta.rx() = -distance;
+    else if (event->key() == Qt::Key_Right)
+      delta.rx() = distance;
+    else if (event->key() == Qt::Key_Up)
+      delta.ry() = -distance;
+    else
+      delta.ry() = distance;
+    nudgeSelection(delta.x(), delta.y());
     event->accept();
     return;
   }

@@ -1,6 +1,8 @@
 #include "core/project_controller.h"
+#include "ui/diagram_arrangement.h"
 #include "ui/diagram_canvas.h"
 
+#include <QKeyEvent>
 #include <QMouseEvent>
 #include <QtTest>
 
@@ -39,6 +41,11 @@ public:
     mousePressEvent(&event);
   }
 
+  void key(int key, Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
+    QKeyEvent event(QEvent::KeyPress, key, modifiers);
+    keyPressEvent(&event);
+  }
+
   void drag(const QPointF &start, const QPointF &end,
             Qt::KeyboardModifiers modifiers = Qt::NoModifier) {
     press(start, modifiers);
@@ -66,11 +73,56 @@ class DiagramCanvasTests final : public QObject {
   Q_OBJECT
 
 private slots:
+  void arrangementGeometryRulesAreDeterministic();
   void lassoSelectsAndMovesMultipleNodesAsOneCommand();
   void lassoModifiersAddAndToggleSelection();
+  void arrangementAndNudgingAreUndoableTransactions();
   void contextCreationUsesTheClickedDiagramAndPosition();
   void connectorBendPointCanBeAddedMovedAndRemoved();
 };
+
+void DiagramCanvasTests::arrangementGeometryRulesAreDeterministic() {
+  const QList<ui::DiagramNodeGeometry> nodes = {
+      {QStringLiteral("first"), QRectF(10, 20, 100, 40)},
+      {QStringLiteral("middle"), QRectF(200, 100, 150, 60)},
+      {QStringLiteral("last"), QRectF(500, 300, 200, 80)},
+  };
+
+  const auto aligned = ui::arrangeDiagramNodes(
+      nodes, ui::ArrangementOperation::AlignHorizontalCenter, 10.0);
+  QCOMPARE(aligned.at(0).geometry.center().x(), 355.0);
+  QCOMPARE(aligned.at(1).geometry.center().x(), 355.0);
+  QCOMPARE(aligned.at(2).geometry.center().x(), 355.0);
+
+  const auto sameSize =
+      ui::arrangeDiagramNodes(nodes, ui::ArrangementOperation::MatchSize, 10.0);
+  for (const auto &node : sameSize)
+    QCOMPARE(node.geometry.size(), QSizeF(200, 80));
+
+  const auto horizontal = ui::arrangeDiagramNodes(
+      nodes, ui::ArrangementOperation::DistributeHorizontally, 10.0);
+  QCOMPARE(horizontal.at(0).geometry, nodes.at(0).geometry);
+  QCOMPARE(horizontal.at(1).geometry.left(), 200.0);
+  QCOMPARE(horizontal.at(2).geometry.left(), 440.0);
+
+  const auto vertical = ui::arrangeDiagramNodes(
+      nodes, ui::ArrangementOperation::DistributeVertically, 10.0);
+  QCOMPARE(vertical.at(0).geometry, nodes.at(0).geometry);
+  QCOMPARE(vertical.at(1).geometry.top(), 100.0);
+  QCOMPARE(vertical.at(2).geometry.top(), 200.0);
+
+  const QList<ui::DiagramNodeGeometry> overlapping = {
+      {QStringLiteral("first"), QRectF(0, 0, 100, 40)},
+      {QStringLiteral("middle"), QRectF(50, 0, 100, 40)},
+      {QStringLiteral("last"), QRectF(100, 0, 100, 40)},
+  };
+  const auto fallback = ui::arrangeDiagramNodes(
+      overlapping, ui::ArrangementOperation::DistributeHorizontally, 12.0);
+  QCOMPARE(fallback.at(0).geometry.left(), 0.0);
+  QCOMPARE(fallback.at(1).geometry.left(), 112.0);
+  QCOMPARE(fallback.at(2).geometry.left(), 224.0);
+  QVERIFY(!ui::arrangementOperationFromKey(QStringLiteral("unknown")));
+}
 
 void DiagramCanvasTests::lassoSelectsAndMovesMultipleNodesAsOneCommand() {
   ProjectController controller;
@@ -113,6 +165,55 @@ void DiagramCanvasTests::lassoModifiersAddAndToggleSelection() {
   // A modified click on empty space is not a selection-clearing gesture.
   canvas.drag({800, 500}, {800, 500}, Qt::ControlModifier);
   QCOMPARE(canvas.selectedNodeCount(), 1);
+}
+
+void DiagramCanvasTests::arrangementAndNudgingAreUndoableTransactions() {
+  ProjectController controller;
+  populate(controller, 3);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto initialNodes = controller.data().diagrams.first().nodes;
+  controller.updateNodeGeometry(diagramId, initialNodes.at(1).id,
+                                initialNodes.at(1).geometry.x(), 100,
+                                initialNodes.at(1).geometry.width(),
+                                initialNodes.at(1).geometry.height());
+  controller.updateNodeGeometry(diagramId, initialNodes.at(2).id,
+                                initialNodes.at(2).geometry.x(), 160,
+                                initialNodes.at(2).geometry.width(),
+                                initialNodes.at(2).geometry.height());
+  const auto beforeArrangement = controller.data().diagrams.first().nodes;
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  canvas.drag({70, 70}, {820, 330});
+  QCOMPARE(canvas.selectedNodeCount(), 3);
+
+  canvas.arrangeSelection(QStringLiteral("alignTop"));
+  const auto &aligned = controller.data().diagrams.first().nodes;
+  QCOMPARE(aligned.at(0).geometry.top(), 50.0);
+  QCOMPARE(aligned.at(1).geometry.top(), 50.0);
+  QCOMPARE(aligned.at(2).geometry.top(), 50.0);
+  QCOMPARE(controller.undoText(), QStringLiteral("Align top"));
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first().nodes, beforeArrangement);
+
+  canvas.key(Qt::Key_Right);
+  const auto afterHorizontalNudge = controller.data().diagrams.first().nodes;
+  for (qsizetype index = 0; index < beforeArrangement.size(); ++index) {
+    QCOMPARE(afterHorizontalNudge.at(index).geometry,
+             beforeArrangement.at(index).geometry.translated(1, 0));
+  }
+  QCOMPARE(controller.undoText(), QStringLiteral("Nudge diagram elements"));
+
+  canvas.key(Qt::Key_Down, Qt::ShiftModifier);
+  const auto afterLargeNudge = controller.data().diagrams.first().nodes;
+  for (qsizetype index = 0; index < beforeArrangement.size(); ++index) {
+    QCOMPARE(afterLargeNudge.at(index).geometry,
+             beforeArrangement.at(index).geometry.translated(1, 10));
+  }
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first().nodes, afterHorizontalNudge);
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first().nodes, beforeArrangement);
 }
 
 void DiagramCanvasTests::contextCreationUsesTheClickedDiagramAndPosition() {

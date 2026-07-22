@@ -30,6 +30,8 @@ class DiagramCanvas : public QQuickItem {
                  selectedConnectorHasBendPoints NOTIFY canvasSelectionChanged)
   Q_PROPERTY(QString reconnectPrompt READ reconnectPrompt NOTIFY
                  canvasSelectionChanged)
+  Q_PROPERTY(int defaultDistributionGap READ defaultDistributionGap WRITE
+                 setDefaultDistributionGap NOTIFY defaultDistributionGapChanged)
 
 public:
   explicit DiagramCanvas(QQuickItem *parent = nullptr);
@@ -44,6 +46,8 @@ public:
   bool bendPointSelected() const;
   bool selectedConnectorHasBendPoints() const;
   QString reconnectPrompt() const;
+  int defaultDistributionGap() const;
+  void setDefaultDistributionGap(int gap);
 
   Q_INVOKABLE void fitToContent();
   Q_INVOKABLE void createElementAtContextPosition(const QString &type);
@@ -55,15 +59,19 @@ public:
   Q_INVOKABLE void addBendPointAtContextPosition();
   Q_INVOKABLE void removeSelectedBendPoint();
   Q_INVOKABLE void clearSelectedConnectorBendPoints();
+  Q_INVOKABLE void arrangeSelection(const QString &operation);
+  Q_INVOKABLE void nudgeSelection(qreal deltaX, qreal deltaY);
   Q_INVOKABLE void removeSelectedPresentations();
   Q_INVOKABLE void deleteSelectedConnector();
   Q_INVOKABLE void clearCanvasSelection();
+  Q_INVOKABLE void refreshTheme();
 
 signals:
   void projectChanged();
   void diagramIdChanged();
   void viewportChanged();
   void canvasSelectionChanged();
+  void defaultDistributionGapChanged();
   void contextMenuRequested(const QString &target, qreal x, qreal y);
   void editRequested(const QString &objectId, const QString &field, int index,
                      const QString &text, qreal x, qreal y, qreal width,
@@ -177,6 +185,8 @@ private:
   // Selection-only changes rebuild colored geometry but can retain the
   // expensive text atlases. Model and geometry changes set both dirty flags.
   bool m_textDirty = true;
+  int m_defaultDistributionGap;
+  quint64 m_themeRevision = 0;
 };
 
 } // namespace uuml

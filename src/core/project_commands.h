@@ -163,7 +163,8 @@ struct NodeGeometryChange {
 class UpdateNodeGeometriesCommand final : public ProjectCommand {
 public:
   UpdateNodeGeometriesCommand(ProjectController *controller, QString diagramId,
-                              QList<NodeGeometryChange> changes);
+                              QList<NodeGeometryChange> changes,
+                              QString description);
 
 private:
   void execute(ProjectData &project) override;

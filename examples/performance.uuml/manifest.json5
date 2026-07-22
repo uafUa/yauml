@@ -1,7 +1,7 @@
 {
-    "diagrams": "diagrams/diagrams.json5",
-    "id": "019b0000-0000-7000-8000-000000000001",
-    "model": "model/model.json5",
-    "name": "Performance Example — 600 classes",
-    "schemaVersion": 1
+    diagrams: "diagrams/diagrams.json5",
+    id: "019b0000-0000-7000-8000-000000000001",
+    model: "model/model.json5",
+    name: "Performance Example — 600 classes",
+    schemaVersion: 1
 }

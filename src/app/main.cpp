@@ -1,3 +1,4 @@
+#include "core/application_settings.h"
 #include "core/project_controller.h"
 #include "core/project_serializer.h"
 #include "core/workspace_controller.h"
@@ -70,7 +71,11 @@ int main(int argc, char *argv[]) {
 
   uuml::ProjectController project;
   uuml::WorkspaceController workspace(&project, true);
+  uuml::ApplicationSettings applicationSettings;
   uuml::ui::UiTheme uiTheme;
+  QObject::connect(&project, &uuml::ProjectController::projectOpened,
+                   &applicationSettings,
+                   &uuml::ApplicationSettings::addRecentProject);
   if (application.arguments().size() > 1) {
     const QString candidate = application.arguments().at(1);
     if (!candidate.startsWith(u'-'))
@@ -83,8 +88,9 @@ int main(int argc, char *argv[]) {
                                            &project);
   engine.rootContext()->setContextProperty(
       QStringLiteral("workspaceController"), &workspace);
-  engine.rootContext()->setContextProperty(QStringLiteral("uiTheme"),
-                                           &uiTheme);
+  engine.rootContext()->setContextProperty(
+      QStringLiteral("applicationSettings"), &applicationSettings);
+  engine.rootContext()->setContextProperty(QStringLiteral("uiTheme"), &uiTheme);
   QObject::connect(
       &engine, &QQmlApplicationEngine::objectCreationFailed, &application,
       [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
@@ -94,13 +100,33 @@ int main(int argc, char *argv[]) {
         QGuiApplication::platformName() != QStringLiteral("offscreen") &&
         QGuiApplication::platformName() != QStringLiteral("minimal");
     QTimer::singleShot(
-        0, &application, [&project, &workspace, supportsDetachedWindows] {
+        0, &application,
+        [&project, &workspace, &engine, supportsDetachedWindows] {
           const QString firstDiagram = project.data().diagrams.first().id;
           project.addElement(QStringLiteral("class"), firstDiagram);
           const QString secondDiagram = project.addDiagram();
           project.addElement(QStringLiteral("enumeration"), secondDiagram);
           if (supportsDetachedWindows)
             workspace.detachDiagram(secondDiagram, 80, 80);
+
+          // Exercise creation of the Preferences color delegates, not only
+          // compilation of the closed dialog. This catches runtime model-role
+          // and layout errors in the settings page during the UI smoke test.
+          const auto roots = engine.rootObjects();
+          QObject *rootObject = roots.isEmpty() ? nullptr : roots.first();
+          auto *preferences = rootObject
+                                  ? rootObject->findChild<QObject *>(
+                                        QStringLiteral("preferencesDialog"))
+                                  : nullptr;
+          auto *tabs = rootObject ? rootObject->findChild<QObject *>(
+                                        QStringLiteral("preferencesTabs"))
+                                  : nullptr;
+          if (!preferences || !tabs ||
+              !QMetaObject::invokeMethod(preferences, "open")) {
+            QCoreApplication::exit(1);
+            return;
+          }
+          tabs->setProperty("currentIndex", 1);
         });
     QTimer::singleShot(750, &application, [&engine] {
       const auto roots = engine.rootObjects();

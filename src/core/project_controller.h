@@ -90,6 +90,9 @@ public:
                                       qreal width, qreal height);
   Q_INVOKABLE void updateNodeGeometries(const QString &diagramId,
                                         const QVariantList &geometries);
+  void updateNodeGeometries(const QString &diagramId,
+                            const QVariantList &geometries,
+                            const QString &description);
   Q_INVOKABLE QString createRelationship(const QString &diagramId,
                                          const QString &sourceNodeId,
                                          const QString &targetNodeId,
@@ -126,6 +129,7 @@ signals:
   void stateChanged();
   void diagramsChanged();
   void projectChanged();
+  void projectOpened(const QString &projectPath);
   void selectionChanged();
   void undoStateChanged();
   void dirtyChanged();

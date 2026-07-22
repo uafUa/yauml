@@ -249,6 +249,7 @@ bool ProjectController::openProject(const QUrl &url) {
   setDataDirect(outcome.project);
   m_diagnostics.addInfo(QStringLiteral("persistence"),
                         QStringLiteral("Opened %1").arg(m_projectPath));
+  emit projectOpened(m_projectPath);
   return true;
 }
 
@@ -461,6 +462,13 @@ void ProjectController::updateNodeGeometry(const QString &diagramId,
 
 void ProjectController::updateNodeGeometries(const QString &diagramId,
                                              const QVariantList &geometries) {
+  updateNodeGeometries(diagramId, geometries,
+                       QStringLiteral("Move or resize diagram elements"));
+}
+
+void ProjectController::updateNodeGeometries(const QString &diagramId,
+                                             const QVariantList &geometries,
+                                             const QString &description) {
   const auto *diagram = findDiagram(m_data, diagramId);
   if (!diagram)
     return;
@@ -491,7 +499,7 @@ void ProjectController::updateNodeGeometries(const QString &diagramId,
   });
   if (!changes.isEmpty())
     pushCommand(std::make_unique<UpdateNodeGeometriesCommand>(
-        this, diagramId, std::move(changes)));
+        this, diagramId, std::move(changes), description));
 }
 
 QString ProjectController::createRelationship(const QString &diagramId,

@@ -60,8 +60,10 @@ Unless explicitly included in [`mvp-scope.md`](mvp-scope.md), they are post-MVP.
 - Nested classifiers and explicit containment.
 - Attributes, operations, parameters, visibility, and common modifiers.
 - Enumeration literals.
-- Generalization and interface realization.
-- Dependency, association, aggregation, and composition.
+- Generalization/inheritance and interface realization/implementation.
+- Dependency, association with navigability, aggregation, and composition. This
+  is the complete initial relationship vocabulary for the supported structural
+  diagrams; behavioral-diagram connectors remain outside the product scope.
 - Source locations and source identities attached to generated elements.
 - User-created and source-generated elements in the same project.
 - Validation diagnostics for broken references and unsupported constructs.
@@ -71,8 +73,15 @@ Unless explicitly included in [`mvp-scope.md`](mvp-scope.md), they are post-MVP.
 - Package and class diagrams.
 - Multiple visual presentations of one semantic element.
 - Selection, multi-selection, move, resize, pan, zoom, and fit-to-content.
-- Orthogonal and straight connectors.
+- Straight, manually bent, and automatically maintained orthogonal connectors.
+  Orthogonal routes contain only horizontal/vertical segments and 90-degree
+  bends; obstacle avoidance is a later routing refinement.
 - Add, remove, and move connector bend points.
+- Create a typed connector by holding the pointer on a node edge, pressing its
+  relationship hotkey, and dragging to any node, including the originating
+  node. The initial pointer position becomes its persisted perimeter attachment.
+- Reconnect either end directly by dragging its endpoint handle to another node;
+  do not rely on modal source/target reconnection actions.
 - Straighten, make horizontal, and make vertical actions.
 - Align, equal-size, minimum-size, and distribute actions.
 - Snap-to-grid, alignment guides, and configurable spacing.
@@ -413,6 +422,21 @@ reversible edits, including:
 - routing mode;
 - horizontal/vertical preferences.
 
+Orthogonal routing is a connector-presentation mode. Its automatic router
+creates a Manhattan route from the two perimeter attachments and recomputes the
+affected segments when an attached node moves or resizes. Manual bend movement
+must retain horizontal/vertical constraints instead of silently converting the
+route to an arbitrary polyline. Obstacle avoidance can be layered onto the same
+route interface later.
+
+Connector creation and reconnection use direct manipulation. A pointer press on
+a node edge establishes an exact candidate attachment. Pressing the relationship
+hotkey while that pointer is held starts the typed connection preview; release
+over a compatible node commits both semantic relationship and presentation in
+one command. A selected connector's endpoint handles use the same attachment
+resolution path for reconnection. Self-connections are valid, while Escape and
+invalid drops leave the model unchanged.
+
 ## 12. Undo and transaction architecture
 
 The command layer is part of the domain core, not a QML convenience service.
@@ -505,8 +529,9 @@ set boundaries are easier to reason about and test.
   target compilers.
 - Qt Quick, Qt Quick Controls, Qt SVG, and Qt Test.
 - Clang/LLVM tooling for C++ import.
-- A small, explicit JSON5 serialization dependency selected after the
-  deterministic, comment-aware round-trip prototype.
+- A Qt-backed JSON5 compatibility adapter implementing the documented project
+  profile. ADR 004 records why the assessed native libraries are not yet a
+  better fit and preserves a boundary for a future replacement.
 - An automatic-layout engine behind an adapter; ELK or Graphviz are candidates.
 - Avoid exposing third-party types in domain interfaces.
 
@@ -573,6 +598,8 @@ initial state -> command -> expected state -> undo -> exact initial state
 - Persisted workspace, tab-group, and detached-window restoration.
 - Full connector and bend-point editing.
 - Alignment, sizing, distribution, guides, and keyboard commands.
+- Orthogonal routing, the complete structural relationship set, edge-and-hotkey
+  connector creation, and direct endpoint-drag reconnection.
 - Stylesheets and presentation overrides.
 - SVG, PNG, and PDF export.
 
@@ -615,8 +642,8 @@ initial state -> command -> expected state -> undo -> exact initial state
   extensible enough for broader UML and SysML from the beginning?
 - Should structs and classes remain distinct domain types or one classifier with
   language-specific traits?
-- Which JSON5 implementation can support deterministic output without silently
-  losing comments or unknown fields?
+- What evidence would justify replacing the Qt-backed JSON5 compatibility layer
+  with a full parser or source-preserving syntax tree?
 - How should model files be partitioned by default: package, namespace, source
   module, or explicit user choice?
 - Should source-generated relationships be editable, overridable, or only

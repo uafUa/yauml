@@ -2,6 +2,9 @@
 
 #include <QColor>
 #include <QObject>
+#include <QStringList>
+#include <QVariantList>
+#include <QVariantMap>
 
 namespace uuml::ui {
 
@@ -54,50 +57,59 @@ struct UiPalette {
   QColor dragGhostText;
 };
 
-const UiPalette &uiPalette();
+// Returns an immutable snapshot. Theme changes originate on the GUI thread,
+// while scene-graph rendering may read the palette on the render thread.
+UiPalette uiPalette();
 
 // QObject facade for QML. Native C++ code reads the same UiPalette directly,
 // keeping every literal and every semantic role in one implementation.
 class UiTheme final : public QObject {
   Q_OBJECT
-  Q_PROPERTY(QColor accent READ accent CONSTANT)
-  Q_PROPERTY(QColor surface READ surface CONSTANT)
-  Q_PROPERTY(QColor windowBackground READ windowBackground CONSTANT)
-  Q_PROPERTY(QColor panelHeader READ panelHeader CONSTANT)
-  Q_PROPERTY(QColor hoverBackground READ hoverBackground CONSTANT)
-  Q_PROPERTY(QColor controlBorder READ controlBorder CONSTANT)
-  Q_PROPERTY(QColor overlayBorder READ overlayBorder CONSTANT)
-  Q_PROPERTY(QColor bodyText READ bodyText CONSTANT)
-  Q_PROPERTY(QColor nodeTitleText READ nodeTitleText CONSTANT)
-  Q_PROPERTY(QColor mutedText READ mutedText CONSTANT)
-  Q_PROPERTY(QColor emptyStateText READ emptyStateText CONSTANT)
-  Q_PROPERTY(QColor zoomText READ zoomText CONSTANT)
-  Q_PROPERTY(QColor tabStrip READ tabStrip CONSTANT)
-  Q_PROPERTY(QColor tabStripBorder READ tabStripBorder CONSTANT)
-  Q_PROPERTY(QColor activeTab READ activeTab CONSTANT)
-  Q_PROPERTY(QColor inactiveTab READ inactiveTab CONSTANT)
-  Q_PROPERTY(QColor badgeBackground READ badgeBackground CONSTANT)
-  Q_PROPERTY(QColor badgeBorder READ badgeBorder CONSTANT)
-  Q_PROPERTY(QColor warningBackground READ warningBackground CONSTANT)
-  Q_PROPERTY(QColor warningBorder READ warningBorder CONSTANT)
-  Q_PROPERTY(QColor editorBackground READ editorBackground CONSTANT)
-  Q_PROPERTY(QColor errorRow READ errorRow CONSTANT)
-  Q_PROPERTY(QColor warningRow READ warningRow CONSTANT)
-  Q_PROPERTY(QColor alternateRow READ alternateRow CONSTANT)
-  Q_PROPERTY(QColor canvasGrid READ canvasGrid CONSTANT)
-  Q_PROPERTY(QColor selectionOverlay READ selectionOverlay CONSTANT)
-  Q_PROPERTY(QColor connector READ connector CONSTANT)
-  Q_PROPERTY(QColor nodeBorder READ nodeBorder CONSTANT)
-  Q_PROPERTY(QColor compartmentLine READ compartmentLine CONSTANT)
-  Q_PROPERTY(QColor compartmentDivider READ compartmentDivider CONSTANT)
-  Q_PROPERTY(QColor activeHandleFill READ activeHandleFill CONSTANT)
-  Q_PROPERTY(QColor packageFill READ packageFill CONSTANT)
-  Q_PROPERTY(QColor classFill READ classFill CONSTANT)
-  Q_PROPERTY(QColor structFill READ structFill CONSTANT)
-  Q_PROPERTY(QColor enumerationFill READ enumerationFill CONSTANT)
-  Q_PROPERTY(QColor dragGhostBorder READ dragGhostBorder CONSTANT)
-  Q_PROPERTY(QColor dragGhostFill READ dragGhostFill CONSTANT)
-  Q_PROPERTY(QColor dragGhostText READ dragGhostText CONSTANT)
+  Q_PROPERTY(QColor accent READ accent NOTIFY paletteChanged)
+  Q_PROPERTY(QColor surface READ surface NOTIFY paletteChanged)
+  Q_PROPERTY(
+      QColor windowBackground READ windowBackground NOTIFY paletteChanged)
+  Q_PROPERTY(QColor panelHeader READ panelHeader NOTIFY paletteChanged)
+  Q_PROPERTY(QColor hoverBackground READ hoverBackground NOTIFY paletteChanged)
+  Q_PROPERTY(QColor controlBorder READ controlBorder NOTIFY paletteChanged)
+  Q_PROPERTY(QColor overlayBorder READ overlayBorder NOTIFY paletteChanged)
+  Q_PROPERTY(QColor bodyText READ bodyText NOTIFY paletteChanged)
+  Q_PROPERTY(QColor nodeTitleText READ nodeTitleText NOTIFY paletteChanged)
+  Q_PROPERTY(QColor mutedText READ mutedText NOTIFY paletteChanged)
+  Q_PROPERTY(QColor emptyStateText READ emptyStateText NOTIFY paletteChanged)
+  Q_PROPERTY(QColor zoomText READ zoomText NOTIFY paletteChanged)
+  Q_PROPERTY(QColor tabStrip READ tabStrip NOTIFY paletteChanged)
+  Q_PROPERTY(QColor tabStripBorder READ tabStripBorder NOTIFY paletteChanged)
+  Q_PROPERTY(QColor activeTab READ activeTab NOTIFY paletteChanged)
+  Q_PROPERTY(QColor inactiveTab READ inactiveTab NOTIFY paletteChanged)
+  Q_PROPERTY(QColor badgeBackground READ badgeBackground NOTIFY paletteChanged)
+  Q_PROPERTY(QColor badgeBorder READ badgeBorder NOTIFY paletteChanged)
+  Q_PROPERTY(
+      QColor warningBackground READ warningBackground NOTIFY paletteChanged)
+  Q_PROPERTY(QColor warningBorder READ warningBorder NOTIFY paletteChanged)
+  Q_PROPERTY(
+      QColor editorBackground READ editorBackground NOTIFY paletteChanged)
+  Q_PROPERTY(QColor errorRow READ errorRow NOTIFY paletteChanged)
+  Q_PROPERTY(QColor warningRow READ warningRow NOTIFY paletteChanged)
+  Q_PROPERTY(QColor alternateRow READ alternateRow NOTIFY paletteChanged)
+  Q_PROPERTY(QColor canvasGrid READ canvasGrid NOTIFY paletteChanged)
+  Q_PROPERTY(
+      QColor selectionOverlay READ selectionOverlay NOTIFY paletteChanged)
+  Q_PROPERTY(QColor connector READ connector NOTIFY paletteChanged)
+  Q_PROPERTY(QColor nodeBorder READ nodeBorder NOTIFY paletteChanged)
+  Q_PROPERTY(QColor compartmentLine READ compartmentLine NOTIFY paletteChanged)
+  Q_PROPERTY(
+      QColor compartmentDivider READ compartmentDivider NOTIFY paletteChanged)
+  Q_PROPERTY(
+      QColor activeHandleFill READ activeHandleFill NOTIFY paletteChanged)
+  Q_PROPERTY(QColor packageFill READ packageFill NOTIFY paletteChanged)
+  Q_PROPERTY(QColor classFill READ classFill NOTIFY paletteChanged)
+  Q_PROPERTY(QColor structFill READ structFill NOTIFY paletteChanged)
+  Q_PROPERTY(QColor enumerationFill READ enumerationFill NOTIFY paletteChanged)
+  Q_PROPERTY(QColor dragGhostBorder READ dragGhostBorder NOTIFY paletteChanged)
+  Q_PROPERTY(QColor dragGhostFill READ dragGhostFill NOTIFY paletteChanged)
+  Q_PROPERTY(QColor dragGhostText READ dragGhostText NOTIFY paletteChanged)
+  Q_PROPERTY(QVariantList colorRoles READ colorRoles CONSTANT)
 
 public:
   explicit UiTheme(QObject *parent = nullptr);
@@ -140,6 +152,22 @@ public:
   QColor dragGhostBorder() const;
   QColor dragGhostFill() const;
   QColor dragGhostText() const;
+
+  QVariantList colorRoles() const;
+  Q_INVOKABLE QColor color(const QString &role) const;
+  Q_INVOKABLE QColor defaultColor(const QString &role) const;
+  Q_INVOKABLE QString colorText(const QColor &color) const;
+  Q_INVOKABLE QString normalizeColor(const QString &text) const;
+  Q_INVOKABLE void setColor(const QString &role, const QColor &color);
+  Q_INVOKABLE void setColors(const QVariantMap &colors);
+  Q_INVOKABLE void resetDefaultColors();
+
+signals:
+  void paletteChanged();
+
+private:
+  void load();
+  void persist(const QStringList &roles) const;
 };
 
 } // namespace uuml::ui
