@@ -13,12 +13,14 @@
 #include <QPainter>
 #include <QPixmap>
 #include <algorithm>
+#include <limits>
 
 namespace uuml {
 
 namespace {
 constexpr auto kElementsMimeType = "application/x-uuml-element-ids";
 constexpr auto kBrowserItemsMimeType = "application/x-uuml-browser-items";
+constexpr auto kDiagramSubjectsMimeType = "application/x-uuml-diagram-subjects";
 } // namespace
 
 struct ProjectTreeModel::TreeNode {
@@ -194,8 +196,6 @@ void ProjectTreeModel::rebuildTree() {
   };
 
   const auto semanticParentNode = [&](const ModelElement &element) {
-    if (!element.packageId.isEmpty())
-      return m_elementNodes.value(element.packageId, m_modelRoot);
     TreeNode *parent = m_modelRoot;
     const QStringList parts =
         element.name.split(QStringLiteral("::"), Qt::SkipEmptyParts);
@@ -210,7 +210,9 @@ void ProjectTreeModel::rebuildTree() {
       else
         parent = m_namespaceNodes.value(qualifiedPath, m_modelRoot);
     }
-    return parent;
+    return parent != m_modelRoot || element.packageId.isEmpty()
+               ? parent
+               : m_elementNodes.value(element.packageId, m_modelRoot);
   };
 
   for (const auto &folder : m_controller->data().browserFolders)
@@ -245,6 +247,30 @@ void ProjectTreeModel::rebuildTree() {
     attach(cycleSafeParent(node), node);
   for (TreeNode *node : elementOrder)
     attach(cycleSafeParent(node), node);
+
+  QHash<QString, int> browserOrderRank;
+  for (const QString &key : m_controller->data().browserItemOrder)
+    if (!browserOrderRank.contains(key))
+      browserOrderRank.insert(key, browserOrderRank.size());
+  const auto orderedKey = [](const TreeNode *node) {
+    return node && (node->kind == QStringLiteral("element") ||
+                    node->kind == QStringLiteral("folder") ||
+                    node->kind == QStringLiteral("namespace"))
+               ? node->kind + u':' + node->objectId
+               : QString{};
+  };
+  const auto sortChildren = [&](const auto &self, TreeNode *parent) -> void {
+    std::stable_sort(
+        parent->children.begin(), parent->children.end(),
+        [&](const TreeNode *left, const TreeNode *right) {
+          const int unranked = std::numeric_limits<int>::max();
+          return browserOrderRank.value(orderedKey(left), unranked) <
+                 browserOrderRank.value(orderedKey(right), unranked);
+        });
+    for (TreeNode *child : parent->children)
+      self(self, child);
+  };
+  sortChildren(sortChildren, m_modelRoot);
 
   for (const auto &diagram : m_controller->data().diagrams) {
     TreeNode *node = createNode();
@@ -353,6 +379,30 @@ ProjectTreeModel::elementIdsForIndexes(const QModelIndexList &indexes) const {
   return result;
 }
 
+QString ProjectTreeModel::browserItemsJsonForIndexes(
+    const QModelIndexList &indexes) const {
+  QSet<QString> seen;
+  QJsonArray items;
+  for (const QModelIndex &item : indexes) {
+    const TreeNode *node = nodeForIndex(item);
+    if (!node || (node->kind != QStringLiteral("element") &&
+                  node->kind != QStringLiteral("folder") &&
+                  node->kind != QStringLiteral("diagram")))
+      continue;
+    const QString key = node->kind + u':' + node->objectId;
+    if (seen.contains(key))
+      continue;
+    seen.insert(key);
+    QJsonObject object;
+    object.insert(QStringLiteral("kind"), node->kind);
+    object.insert(QStringLiteral("id"), node->objectId);
+    object.insert(QStringLiteral("name"), node->label);
+    items.append(object);
+  }
+  return QString::fromUtf8(
+      QJsonDocument(items).toJson(QJsonDocument::Compact));
+}
+
 void ProjectTreeModel::selectFromPointer(QItemSelectionModel *selectionModel,
                                          const QModelIndex &item) {
   selectWithModifiers(selectionModel, item,
@@ -447,6 +497,10 @@ void ProjectTreeModel::startTreeDrag(const QModelIndexList &indexes) {
   if (!browserItems.isEmpty())
     mimeData->setData(
         QLatin1String(kBrowserItemsMimeType),
+        QJsonDocument(browserItems).toJson(QJsonDocument::Compact));
+  if (!browserItems.isEmpty())
+    mimeData->setData(
+        QLatin1String(kDiagramSubjectsMimeType),
         QJsonDocument(browserItems).toJson(QJsonDocument::Compact));
 
   constexpr int kPreviewWidth = 240;

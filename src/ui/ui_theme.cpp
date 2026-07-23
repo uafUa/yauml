@@ -76,6 +76,14 @@ constexpr std::array kColorRoles = {
                         &UiPalette::selectionOverlay},
     ColorRoleDescriptor{"connector", "Connector", "Diagram",
                         &UiPalette::connector},
+    ColorRoleDescriptor{"containerFill", "Folder frame fill", "Diagram",
+                        &UiPalette::containerFill},
+    ColorRoleDescriptor{"containerHeaderFill", "Folder frame header", "Diagram",
+                        &UiPalette::containerHeaderFill},
+    ColorRoleDescriptor{"containerBorder", "Folder frame border", "Diagram",
+                        &UiPalette::containerBorder},
+    ColorRoleDescriptor{"containerTitleText", "Folder frame title", "Diagram",
+                        &UiPalette::containerTitleText},
     ColorRoleDescriptor{"nodeBorder", "Element border", "Diagram",
                         &UiPalette::nodeBorder},
     ColorRoleDescriptor{"compartmentLine", "Header divider", "Diagram",
@@ -136,6 +144,10 @@ UiPalette makeDefaultPalette() {
   value.alignmentGuide = QColor(QStringLiteral("#d23c8e"));
   value.selectionOverlay = QColor(23, 105, 210, 28);
   value.connector = QColor(QStringLiteral("#52606d"));
+  value.containerFill = QColor(226, 239, 255, 92);
+  value.containerHeaderFill = QColor(196, 220, 246, 176);
+  value.containerBorder = QColor(QStringLiteral("#7392b2"));
+  value.containerTitleText = QColor(QStringLiteral("#29445f"));
   value.nodeBorder = QColor(QStringLiteral("#3f4b56"));
   value.compartmentLine = QColor(QStringLiteral("#65727e"));
   value.compartmentDivider = QColor(QStringLiteral("#c5ccd3"));
@@ -231,6 +243,10 @@ UUML_THEME_GETTER(canvasGrid)
 UUML_THEME_GETTER(alignmentGuide)
 UUML_THEME_GETTER(selectionOverlay)
 UUML_THEME_GETTER(connector)
+UUML_THEME_GETTER(containerFill)
+UUML_THEME_GETTER(containerHeaderFill)
+UUML_THEME_GETTER(containerBorder)
+UUML_THEME_GETTER(containerTitleText)
 UUML_THEME_GETTER(nodeBorder)
 UUML_THEME_GETTER(compartmentLine)
 UUML_THEME_GETTER(compartmentDivider)

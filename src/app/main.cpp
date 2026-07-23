@@ -62,9 +62,9 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   QTextStream out(stdout);
   QTextStream err(stderr);
   const QStringList arguments = application.arguments();
-  if (arguments.size() < 4) {
+  if (arguments.size() < 3) {
     err << "Usage: uuml " << (apply ? "cpp-import" : "cpp-preview")
-        << " <project-directory> <source-directory>\n";
+        << " <project-directory> [source-directory]\n";
     return 64;
   }
 
@@ -73,13 +73,22 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   writeDiagnostics(load.diagnostics, out, err);
   if (!load.ok)
     return 2;
+  const QString sourcePath = arguments.size() >= 4
+                                 ? arguments.at(3)
+                                 : load.project.cppImport.sourceRoot;
+  if (sourcePath.isEmpty()) {
+    err << "No C++ source directory was provided or configured for this "
+           "project\n";
+    return 64;
+  }
 
   uuml::ApplicationSettings settings;
   uuml::CppImportOptions options;
   options.interfacePattern = settings.cppInterfacePattern();
-  uuml::CppImportPreview preview =
-      uuml::CppImportService::preview(arguments.at(3), load.project.elements,
-                                      load.project.relationships, options);
+  options.owningPointerTypes = settings.cppOwningPointerTypes();
+  options.sharedPointerTypes = settings.cppSharedPointerTypes();
+  uuml::CppImportPreview preview = uuml::CppImportService::preview(
+      sourcePath, load.project.elements, load.project.relationships, options);
   writeDiagnostics(preview.diagnostics, out, err);
   for (const auto &item : preview.items) {
     out << uuml::toString(item.action).toUpper() << " "
@@ -92,7 +101,7 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   }
   for (const auto &item : preview.relationshipItems) {
     out << uuml::toString(item.action).toUpper() << " "
-        << item.source.derivedName << " -> " << item.source.baseName << " ("
+        << item.source.sourceName << " -> " << item.source.targetName << " ("
         << uuml::toString(item.source.relationshipType) << ')';
     if (!item.source.filePath.isEmpty())
       out << " — " << item.source.filePath << ':' << item.source.line;
@@ -110,15 +119,16 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
         << (preview.usedCompilationDatabase ? "compilation database"
                                             : "best-effort source scan")
         << "): " << preview.symbols.size() << " type(s), "
-        << preview.inheritances.size() << " inheritance relationship(s), "
+        << preview.relationships.size() << " relationship(s), "
         << preview.applicableCount() << " applicable change(s), "
         << preview.conflictCount() << " conflict(s)\n";
     return preview.conflictCount() > 0 ? 3 : 0;
   }
 
   uuml::ProjectData imported = load.project;
+  const QString previousSourceRoot = imported.cppImport.sourceRoot;
   const int appliedCount = uuml::CppImportService::apply(imported, preview);
-  if (appliedCount > 0) {
+  if (appliedCount > 0 || imported.cppImport.sourceRoot != previousSourceRoot) {
     const auto save = uuml::ProjectSerializer::save(projectPath, imported);
     writeDiagnostics(save.diagnostics, out, err);
     if (!save.ok)
@@ -199,8 +209,13 @@ int main(int argc, char *argv[]) {
           project.addElement(QStringLiteral("class"), firstDiagram);
           const QString secondDiagram = project.addDiagram();
           project.addElement(QStringLiteral("enumeration"), secondDiagram);
-          project.addBrowserFolder(QStringLiteral("model"), {},
-                                   QStringLiteral("Smoke Folder"));
+          const QString smokeFolder = project.addBrowserFolder(
+              QStringLiteral("model"), {}, QStringLiteral("Smoke Folder"));
+          project.addTreeItemsToDiagram(
+              firstDiagram, {},
+              QStringLiteral(R"([{"kind":"folder","id":"%1"}])")
+                  .arg(smokeFolder),
+              100.0, 100.0);
           if (supportsDetachedWindows)
             workspace.detachDiagram(secondDiagram, 80, 80);
 

@@ -32,6 +32,8 @@ public:
                                          const QString &kind) const;
   Q_INVOKABLE QStringList
   elementIdsForIndexes(const QModelIndexList &indexes) const;
+  Q_INVOKABLE QString
+  browserItemsJsonForIndexes(const QModelIndexList &indexes) const;
   Q_INVOKABLE void selectFromPointer(QItemSelectionModel *selectionModel,
                                      const QModelIndex &item);
   void selectWithModifiers(QItemSelectionModel *selectionModel,

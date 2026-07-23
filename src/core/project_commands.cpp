@@ -49,38 +49,95 @@ BrowserParent *browserParentFor(ProjectData &project, const QString &kind,
   return nullptr;
 }
 
+QString browserItemKey(const QString &kind, const QString &id) {
+  return kind + u':' + id;
+}
+
+std::optional<ContainerChildrenChange>
+promoteContainerInOwner(const Diagram &diagram,
+                        const ContainerPresentation &removed) {
+  for (const auto &candidate : diagram.containers) {
+    const qsizetype position =
+        candidate.childPresentationIds.indexOf(removed.id);
+    if (position < 0)
+      continue;
+    QStringList after = candidate.childPresentationIds;
+    after.removeAt(position);
+    for (qsizetype index = 0; index < removed.childPresentationIds.size();
+         ++index)
+      after.insert(position + index, removed.childPresentationIds.at(index));
+    return ContainerChildrenChange{candidate.id, candidate.childPresentationIds,
+                                   std::move(after)};
+  }
+  return std::nullopt;
+}
+
+QList<ContainerChildrenChange>
+membershipChangesForRemoval(const Diagram &diagram,
+                            const QSet<QString> &removedIds) {
+  QList<ContainerChildrenChange> changes;
+  for (const auto &container : diagram.containers) {
+    QStringList after = container.childPresentationIds;
+    after.removeIf(
+        [&](const QString &childId) { return removedIds.contains(childId); });
+    if (after != container.childPresentationIds)
+      changes.append(
+          {container.id, container.childPresentationIds, std::move(after)});
+  }
+  return changes;
+}
+
+void applyMembershipChanges(Diagram &diagram,
+                            const QList<ContainerChildrenChange> &changes,
+                            bool forward) {
+  for (const auto &change : changes) {
+    if (auto *container = findContainer(diagram, change.containerId))
+      container->childPresentationIds = forward ? change.after : change.before;
+  }
+}
+
 } // namespace
 
 CreateElementCommand::CreateElementCommand(
     ProjectController *controller, const ProjectData &project,
     ModelElement element, QString diagramId,
-    std::optional<NodePresentation> presentation)
+    std::optional<NodePresentation> nodePresentation,
+    std::optional<ContainerPresentation> containerPresentation)
     : ProjectCommand(controller,
                      QStringLiteral("Create %1").arg(toString(element.type))),
       m_element(std::move(element)), m_elementIndex(project.elements.size()),
       m_diagramId(std::move(diagramId)),
-      m_presentation(std::move(presentation)) {
-  if (m_presentation) {
+      m_nodePresentation(std::move(nodePresentation)),
+      m_containerPresentation(std::move(containerPresentation)) {
+  if (m_nodePresentation || m_containerPresentation) {
     const auto *diagram = findDiagram(project, m_diagramId);
     Q_ASSERT(diagram);
-    m_presentationIndex = diagram ? diagram->nodes.size() : -1;
+    m_presentationIndex = !diagram             ? -1
+                          : m_nodePresentation ? diagram->nodes.size()
+                                               : diagram->containers.size();
   }
 }
 
 void CreateElementCommand::execute(ProjectData &project) {
   insertAtRecordedPosition(project.elements, m_elementIndex, m_element);
-  if (m_presentation) {
-    if (auto *diagram = findDiagram(project, m_diagramId))
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    if (m_nodePresentation)
       insertAtRecordedPosition(diagram->nodes, m_presentationIndex,
-                               *m_presentation);
+                               *m_nodePresentation);
+    else if (m_containerPresentation)
+      insertAtRecordedPosition(diagram->containers, m_presentationIndex,
+                               *m_containerPresentation);
   }
 }
 
 void CreateElementCommand::revert(ProjectData &project) {
-  if (m_presentation) {
-    if (auto *diagram = findDiagram(project, m_diagramId))
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    if (m_nodePresentation)
       removeRecordedValue(diagram->nodes, m_presentationIndex,
-                          m_presentation->id);
+                          m_nodePresentation->id);
+    else if (m_containerPresentation)
+      removeRecordedValue(diagram->containers, m_presentationIndex,
+                          m_containerPresentation->id);
   }
   removeRecordedValue(project.elements, m_elementIndex, m_element.id);
 }
@@ -88,8 +145,15 @@ void CreateElementCommand::revert(ProjectData &project) {
 ApplyCppImportCommand::ApplyCppImportCommand(
     ProjectController *controller, const ProjectData &project,
     QList<ModelElement> desiredElements,
-    QList<Relationship> desiredRelationships)
-    : ProjectCommand(controller, QStringLiteral("Import C++ changes")) {
+    QList<Relationship> desiredRelationships, QString sourceRoot)
+    : ProjectCommand(controller,
+                     desiredElements.isEmpty() && desiredRelationships.isEmpty()
+                         ? QStringLiteral("Configure C++ synchronization")
+                         : QStringLiteral("Import C++ changes")),
+      m_sourceRootBefore(project.cppImport.sourceRoot),
+      m_sourceRootAfter(sourceRoot.isEmpty() ? project.cppImport.sourceRoot
+                                             : std::move(sourceRoot)),
+      m_sourceRootChanged(m_sourceRootBefore != m_sourceRootAfter) {
   m_changes.reserve(desiredElements.size());
   qsizetype nextInsertionIndex = project.elements.size();
   for (auto &desired : desiredElements) {
@@ -121,6 +185,8 @@ ApplyCppImportCommand::ApplyCppImportCommand(
 }
 
 void ApplyCppImportCommand::execute(ProjectData &project) {
+  if (m_sourceRootChanged)
+    project.cppImport.sourceRoot = m_sourceRootAfter;
   for (const auto &change : m_changes) {
     if (change.before) {
       if (auto *element = findElement(project, change.after.id))
@@ -160,6 +226,8 @@ void ApplyCppImportCommand::revert(ProjectData &project) {
       removeRecordedValue(project.elements, change->index, change->after.id);
     }
   }
+  if (m_sourceRootChanged)
+    project.cppImport.sourceRoot = m_sourceRootBefore;
 }
 
 CreateBrowserFolderCommand::CreateBrowserFolderCommand(
@@ -197,11 +265,10 @@ void RenameBrowserFolderCommand::apply(ProjectData &project,
     folder->name = name;
 }
 
-MoveBrowserItemsCommand::MoveBrowserItemsCommand(ProjectController *controller,
-                                                 const ProjectData &project,
-                                                 const QStringList &elementIds,
-                                                 const QStringList &folderIds,
-                                                 BrowserParent target)
+MoveBrowserItemsCommand::MoveBrowserItemsCommand(
+    ProjectController *controller, const ProjectData &project,
+    const QStringList &elementIds, const QStringList &folderIds,
+    BrowserParent target, std::optional<QString> targetPackageId)
     : ProjectCommand(controller,
                      elementIds.size() + folderIds.size() == 1
                          ? QStringLiteral("Move project-tree item")
@@ -215,6 +282,9 @@ MoveBrowserItemsCommand::MoveBrowserItemsCommand(ProjectController *controller,
     if (element && element->browserParent != target)
       m_changes.append({QStringLiteral("element"), elementId,
                         element->browserParent, target});
+    if (element && targetPackageId && element->packageId != *targetPackageId)
+      m_packageChanges.append(
+          {elementId, element->packageId, *targetPackageId});
   }
   QSet<QString> seenFolders;
   for (const QString &folderId : folderIds) {
@@ -242,6 +312,27 @@ void MoveBrowserItemsCommand::apply(ProjectData &project, bool forward) {
             browserParentFor(project, change.kind, change.id))
       *parent = forward ? change.after : change.before;
   }
+  for (const auto &change : m_packageChanges)
+    if (auto *element = findElement(project, change.elementId))
+      element->packageId = forward ? change.after : change.before;
+}
+
+ReorderBrowserItemsCommand::ReorderBrowserItemsCommand(
+    ProjectController *controller, QStringList before, QStringList after,
+    int itemCount)
+    : ProjectCommand(
+          controller,
+          itemCount == 1
+              ? QStringLiteral("Reorder project-tree item")
+              : QStringLiteral("Reorder %1 project-tree items").arg(itemCount)),
+      m_before(std::move(before)), m_after(std::move(after)) {}
+
+void ReorderBrowserItemsCommand::execute(ProjectData &project) {
+  project.browserItemOrder = m_after;
+}
+
+void ReorderBrowserItemsCommand::revert(ProjectData &project) {
+  project.browserItemOrder = m_before;
 }
 
 DeleteBrowserFolderCommand::DeleteBrowserFolderCommand(
@@ -251,6 +342,8 @@ DeleteBrowserFolderCommand::DeleteBrowserFolderCommand(
   if (m_index < 0)
     return;
   m_folder = project.browserFolders.at(m_index);
+  m_browserOrderIndex = project.browserItemOrder.indexOf(
+      browserItemKey(QStringLiteral("folder"), folderId));
   for (const auto &element : project.elements) {
     if (element.browserParent.kind == QStringLiteral("folder") &&
         element.browserParent.id == folderId)
@@ -263,18 +356,51 @@ DeleteBrowserFolderCommand::DeleteBrowserFolderCommand(
       m_changes.append({QStringLiteral("folder"), folder.id, folder.parent,
                         m_folder.parent});
   }
+  for (const auto &diagram : project.diagrams) {
+    for (qsizetype index = 0; index < diagram.containers.size(); ++index) {
+      const auto &container = diagram.containers.at(index);
+      if (container.subjectKind == QStringLiteral("folder") &&
+          container.subjectId == folderId) {
+        m_diagramContainers.append(
+            {diagram.id, index, container,
+             promoteContainerInOwner(diagram, container)});
+        break;
+      }
+    }
+  }
 }
 
 void DeleteBrowserFolderCommand::execute(ProjectData &project) {
   applyParentChanges(project, true);
+  for (const auto &record : m_diagramContainers) {
+    if (auto *diagram = findDiagram(project, record.diagramId)) {
+      if (record.ownerChange)
+        applyMembershipChanges(*diagram, {*record.ownerChange}, true);
+      removeRecordedValue(diagram->containers, record.index, record.value.id);
+    }
+  }
   if (m_index >= 0)
     removeRecordedValue(project.browserFolders, m_index, m_folder.id);
+  project.browserItemOrder.removeAll(
+      browserItemKey(QStringLiteral("folder"), m_folder.id));
 }
 
 void DeleteBrowserFolderCommand::revert(ProjectData &project) {
   if (m_index < 0)
     return;
   insertAtRecordedPosition(project.browserFolders, m_index, m_folder);
+  if (m_browserOrderIndex >= 0)
+    project.browserItemOrder.insert(
+        std::clamp(m_browserOrderIndex, qsizetype{0},
+                   project.browserItemOrder.size()),
+        browserItemKey(QStringLiteral("folder"), m_folder.id));
+  for (const auto &record : m_diagramContainers) {
+    if (auto *diagram = findDiagram(project, record.diagramId)) {
+      insertAtRecordedPosition(diagram->containers, record.index, record.value);
+      if (record.ownerChange)
+        applyMembershipChanges(*diagram, {*record.ownerChange}, false);
+    }
+  }
   applyParentChanges(project, false);
 }
 
@@ -389,6 +515,66 @@ void AddElementsToDiagramCommand::revert(ProjectData &project) {
   }
 }
 
+AddContainerPresentationsCommand::AddContainerPresentationsCommand(
+    ProjectController *controller, const ProjectData &project,
+    QString diagramId, QList<ContainerPresentation> containers,
+    QList<NodePresentation> nodes, QList<ConnectorPresentation> connectors,
+    QList<ContainerChildrenChange> membershipChanges)
+    : ProjectCommand(controller,
+                     QStringLiteral("Add project-tree items to diagram")),
+      m_diagramId(std::move(diagramId)),
+      m_membershipChanges(std::move(membershipChanges)) {
+  const auto *diagram = findDiagram(project, m_diagramId);
+  Q_ASSERT(diagram);
+  if (!diagram)
+    return;
+
+  qsizetype containerIndex = diagram->containers.size();
+  m_containers.reserve(containers.size());
+  for (auto &container : containers)
+    m_containers.append({containerIndex++, std::move(container)});
+
+  qsizetype nodeIndex = diagram->nodes.size();
+  m_nodes.reserve(nodes.size());
+  for (auto &node : nodes)
+    m_nodes.append({nodeIndex++, std::move(node)});
+
+  qsizetype connectorIndex = diagram->connectors.size();
+  m_connectors.reserve(connectors.size());
+  for (auto &connector : connectors)
+    m_connectors.append({connectorIndex++, std::move(connector)});
+}
+
+void AddContainerPresentationsCommand::execute(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    for (const auto &container : m_containers)
+      insertAtRecordedPosition(diagram->containers, container.index,
+                               container.value);
+    for (const auto &node : m_nodes)
+      insertAtRecordedPosition(diagram->nodes, node.index, node.value);
+    for (const auto &connector : m_connectors)
+      insertAtRecordedPosition(diagram->connectors, connector.index,
+                               connector.value);
+    applyMembershipChanges(*diagram, m_membershipChanges, true);
+  }
+}
+
+void AddContainerPresentationsCommand::revert(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    applyMembershipChanges(*diagram, m_membershipChanges, false);
+    for (auto connector = m_connectors.crbegin();
+         connector != m_connectors.crend(); ++connector)
+      removeRecordedValue(diagram->connectors, connector->index,
+                          connector->value.id);
+    for (auto node = m_nodes.crbegin(); node != m_nodes.crend(); ++node)
+      removeRecordedValue(diagram->nodes, node->index, node->value.id);
+    for (auto container = m_containers.crbegin();
+         container != m_containers.crend(); ++container)
+      removeRecordedValue(diagram->containers, container->index,
+                          container->value.id);
+  }
+}
+
 RemovePresentationsCommand::RemovePresentationsCommand(
     ProjectController *controller, const ProjectData &project,
     QString diagramId, const QSet<QString> &nodeIds)
@@ -418,6 +604,7 @@ RemovePresentationsCommand::RemovePresentationsCommand(
                          removedElementIds.contains(relationship->targetId)))
       m_connectors.append({index, connector});
   }
+  m_membershipChanges = membershipChangesForRemoval(*diagram, nodeIds);
 }
 
 void RemovePresentationsCommand::execute(ProjectData &project) {
@@ -428,6 +615,7 @@ void RemovePresentationsCommand::execute(ProjectData &project) {
     removeRecordedValue(diagram->connectors, item->index, item->value.id);
   for (auto item = m_nodes.crbegin(); item != m_nodes.crend(); ++item)
     removeRecordedValue(diagram->nodes, item->index, item->value.id);
+  applyMembershipChanges(*diagram, m_membershipChanges, true);
 }
 
 void RemovePresentationsCommand::revert(ProjectData &project) {
@@ -438,6 +626,41 @@ void RemovePresentationsCommand::revert(ProjectData &project) {
     insertAtRecordedPosition(diagram->nodes, item.index, item.value);
   for (const auto &item : m_connectors)
     insertAtRecordedPosition(diagram->connectors, item.index, item.value);
+  applyMembershipChanges(*diagram, m_membershipChanges, false);
+}
+
+RemoveContainerPresentationCommand::RemoveContainerPresentationCommand(
+    ProjectController *controller, const ProjectData &project,
+    QString diagramId, QString containerId)
+    : ProjectCommand(controller,
+                     QStringLiteral("Remove folder presentation from diagram")),
+      m_diagramId(std::move(diagramId)) {
+  const auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram)
+    return;
+  m_index = indexOfId(diagram->containers, containerId);
+  if (m_index < 0)
+    return;
+  m_container = diagram->containers.at(m_index);
+  m_ownerChange = promoteContainerInOwner(*diagram, m_container);
+}
+
+void RemoveContainerPresentationCommand::execute(ProjectData &project) {
+  auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram || m_index < 0)
+    return;
+  if (m_ownerChange)
+    applyMembershipChanges(*diagram, {*m_ownerChange}, true);
+  removeRecordedValue(diagram->containers, m_index, m_container.id);
+}
+
+void RemoveContainerPresentationCommand::revert(ProjectData &project) {
+  auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram || m_index < 0)
+    return;
+  insertAtRecordedPosition(diagram->containers, m_index, m_container);
+  if (m_ownerChange)
+    applyMembershipChanges(*diagram, {*m_ownerChange}, false);
 }
 
 DeleteDiagramCommand::DeleteDiagramCommand(ProjectController *controller,
@@ -511,6 +734,8 @@ DeleteElementCommand::DeleteElementCommand(ProjectController *controller,
   if (m_elementIndex < 0)
     return;
   m_element = project.elements.at(m_elementIndex);
+  m_browserOrderIndex = project.browserItemOrder.indexOf(
+      browserItemKey(QStringLiteral("element"), elementId));
 
   QSet<QString> relationshipIds;
   for (qsizetype index = 0; index < project.relationships.size(); ++index) {
@@ -523,18 +748,34 @@ DeleteElementCommand::DeleteElementCommand(ProjectController *controller,
   }
 
   for (const auto &diagram : project.diagrams) {
-    DiagramRecords records{diagram.id, {}, {}};
+    DiagramRecords records{diagram.id, {}, {}, {}, std::nullopt, std::nullopt};
+    QSet<QString> removedNodeIds;
     for (qsizetype index = 0; index < diagram.nodes.size(); ++index) {
       const auto &node = diagram.nodes.at(index);
-      if (node.elementId == elementId)
+      if (node.elementId == elementId) {
         records.nodes.append({index, node});
+        removedNodeIds.insert(node.id);
+      }
     }
     for (qsizetype index = 0; index < diagram.connectors.size(); ++index) {
       const auto &connector = diagram.connectors.at(index);
       if (relationshipIds.contains(connector.relationshipId))
         records.connectors.append({index, connector});
     }
-    if (!records.nodes.isEmpty() || !records.connectors.isEmpty())
+    records.membershipChanges =
+        membershipChangesForRemoval(diagram, removedNodeIds);
+    for (qsizetype index = 0; index < diagram.containers.size(); ++index) {
+      const auto &container = diagram.containers.at(index);
+      if (container.subjectKind == QStringLiteral("package") &&
+          container.subjectId == elementId) {
+        records.container = PositionedContainer{index, container};
+        records.containerOwnerChange =
+            promoteContainerInOwner(diagram, container);
+        break;
+      }
+    }
+    if (!records.nodes.isEmpty() || !records.connectors.isEmpty() ||
+        !records.membershipChanges.isEmpty() || records.container)
       m_diagrams.append(std::move(records));
   }
 
@@ -544,6 +785,9 @@ DeleteElementCommand::DeleteElementCommand(ProjectController *controller,
         element.browserParent.id == elementId)
       m_browserParentChanges.append(
           {QStringLiteral("element"), element.id, element.browserParent, {}});
+    if (element.id != elementId && element.packageId == elementId)
+      m_packageChanges.append(
+          {element.id, element.packageId, m_element.packageId});
   }
   for (const auto &folder : project.browserFolders) {
     if (folder.parent.kind == QStringLiteral("element") &&
@@ -560,6 +804,9 @@ void DeleteElementCommand::execute(ProjectData &project) {
     if (BrowserParent *parent =
             browserParentFor(project, change.kind, change.id))
       *parent = change.after;
+  for (const auto &change : m_packageChanges)
+    if (auto *element = findElement(project, change.elementId))
+      element->packageId = change.after;
   for (const auto &records : m_diagrams) {
     if (auto *diagram = findDiagram(project, records.diagramId)) {
       for (auto item = records.connectors.crbegin();
@@ -568,16 +815,32 @@ void DeleteElementCommand::execute(ProjectData &project) {
       for (auto item = records.nodes.crbegin(); item != records.nodes.crend();
            ++item)
         removeRecordedValue(diagram->nodes, item->index, item->value.id);
+      applyMembershipChanges(*diagram, records.membershipChanges, true);
+      if (records.containerOwnerChange)
+        applyMembershipChanges(*diagram, {*records.containerOwnerChange}, true);
+      if (records.container)
+        removeRecordedValue(diagram->containers, records.container->index,
+                            records.container->value.id);
     }
   }
   for (auto item = m_relationships.crbegin(); item != m_relationships.crend();
        ++item)
     removeRecordedValue(project.relationships, item->index, item->value.id);
   removeRecordedValue(project.elements, m_elementIndex, m_element.id);
+  project.browserItemOrder.removeAll(
+      browserItemKey(QStringLiteral("element"), m_element.id));
 }
 
 void DeleteElementCommand::revert(ProjectData &project) {
   insertAtRecordedPosition(project.elements, m_elementIndex, m_element);
+  for (const auto &change : m_packageChanges)
+    if (auto *element = findElement(project, change.elementId))
+      element->packageId = change.before;
+  if (m_browserOrderIndex >= 0)
+    project.browserItemOrder.insert(
+        std::clamp(m_browserOrderIndex, qsizetype{0},
+                   project.browserItemOrder.size()),
+        browserItemKey(QStringLiteral("element"), m_element.id));
   for (const auto &change : m_browserParentChanges)
     if (BrowserParent *parent =
             browserParentFor(project, change.kind, change.id))
@@ -586,35 +849,81 @@ void DeleteElementCommand::revert(ProjectData &project) {
     insertAtRecordedPosition(project.relationships, item.index, item.value);
   for (const auto &records : m_diagrams) {
     if (auto *diagram = findDiagram(project, records.diagramId)) {
+      if (records.container)
+        insertAtRecordedPosition(diagram->containers, records.container->index,
+                                 records.container->value);
+      if (records.containerOwnerChange)
+        applyMembershipChanges(*diagram, {*records.containerOwnerChange},
+                               false);
       for (const auto &item : records.nodes)
         insertAtRecordedPosition(diagram->nodes, item.index, item.value);
+      applyMembershipChanges(*diagram, records.membershipChanges, false);
       for (const auto &item : records.connectors)
         insertAtRecordedPosition(diagram->connectors, item.index, item.value);
     }
   }
 }
 
-UpdateNodeGeometriesCommand::UpdateNodeGeometriesCommand(
+UpdatePresentationGeometriesCommand::UpdatePresentationGeometriesCommand(
     ProjectController *controller, QString diagramId,
-    QList<NodeGeometryChange> changes, QString description)
+    QList<PresentationGeometryChange> changes,
+    QList<ContainerChildrenChange> membershipChanges,
+    QList<ElementPackageChange> packageChanges, QString description)
     : ProjectCommand(controller, description),
-      m_diagramId(std::move(diagramId)), m_changes(std::move(changes)) {}
+      m_diagramId(std::move(diagramId)), m_changes(std::move(changes)),
+      m_membershipChanges(std::move(membershipChanges)),
+      m_packageChanges(std::move(packageChanges)) {}
 
-void UpdateNodeGeometriesCommand::execute(ProjectData &project) {
+void UpdatePresentationGeometriesCommand::execute(ProjectData &project) {
   apply(project, true);
 }
 
-void UpdateNodeGeometriesCommand::revert(ProjectData &project) {
+void UpdatePresentationGeometriesCommand::revert(ProjectData &project) {
   apply(project, false);
 }
 
-void UpdateNodeGeometriesCommand::apply(ProjectData &project, bool forward) {
+void UpdatePresentationGeometriesCommand::apply(ProjectData &project,
+                                                bool forward) {
   auto *diagram = findDiagram(project, m_diagramId);
   if (!diagram)
     return;
   for (const auto &change : m_changes) {
-    if (auto *node = findNode(*diagram, change.nodeId))
+    if (auto *node = findNode(*diagram, change.presentationId))
       node->geometry = forward ? change.after : change.before;
+    else if (auto *container = findContainer(*diagram, change.presentationId))
+      container->geometry = forward ? change.after : change.before;
+  }
+  applyMembershipChanges(*diagram, m_membershipChanges, forward);
+  for (const auto &change : m_packageChanges)
+    if (auto *element = findElement(project, change.elementId))
+      element->packageId = forward ? change.after : change.before;
+}
+
+SetNodePortSnapPointsCommand::SetNodePortSnapPointsCommand(
+    ProjectController *controller, QString diagramId, QString nodeId,
+    int beforeHorizontal, int beforeVertical, int afterHorizontal,
+    int afterVertical)
+    : ProjectCommand(controller,
+                     QStringLiteral("Change connector snap points")),
+      m_diagramId(std::move(diagramId)), m_nodeId(std::move(nodeId)),
+      m_beforeHorizontal(beforeHorizontal), m_beforeVertical(beforeVertical),
+      m_afterHorizontal(afterHorizontal), m_afterVertical(afterVertical) {}
+
+void SetNodePortSnapPointsCommand::execute(ProjectData &project) {
+  apply(project, m_afterHorizontal, m_afterVertical);
+}
+
+void SetNodePortSnapPointsCommand::revert(ProjectData &project) {
+  apply(project, m_beforeHorizontal, m_beforeVertical);
+}
+
+void SetNodePortSnapPointsCommand::apply(ProjectData &project, int horizontal,
+                                         int vertical) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    if (auto *node = findNode(*diagram, m_nodeId)) {
+      node->horizontalPortSnapPoints = horizontal;
+      node->verticalPortSnapPoints = vertical;
+    }
   }
 }
 

@@ -1,6 +1,6 @@
 # ADR 005: C++ import authority and conflict baselines
 
-Status: accepted for the first C++ import slice
+Status: accepted
 
 ## Context
 
@@ -23,9 +23,12 @@ partial handwritten language parser.
 - Store a `sourceBinding` object in each imported element or relationship's
   extensible metadata. It contains the language, Clang-derived identity, source
   location, and the last imported source-owned fields.
-- Source-owned fields in this slice are element type, name, attributes, and
-  operations. Diagram placement, package assignment, and other presentation or
-  user metadata remain outside synchronization.
+- Source-owned fields in this slice are element type, name, attributes,
+  operations, and the package implied by a C++ namespace. C++ namespaces are
+  materialized as ordinary source-bound UML package elements rather than a
+  parallel semantic kind. Diagram placement and other presentation or user
+  metadata remain outside synchronization. A manually changed package is still
+  user-authoritative under the same three-way rules below.
 - Plan each import using a three-way comparison:
 
   | Current model | Current source | Result |
@@ -57,8 +60,22 @@ duplicate. An existing unbound user relationship is never silently claimed as
 source-owned. Diagram connectors remain presentation data and are created by the
 normal placement workflow when both relationship endpoints appear together.
 
+Record member and operation-signature types are also imported as semantic
+relationships. A by-value member or a member using a configured owning pointer
+template is composition. A member using a configured shared pointer template,
+raw pointer, or reference is aggregation. An unclassified template wrapper is
+association, avoiding an unsupported ownership claim. A type appearing only in
+an operation parameter or return type is dependency. Structural member evidence
+suppresses a weaker signature dependency for the same source/target pair.
+Owning and shared pointer-template names are persisted application preferences;
+the defaults are `std::unique_ptr` and `std::shared_ptr`. Type-use relationship
+identity uses the source and target Clang identities independently of whether
+the current evidence is a member or operation signature, so preference-driven
+or source-driven reclassification updates the existing relationship through the
+same baseline and conflict rules.
+
 Until rename/move matching and explicit resolution are available, a bound
-declaration or inheritance that disappears from discovery is reported but not
+declaration or relationship that disappears from discovery is reported but not
 deleted. This prevents incomplete best-effort parsing or a partial compilation
 database from causing destructive model changes.
 

@@ -48,6 +48,8 @@ endif()
 add_library(uuml_core STATIC
     src/core/application_settings.cpp
     src/core/application_settings.h
+    src/core/connector_port_layout.cpp
+    src/core/connector_port_layout.h
     src/core/cpp_import.cpp
     src/core/cpp_import.h
     src/core/cpp_import_controller.cpp
@@ -56,6 +58,8 @@ add_library(uuml_core STATIC
     src/core/diagnostic_model.h
     src/core/json5.cpp
     src/core/json5.h
+    src/core/presentation_layout.cpp
+    src/core/presentation_layout.h
     src/core/project_command.cpp
     src/core/project_command.h
     src/core/project_commands.cpp
@@ -113,6 +117,8 @@ target_include_directories(uuml_ui_support PUBLIC src)
 target_link_libraries(uuml_ui_support PUBLIC Qt6::Core)
 
 add_library(uuml_canvas STATIC
+    src/ui/diagram_clipping.cpp
+    src/ui/diagram_clipping.h
     src/ui/diagram_canvas.cpp
     src/ui/diagram_canvas.h
 )

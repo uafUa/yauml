@@ -81,9 +81,27 @@ struct NodePresentation {
   QString id;
   QString elementId;
   QRectF geometry;
+  // Counts apply to side pairs: top/bottom share the horizontal value and
+  // left/right share the vertical value. Odd values keep a center snap point.
+  int horizontalPortSnapPoints = 1;
+  int verticalPortSnapPoints = 1;
   QJsonObject extra;
 
   bool operator==(const NodePresentation &) const = default;
+};
+
+// Diagram containers are presentation-only views of a project-browser
+// subject. Membership is explicit so moving a frame is deterministic and does
+// not depend on incidental rectangle overlap.
+struct ContainerPresentation {
+  QString id;
+  QString subjectKind;
+  QString subjectId;
+  QRectF geometry;
+  QStringList childPresentationIds;
+  QJsonObject extra;
+
+  bool operator==(const ContainerPresentation &) const = default;
 };
 
 struct ConnectorAnchor {
@@ -116,6 +134,7 @@ struct ConnectorPresentation {
 struct Diagram {
   QString id;
   QString name;
+  QList<ContainerPresentation> containers;
   QList<NodePresentation> nodes;
   QList<ConnectorPresentation> connectors;
   QJsonObject extra;
@@ -123,12 +142,27 @@ struct Diagram {
   bool operator==(const Diagram &) const = default;
 };
 
+// Project-scoped source synchronization settings. Keeping this in the
+// manifest (rather than application preferences) lets each model remember its
+// own source tree and leaves room for future per-project sync policy.
+struct CppImportConfiguration {
+  QString sourceRoot;
+  QJsonObject extra;
+
+  bool operator==(const CppImportConfiguration &) const = default;
+};
+
 struct ProjectData {
   int schemaVersion = 1;
   QString id;
   QString name;
+  CppImportConfiguration cppImport;
   QList<ModelElement> elements;
   QList<BrowserFolder> browserFolders;
+  // Stable cross-type ordering for explicit project-browser items. Entries
+  // use "element:<id>" and "folder:<id>"; missing entries retain their
+  // natural creation order for backward-compatible project files.
+  QStringList browserItemOrder;
   QList<Relationship> relationships;
   QList<Diagram> diagrams;
   QJsonObject manifestExtra;
@@ -154,6 +188,9 @@ Diagram *findDiagram(ProjectData &project, const QString &id);
 const Diagram *findDiagram(const ProjectData &project, const QString &id);
 NodePresentation *findNode(Diagram &diagram, const QString &id);
 const NodePresentation *findNode(const Diagram &diagram, const QString &id);
+ContainerPresentation *findContainer(Diagram &diagram, const QString &id);
+const ContainerPresentation *findContainer(const Diagram &diagram,
+                                           const QString &id);
 ConnectorPresentation *findConnector(Diagram &diagram, const QString &id);
 const ConnectorPresentation *findConnector(const Diagram &diagram,
                                            const QString &id);

@@ -22,6 +22,7 @@ ApplicationWindow {
     property bool quitScheduled: false
     property string pendingDocumentAction: ""
     property url pendingRecentProjectUrl: ""
+    property url pendingSaveUrl: ""
 
     Component.onCompleted: geometryReady = true
     onXChanged: if (geometryReady) workspaceController.updateMainWindowGeometry(x, y, width, height)
@@ -79,6 +80,13 @@ ApplicationWindow {
         } else {
             saveDialog.open()
         }
+    }
+
+    function saveToSelectedFolder(folderUrl, overwriteExisting) {
+        const saved = projectController.saveProject(folderUrl, overwriteExisting)
+        pendingSaveUrl = ""
+        if (saved && root.pendingDocumentAction.length > 0)
+            root.performDocumentAction(root.pendingDocumentAction)
     }
 
     function createFolderAt(parentKind, parentId) {
@@ -169,7 +177,17 @@ ApplicationWindow {
             }
             MenuSeparator {}
             Action {
-                text: qsTr("Import C++…")
+                text: qsTr("Synchronize C++")
+                enabled: cppImportController.canSynchronize
+                onTriggered: {
+                    cppImportDialog.open()
+                    cppImportController.synchronize()
+                }
+            }
+            Action {
+                text: cppImportController.configuredSourceRoot.length > 0
+                      ? qsTr("Change C++ source…")
+                      : qsTr("Import C++…")
                 enabled: !cppImportController.busy
                 onTriggered: cppImportFolderDialog.open()
             }
@@ -180,11 +198,6 @@ ApplicationWindow {
             title: qsTr("&Edit")
             Action { text: qsTr("&Undo"); shortcut: StandardKey.Undo; enabled: projectController.canUndo; onTriggered: projectController.undo() }
             Action { text: qsTr("&Redo"); shortcut: StandardKey.Redo; enabled: projectController.canRedo; onTriggered: projectController.redo() }
-            MenuSeparator {}
-            Action {
-                text: qsTr("Delete selected project object")
-                onTriggered: projectController.deleteSelected()
-            }
             MenuSeparator {}
             Action {
                 text: qsTr("&Preferences…")
@@ -267,16 +280,6 @@ ApplicationWindow {
                             ToolTip.visible: hovered
                             ToolTip.text: qsTr("Create a project-tree folder")
                         }
-                        ToolButton {
-                            text: qsTr("Delete")
-                            enabled: projectController.selectedKind === "diagram"
-                                     || projectController.selectedKind === "element"
-                            onClicked: projectController.deleteSelected()
-                            ToolTip.visible: hovered
-                            ToolTip.text: projectController.selectedKind === "diagram"
-                                          ? qsTr("Delete selected diagram")
-                                          : qsTr("Delete selected model element")
-                        }
                     }
                 }
                 TreeView {
@@ -294,6 +297,58 @@ ApplicationWindow {
                     readonly property string browserItemsMimeType:
                         "application/x-uuml-browser-items"
                     property bool selectionOriginatesFromTree: false
+                    function toggleBranch(row) {
+                        if (row >= 0)
+                            toggleExpanded(row)
+                    }
+                    function selectedBrowserItemsJson() {
+                        return projectController.treeModel.browserItemsJsonForIndexes(
+                                    projectTreeSelection.selectedIndexes)
+                    }
+                    function deleteSelectedBrowserItems() {
+                        const itemsJson = selectedBrowserItemsJson()
+                        if (JSON.parse(itemsJson).length > 0)
+                            projectController.deleteBrowserItems(itemsJson)
+                    }
+                    function moveBrowserItemsFromDrop(drop, targetKind,
+                                                      targetId) {
+                        if (drop.formats.indexOf(browserItemsMimeType) < 0)
+                            return false
+                        const itemsJson = drop.getDataAsString(
+                                            browserItemsMimeType)
+                        const packageChange =
+                                projectController.browserMovePackageChangeSummary(
+                                    itemsJson, targetKind, targetId)
+                        if (packageChange.length > 0
+                                && applicationSettings.packageReassignmentPolicy
+                                   === "disallow")
+                            return false
+                        if (packageChange.length > 0
+                                && applicationSettings.packageReassignmentPolicy
+                                   === "ask") {
+                            packageMoveConfirmation.itemsJson = itemsJson
+                            packageMoveConfirmation.targetKind = targetKind
+                            packageMoveConfirmation.targetId = targetId
+                            packageMoveConfirmation.message = packageChange
+                            packageMoveConfirmation.open()
+                            drop.acceptProposedAction()
+                            return true
+                        }
+                        const changed = packageChange.length > 0
+                                ? projectController.moveBrowserItemsWithPackageReassignment(
+                                      itemsJson, targetKind, targetId)
+                                : projectController.moveBrowserItems(
+                                      itemsJson, targetKind, targetId)
+                        if (changed)
+                            drop.acceptProposedAction()
+                        return changed
+                    }
+                    Keys.onPressed: function(event) {
+                        if (event.key === Qt.Key_Delete) {
+                            deleteSelectedBrowserItems()
+                            event.accepted = true
+                        }
+                    }
                     selectionModel: ItemSelectionModel {
                         id: projectTreeSelection
                         model: projectController.treeModel
@@ -314,10 +369,11 @@ ApplicationWindow {
                         function onSelectionChanged() {
                             const originatedFromTree = projectTree.selectionOriginatesFromTree
                             Qt.callLater(function() {
-                                projectTree.expandRecursively()
                                 const itemIndex = projectController.treeModel.indexForObject(
                                                     projectController.selectedId,
                                                     projectController.selectedKind)
+                                if (itemIndex.valid)
+                                    projectTree.expandToIndex(itemIndex)
                                 if (!originatedFromTree
                                         && projectController.selectedKind === "element"
                                         && itemIndex.valid) {
@@ -342,6 +398,7 @@ ApplicationWindow {
                         required property string kind
                         required property string objectType
                         property bool browserDropActive: false
+                        property int browserInsertionEdge: 0
                         highlighted: kind !== "root" && (
                                          kind === "diagram"
                                          ? objectId === workspaceController.activeDiagramId
@@ -366,9 +423,14 @@ ApplicationWindow {
                         onDoubleClicked: {
                             if (kind === "element") {
                                 projectController.selectObject(objectId, kind)
-                                projectController.addSelectedToDiagram(workspaceController.activeDiagramId)
+                                projectController.addSelectedToDiagram(
+                                            workspaceController.activeDiagramId,
+                                            applicationSettings.diagramItemSizingMode)
                             } else if (kind === "diagram") {
                                 workspaceController.activeDiagramId = objectId
+                            } else if (treeDelegate.isTreeNode
+                                       && treeDelegate.hasChildren) {
+                                projectTree.toggleBranch(treeDelegate.row)
                             }
                         }
 
@@ -377,6 +439,21 @@ ApplicationWindow {
                             projectTree.selectionOriginatesFromTree = false
                         })
                         onCanceled: projectTree.selectionOriginatesFromTree = false
+
+                        // pointerNavigationEnabled is intentionally disabled so
+                        // Ctrl/Shift row selection remains under our control.
+                        // Restore the standard disclosure-arrow behavior with a
+                        // dedicated hit target that does not change selection.
+                        MouseArea {
+                            parent: treeDelegate.indicator
+                            anchors.fill: parent
+                            enabled: treeDelegate.isTreeNode
+                                     && treeDelegate.hasChildren
+                            acceptedButtons: Qt.LeftButton
+                            preventStealing: true
+                            cursorShape: Qt.PointingHandCursor
+                            onClicked: projectTree.toggleBranch(treeDelegate.row)
+                        }
 
                         DragHandler {
                             target: null
@@ -401,7 +478,12 @@ ApplicationWindow {
                         }
 
                         DropArea {
-                            anchors.fill: parent
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.top: parent.top
+                            anchors.bottom: parent.bottom
+                            anchors.topMargin: 7
+                            anchors.bottomMargin: 7
                             enabled: treeDelegate.kind === "namespace"
                                      || treeDelegate.kind === "element"
                                      || treeDelegate.kind === "folder"
@@ -412,19 +494,85 @@ ApplicationWindow {
                             onExited: treeDelegate.browserDropActive = false
                             onDropped: function(drop) {
                                 treeDelegate.browserDropActive = false
-                                if (drop.formats.indexOf(
-                                            projectTree.browserItemsMimeType) < 0)
-                                    return
                                 const targetKind = treeDelegate.kind === "root"
                                                  ? "model" : treeDelegate.kind
                                 const targetId = targetKind === "model"
                                                ? "" : treeDelegate.objectId
-                                if (projectController.moveBrowserItems(
-                                            drop.getDataAsString(
-                                                projectTree.browserItemsMimeType),
-                                            targetKind, targetId))
-                                    drop.acceptProposedAction()
+                                projectTree.moveBrowserItemsFromDrop(
+                                            drop, targetKind, targetId)
                             }
+                        }
+
+                        Repeater {
+                            model: [-1, 1]
+                            delegate: DropArea {
+                                required property int modelData
+                                anchors.left: parent.left
+                                anchors.right: parent.right
+                                anchors.top: modelData < 0
+                                             ? parent.top : undefined
+                                anchors.bottom: modelData > 0
+                                                ? parent.bottom : undefined
+                                height: 7
+                                z: 4
+                                enabled: treeDelegate.kind === "element"
+                                         || treeDelegate.kind === "folder"
+                                keys: [projectTree.browserItemsMimeType]
+                                function canReorder(drag) {
+                                    if (drag.formats.indexOf(
+                                                projectTree.browserItemsMimeType) < 0)
+                                        return false
+                                    return projectController.canReorderBrowserItemsAround(
+                                                drag.getDataAsString(
+                                                    projectTree.browserItemsMimeType),
+                                                treeDelegate.kind,
+                                                treeDelegate.objectId)
+                                }
+                                onEntered: function(drag) {
+                                    const reorder = canReorder(drag)
+                                    treeDelegate.browserInsertionEdge =
+                                            reorder ? modelData : 0
+                                    treeDelegate.browserDropActive = !reorder
+                                }
+                                onExited: {
+                                    treeDelegate.browserInsertionEdge = 0
+                                    treeDelegate.browserDropActive = false
+                                }
+                                onDropped: function(drop) {
+                                    const reorder = canReorder(drop)
+                                    treeDelegate.browserInsertionEdge = 0
+                                    treeDelegate.browserDropActive = false
+                                    if (reorder) {
+                                        const changed =
+                                                projectController.reorderBrowserItemsAround(
+                                                    drop.getDataAsString(
+                                                        projectTree.browserItemsMimeType),
+                                                    treeDelegate.kind,
+                                                    treeDelegate.objectId,
+                                                    modelData < 0)
+                                        if (changed)
+                                            drop.acceptProposedAction()
+                                        return
+                                    }
+                                    projectTree.moveBrowserItemsFromDrop(
+                                                drop, treeDelegate.kind,
+                                                treeDelegate.objectId)
+                                }
+                            }
+                        }
+
+                        Rectangle {
+                            anchors.left: parent.left
+                            anchors.right: parent.right
+                            anchors.leftMargin: treeDelegate.indentation
+                            anchors.top: treeDelegate.browserInsertionEdge < 0
+                                         ? parent.top : undefined
+                            anchors.bottom: treeDelegate.browserInsertionEdge > 0
+                                            ? parent.bottom : undefined
+                            height: 2
+                            z: 5
+                            visible: treeDelegate.browserInsertionEdge !== 0
+                            color: uiTheme.accent
                         }
 
                         MouseArea {
@@ -434,9 +582,36 @@ ApplicationWindow {
                                 if (treeDelegate.kind === "root"
                                         && treeDelegate.objectId !== "model")
                                     return
+                                const itemIndex = projectTree.index(
+                                                    treeDelegate.row,
+                                                    treeDelegate.column)
+                                if ((treeDelegate.kind === "element"
+                                     || treeDelegate.kind === "folder")
+                                        && !projectTreeSelection.isSelected(
+                                            itemIndex)) {
+                                    projectTreeSelection.select(
+                                                itemIndex,
+                                                ItemSelectionModel.ClearAndSelect
+                                                | ItemSelectionModel.Rows)
+                                    projectTreeSelection.setCurrentIndex(
+                                                itemIndex,
+                                                ItemSelectionModel.NoUpdate)
+                                } else if (treeDelegate.kind === "diagram") {
+                                    projectTreeSelection.select(
+                                                itemIndex,
+                                                ItemSelectionModel.ClearAndSelect
+                                                | ItemSelectionModel.Rows)
+                                } else if (treeDelegate.kind === "root") {
+                                    projectTreeSelection.clearSelection()
+                                }
                                 treeContextMenu.targetId = treeDelegate.objectId
                                 treeContextMenu.targetKind = treeDelegate.kind
                                 treeContextMenu.targetName = treeDelegate.text
+                                treeContextMenu.selectedItemsJson =
+                                        projectTree.selectedBrowserItemsJson()
+                                treeContextMenu.selectedItemCount =
+                                        JSON.parse(
+                                            treeContextMenu.selectedItemsJson).length
                                 const point = treeDelegate.mapToItem(
                                                 root.contentItem,
                                                 mouse.x, mouse.y)
@@ -607,8 +782,15 @@ ApplicationWindow {
         property string targetId: ""
         property string targetKind: ""
         property string targetName: ""
+        property string selectedItemsJson: "[]"
+        property int selectedItemCount: 0
 
         MenuItem {
+            visible: treeContextMenu.targetKind === "folder"
+                     || treeContextMenu.targetKind === "element"
+                     || (treeContextMenu.targetKind === "root"
+                         && treeContextMenu.targetId === "model")
+            height: visible ? implicitHeight : 0
             text: qsTr("New folder here…")
             onTriggered: root.createFolderAt(
                              treeContextMenu.targetKind === "root"
@@ -616,7 +798,12 @@ ApplicationWindow {
                              treeContextMenu.targetKind === "root"
                              ? "" : treeContextMenu.targetId)
         }
-        MenuSeparator { visible: treeContextMenu.targetKind === "folder" }
+        MenuSeparator {
+            visible: treeContextMenu.targetKind === "folder"
+                     || treeContextMenu.targetKind === "element"
+                     || treeContextMenu.targetKind === "diagram"
+            height: visible ? implicitHeight : 0
+        }
         MenuItem {
             visible: treeContextMenu.targetKind === "folder"
             height: visible ? implicitHeight : 0
@@ -625,11 +812,46 @@ ApplicationWindow {
                                            treeContextMenu.targetName)
         }
         MenuItem {
-            visible: treeContextMenu.targetKind === "folder"
+            visible: treeContextMenu.selectedItemCount > 0
             height: visible ? implicitHeight : 0
-            text: qsTr("Delete folder")
-            onTriggered: projectController.deleteBrowserFolder(
-                             treeContextMenu.targetId)
+            text: treeContextMenu.selectedItemCount === 1
+                  ? qsTr("Delete")
+                  : qsTr("Delete selected (%1)").arg(
+                        treeContextMenu.selectedItemCount)
+            onTriggered: projectController.deleteBrowserItems(
+                             treeContextMenu.selectedItemsJson)
+        }
+        MenuSeparator {
+            visible: treeContextMenu.selectedItemCount === 1
+                     && (treeContextMenu.targetKind === "folder"
+                         || treeContextMenu.targetKind === "element")
+            height: visible ? implicitHeight : 0
+        }
+        MenuItem {
+            visible: treeContextMenu.selectedItemCount === 1
+                     && (treeContextMenu.targetKind === "folder"
+                         || treeContextMenu.targetKind === "element")
+            height: visible ? implicitHeight : 0
+            text: qsTr("Move up")
+            enabled: projectController.canReorderBrowserItem(
+                         treeContextMenu.targetKind,
+                         treeContextMenu.targetId, -1)
+            onTriggered: projectController.reorderBrowserItem(
+                             treeContextMenu.targetKind,
+                             treeContextMenu.targetId, -1)
+        }
+        MenuItem {
+            visible: treeContextMenu.selectedItemCount === 1
+                     && (treeContextMenu.targetKind === "folder"
+                         || treeContextMenu.targetKind === "element")
+            height: visible ? implicitHeight : 0
+            text: qsTr("Move down")
+            enabled: projectController.canReorderBrowserItem(
+                         treeContextMenu.targetKind,
+                         treeContextMenu.targetId, 1)
+            onTriggered: projectController.reorderBrowserItem(
+                             treeContextMenu.targetKind,
+                             treeContextMenu.targetId, 1)
         }
     }
 
@@ -671,11 +893,40 @@ ApplicationWindow {
             id: folderNameInput
             implicitWidth: 320
             selectByMouse: true
+            onAccepted: {
+                if (text.trim().length > 0)
+                    folderNameDialog.accept()
+            }
             onTextChanged: {
                 const okButton = folderNameDialog.standardButton(Dialog.Ok)
                 if (okButton)
                     okButton.enabled = text.trim().length > 0
             }
+        }
+    }
+
+    Dialog {
+        id: packageMoveConfirmation
+        objectName: "packageMoveConfirmation"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(460, parent.width - 40)
+        modal: true
+        focus: true
+        title: qsTr("Change UML package?")
+        standardButtons: Dialog.Yes | Dialog.No
+        property string itemsJson: ""
+        property string targetKind: ""
+        property string targetId: ""
+        property string message: ""
+
+        onAccepted: projectController.moveBrowserItemsWithPackageReassignment(
+                        itemsJson, targetKind, targetId)
+
+        contentItem: Label {
+            text: packageMoveConfirmation.message
+            wrapMode: Text.Wrap
+            padding: 16
         }
     }
 
@@ -721,6 +972,14 @@ ApplicationWindow {
             snapToGrid.checked = applicationSettings.snapToGridEnabled
             alignmentGuides.checked = applicationSettings.alignmentGuidesEnabled
             gridSpacing.value = applicationSettings.gridSpacing
+            diagramItemSizing.currentIndex =
+                    applicationSettings.diagramItemSizingMode === "fixed"
+                    ? 0 : 1
+            packageReassignment.currentIndex =
+                    applicationSettings.packageReassignmentPolicy === "disallow"
+                    ? 0
+                    : applicationSettings.packageReassignmentPolicy === "allow"
+                      ? 2 : 1
             defaultConnectorRouting.currentIndex =
                     applicationSettings.defaultConnectorRouting === "orthogonal" ? 1 : 0
             const gestureKeys = applicationSettings.relationshipGestureKeys
@@ -731,6 +990,10 @@ ApplicationWindow {
             aggregationGestureKey.text = gestureKeys.aggregation
             compositionGestureKey.text = gestureKeys.composition
             cppInterfacePattern.text = applicationSettings.cppInterfacePattern
+            cppOwningPointerTypes.text =
+                    applicationSettings.cppOwningPointerTypes.join("\n")
+            cppSharedPointerTypes.text =
+                    applicationSettings.cppSharedPointerTypes.join("\n")
             Qt.callLater(updateOkButton)
             colorPreferencesModel.clear()
             const roles = uiTheme.colorRoles
@@ -757,10 +1020,19 @@ ApplicationWindow {
             applicationSettings.snapToGridEnabled = snapToGrid.checked
             applicationSettings.alignmentGuidesEnabled = alignmentGuides.checked
             applicationSettings.gridSpacing = gridSpacing.value
+            applicationSettings.diagramItemSizingMode =
+                    diagramItemSizing.currentIndex === 0 ? "fixed" : "content"
+            applicationSettings.packageReassignmentPolicy =
+                    packageReassignment.currentIndex === 0
+                    ? "disallow"
+                    : packageReassignment.currentIndex === 2 ? "allow" : "ask"
             applicationSettings.defaultConnectorRouting =
                     defaultConnectorRouting.currentIndex === 1
                     ? "orthogonal" : "straight"
             applicationSettings.setCppInterfacePattern(cppInterfacePattern.text)
+            applicationSettings.setCppPointerTypes(
+                        cppOwningPointerTypes.text.split(/\r?\n/),
+                        cppSharedPointerTypes.text.split(/\r?\n/))
             const colors = {}
             for (let index = 0; index < colorPreferencesModel.count; ++index) {
                 const entry = colorPreferencesModel.get(index)
@@ -787,10 +1059,12 @@ ApplicationWindow {
                 Layout.fillHeight: true
                 currentIndex: preferencesTabs.currentIndex
 
-                Item {
+                ScrollView {
+                    id: generalPreferencesScroll
+                    clip: true
+                    contentWidth: availableWidth
                     ColumnLayout {
-                        anchors.fill: parent
-                        anchors.margins: 8
+                        width: generalPreferencesScroll.availableWidth
                         spacing: 12
 
                         Label {
@@ -817,6 +1091,22 @@ ApplicationWindow {
                         Label {
                             text: qsTr("Diagram snapping")
                             font.bold: true
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label { text: qsTr("Diagram item sizing") }
+                            Item { Layout.fillWidth: true }
+                            ComboBox {
+                                id: diagramItemSizing
+                                model: [qsTr("Fixed size (220 × 120)"),
+                                        qsTr("Fit to content")]
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            color: uiTheme.mutedText
+                            text: qsTr("Controls the initial size of items added from the project tree. “Fit to content” remains available from the diagram context menu.")
                         }
                         CheckBox {
                             id: snapToGrid
@@ -846,6 +1136,27 @@ ApplicationWindow {
                             text: qsTr("Hold Alt while dragging to temporarily disable snapping.")
                         }
                         Label {
+                            text: qsTr("Model organization")
+                            font.bold: true
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                text: qsTr("Package reassignment by drag and drop")
+                            }
+                            Item { Layout.fillWidth: true }
+                            ComboBox {
+                                id: packageReassignment
+                                model: [qsTr("Disallow"), qsTr("Ask"), qsTr("Allow")]
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            color: uiTheme.mutedText
+                            text: qsTr("Controls whether moving model elements between UML packages also changes their semantic package. Custom folders are unaffected.")
+                        }
+                        Label {
                             text: qsTr("C++ import")
                             font.bold: true
                         }
@@ -870,7 +1181,44 @@ ApplicationWindow {
                             color: uiTheme.warningBorder
                             text: qsTr("Enter a valid, non-empty regular expression.")
                         }
-                        Item { Layout.fillHeight: true }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            color: uiTheme.mutedText
+                            text: qsTr("Member ownership determines the imported UML relationship: values and owning pointers become compositions; shared pointers and raw pointer/reference members become aggregations. Enter one qualified pointer-template name per line.")
+                        }
+                        GridLayout {
+                            Layout.fillWidth: true
+                            columns: 2
+                            columnSpacing: 12
+                            rowSpacing: 8
+
+                            Label {
+                                text: qsTr("Owning pointer types")
+                                Layout.alignment: Qt.AlignTop
+                            }
+                            TextArea {
+                                id: cppOwningPointerTypes
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 76
+                                selectByMouse: true
+                                wrapMode: TextEdit.NoWrap
+                                placeholderText: "std::unique_ptr"
+                            }
+                            Label {
+                                text: qsTr("Shared pointer types")
+                                Layout.alignment: Qt.AlignTop
+                            }
+                            TextArea {
+                                id: cppSharedPointerTypes
+                                Layout.fillWidth: true
+                                Layout.preferredHeight: 76
+                                selectByMouse: true
+                                wrapMode: TextEdit.NoWrap
+                                placeholderText: "std::shared_ptr"
+                            }
+                        }
+                        Item { Layout.preferredHeight: 8 }
                     }
                 }
 
@@ -1129,6 +1477,36 @@ ApplicationWindow {
     }
 
     Dialog {
+        id: replaceProjectDialog
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(500, parent.width - 40)
+        modal: true
+        focus: true
+        title: qsTr("Replace existing project?")
+        standardButtons: Dialog.Yes | Dialog.Cancel
+
+        Label {
+            width: parent.width
+            wrapMode: Text.Wrap
+            text: qsTr("The selected folder already contains a u uml project. "
+                       + "Saving here will replace its manifest, model, and "
+                       + "diagram files. Continue?")
+        }
+
+        onOpened: {
+            const replaceButton = standardButton(Dialog.Yes)
+            if (replaceButton)
+                replaceButton.text = qsTr("Replace project")
+        }
+        onAccepted: root.saveToSelectedFolder(root.pendingSaveUrl, true)
+        onRejected: {
+            root.pendingSaveUrl = ""
+            root.cancelPendingDocumentAction()
+        }
+    }
+
+    Dialog {
         id: cppImportDialog
         parent: Overlay.overlay
         anchors.centerIn: parent
@@ -1136,13 +1514,13 @@ ApplicationWindow {
         height: Math.min(620, parent.height - 40)
         modal: true
         focus: true
-        title: qsTr("C++ import preview")
+        title: qsTr("C++ synchronization preview")
         standardButtons: Dialog.Apply | Dialog.Close
 
         onOpened: {
             const applyButton = standardButton(Dialog.Apply)
             if (applyButton)
-                applyButton.text = qsTr("Import changes")
+                applyButton.text = qsTr("Apply synchronization")
         }
         onApplied: cppImportController.applyPreview()
 
@@ -1171,6 +1549,14 @@ ApplicationWindow {
                     text: cppImportController.summary
                     wrapMode: Text.Wrap
                 }
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: cppImportController.previewSourceRoot.length > 0
+                text: qsTr("Source: %1")
+                      .arg(cppImportController.previewSourceRoot)
+                color: uiTheme.mutedText
+                elide: Text.ElideMiddle
             }
             Label {
                 Layout.fillWidth: true
@@ -1312,11 +1698,16 @@ ApplicationWindow {
         id: saveDialog
         title: qsTr("Choose u uml project directory")
         onAccepted: {
-            const saved = projectController.saveProject(selectedFolder)
-            if (saved && root.pendingDocumentAction.length > 0)
-                root.performDocumentAction(root.pendingDocumentAction)
+            root.pendingSaveUrl = selectedFolder
+            if (projectController.saveDestinationContainsProject(selectedFolder))
+                replaceProjectDialog.open()
+            else
+                root.saveToSelectedFolder(selectedFolder, false)
         }
-        onRejected: root.cancelPendingDocumentAction()
+        onRejected: {
+            root.pendingSaveUrl = ""
+            root.cancelPendingDocumentAction()
+        }
     }
 
     FolderDialog {

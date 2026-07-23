@@ -44,6 +44,10 @@ struct UiPalette {
   QColor alignmentGuide;
   QColor selectionOverlay;
   QColor connector;
+  QColor containerFill;
+  QColor containerHeaderFill;
+  QColor containerBorder;
+  QColor containerTitleText;
   QColor nodeBorder;
   QColor compartmentLine;
   QColor compartmentDivider;
@@ -98,6 +102,12 @@ class UiTheme final : public QObject {
   Q_PROPERTY(
       QColor selectionOverlay READ selectionOverlay NOTIFY paletteChanged)
   Q_PROPERTY(QColor connector READ connector NOTIFY paletteChanged)
+  Q_PROPERTY(QColor containerFill READ containerFill NOTIFY paletteChanged)
+  Q_PROPERTY(
+      QColor containerHeaderFill READ containerHeaderFill NOTIFY paletteChanged)
+  Q_PROPERTY(QColor containerBorder READ containerBorder NOTIFY paletteChanged)
+  Q_PROPERTY(
+      QColor containerTitleText READ containerTitleText NOTIFY paletteChanged)
   Q_PROPERTY(QColor nodeBorder READ nodeBorder NOTIFY paletteChanged)
   Q_PROPERTY(QColor compartmentLine READ compartmentLine NOTIFY paletteChanged)
   Q_PROPERTY(
@@ -144,6 +154,10 @@ public:
   QColor alignmentGuide() const;
   QColor selectionOverlay() const;
   QColor connector() const;
+  QColor containerFill() const;
+  QColor containerHeaderFill() const;
+  QColor containerBorder() const;
+  QColor containerTitleText() const;
   QColor nodeBorder() const;
   QColor compartmentLine() const;
   QColor compartmentDivider() const;

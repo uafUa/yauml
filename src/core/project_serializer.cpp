@@ -1,5 +1,6 @@
 #include "core/project_serializer.h"
 
+#include "core/connector_port_layout.h"
 #include "core/json5.h"
 
 #include <QDir>
@@ -82,6 +83,34 @@ QStringList readStringArray(const QJsonValue &value) {
       result.append(item.toString());
   }
   return result;
+}
+
+int readPortSnapPointCount(const QJsonObject &object, const QString &key,
+                           const QString &nodeId,
+                           QList<Diagnostic> &diagnostics) {
+  const QJsonValue value = object.value(key);
+  if (value.isUndefined())
+    return connector_ports::kDefaultSnapPointCount;
+
+  const qreal numericValue = value.toDouble(0.0);
+  const bool representable =
+      std::isfinite(numericValue) && numericValue >= 0.0 &&
+      numericValue <= connector_ports::kMaximumSnapPointCount;
+  const int count = representable ? static_cast<int>(numericValue)
+                                  : connector_ports::kDefaultSnapPointCount;
+  const bool valid = value.isDouble() && representable &&
+                     numericValue == count &&
+                     connector_ports::isValidSnapPointCount(count);
+  if (!valid) {
+    diagnostics.append(
+        error(QStringLiteral("validation"),
+              QStringLiteral(
+                  "Node presentation %1 must be an odd number between 1 and %2")
+                  .arg(key)
+                  .arg(connector_ports::kMaximumSnapPointCount),
+              nodeId));
+  }
+  return valid ? count : connector_ports::kDefaultSnapPointCount;
 }
 
 QJsonObject anchorToJson(const ConnectorAnchor &anchor) {
@@ -213,6 +242,32 @@ QJsonObject nodeToJson(const NodePresentation &node) {
   geometry.insert(QStringLiteral("width"), node.geometry.width());
   geometry.insert(QStringLiteral("height"), node.geometry.height());
   object.insert(QStringLiteral("geometry"), geometry);
+  if (node.horizontalPortSnapPoints != connector_ports::kDefaultSnapPointCount)
+    object.insert(QStringLiteral("horizontalPortSnapPoints"),
+                  node.horizontalPortSnapPoints);
+  else
+    object.remove(QStringLiteral("horizontalPortSnapPoints"));
+  if (node.verticalPortSnapPoints != connector_ports::kDefaultSnapPointCount)
+    object.insert(QStringLiteral("verticalPortSnapPoints"),
+                  node.verticalPortSnapPoints);
+  else
+    object.remove(QStringLiteral("verticalPortSnapPoints"));
+  return object;
+}
+
+QJsonObject containerToJson(const ContainerPresentation &container) {
+  QJsonObject object = container.extra;
+  object.insert(QStringLiteral("id"), container.id);
+  object.insert(QStringLiteral("subjectKind"), container.subjectKind);
+  object.insert(QStringLiteral("subjectId"), container.subjectId);
+  QJsonObject geometry;
+  geometry.insert(QStringLiteral("x"), container.geometry.x());
+  geometry.insert(QStringLiteral("y"), container.geometry.y());
+  geometry.insert(QStringLiteral("width"), container.geometry.width());
+  geometry.insert(QStringLiteral("height"), container.geometry.height());
+  object.insert(QStringLiteral("geometry"), geometry);
+  object.insert(QStringLiteral("childPresentationIds"),
+                stringArray(container.childPresentationIds));
   return object;
 }
 
@@ -254,6 +309,16 @@ QByteArray manifestBytes(const ProjectData &project) {
   object.insert(QStringLiteral("name"), project.name);
   object.insert(QStringLiteral("model"), QString::fromLatin1(kModelName));
   object.insert(QStringLiteral("diagrams"), QString::fromLatin1(kDiagramsName));
+  QJsonObject cppImport = project.cppImport.extra;
+  if (!project.cppImport.sourceRoot.isEmpty())
+    cppImport.insert(QStringLiteral("sourceRoot"),
+                     project.cppImport.sourceRoot);
+  else
+    cppImport.remove(QStringLiteral("sourceRoot"));
+  if (!cppImport.isEmpty())
+    object.insert(QStringLiteral("cppImport"), cppImport);
+  else
+    object.remove(QStringLiteral("cppImport"));
   return Json5::serialize(QJsonDocument(object));
 }
 
@@ -273,6 +338,11 @@ QByteArray modelBytes(const ProjectData &project) {
     object.insert(QStringLiteral("browserFolders"), browserFolders);
   else
     object.remove(QStringLiteral("browserFolders"));
+  if (!project.browserItemOrder.isEmpty())
+    object.insert(QStringLiteral("browserOrder"),
+                  stringArray(project.browserItemOrder));
+  else
+    object.remove(QStringLiteral("browserOrder"));
   object.insert(QStringLiteral("relationships"), relationships);
   return Json5::serialize(QJsonDocument(object));
 }
@@ -284,12 +354,19 @@ QByteArray diagramsBytes(const ProjectData &project) {
     QJsonObject object = diagram.extra;
     object.insert(QStringLiteral("id"), diagram.id);
     object.insert(QStringLiteral("name"), diagram.name);
+    QJsonArray containers;
+    for (const auto &container : diagram.containers)
+      containers.append(containerToJson(container));
     QJsonArray nodes;
     for (const auto &node : diagram.nodes)
       nodes.append(nodeToJson(node));
     QJsonArray connectors;
     for (const auto &connector : diagram.connectors)
       connectors.append(connectorToJson(connector));
+    if (!containers.isEmpty())
+      object.insert(QStringLiteral("containers"), containers);
+    else
+      object.remove(QStringLiteral("containers"));
     object.insert(QStringLiteral("nodes"), nodes);
     object.insert(QStringLiteral("connectors"), connectors);
     diagrams.append(object);
@@ -445,15 +522,21 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
       manifest.value(QStringLiteral("schemaVersion")).toInt();
   project.id = manifest.value(QStringLiteral("id")).toString();
   project.name = manifest.value(QStringLiteral("name")).toString();
+  const QJsonObject cppImport =
+      manifest.value(QStringLiteral("cppImport")).toObject();
+  project.cppImport.sourceRoot =
+      cppImport.value(QStringLiteral("sourceRoot")).toString();
+  project.cppImport.extra =
+      withoutKeys(cppImport, {QStringLiteral("sourceRoot")});
   project.manifestExtra = withoutKeys(
       manifest, {QStringLiteral("schemaVersion"), QStringLiteral("id"),
                  QStringLiteral("name"), QStringLiteral("model"),
-                 QStringLiteral("diagrams")});
+                 QStringLiteral("diagrams"), QStringLiteral("cppImport")});
 
   const QJsonObject model = modelResult.document.object();
-  project.modelExtra = withoutKeys(model, {QStringLiteral("elements"),
-                                           QStringLiteral("browserFolders"),
-                                           QStringLiteral("relationships")});
+  project.modelExtra = withoutKeys(
+      model, {QStringLiteral("elements"), QStringLiteral("browserFolders"),
+              QStringLiteral("browserOrder"), QStringLiteral("relationships")});
   for (const auto &value : model.value(QStringLiteral("elements")).toArray()) {
     const QJsonObject object = value.toObject();
     ModelElement element;
@@ -496,6 +579,8 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
                              QStringLiteral("parent")});
     project.browserFolders.append(folder);
   }
+  project.browserItemOrder =
+      readStringArray(model.value(QStringLiteral("browserOrder")));
 
   for (const auto &value :
        model.value(QStringLiteral("relationships")).toArray()) {
@@ -528,6 +613,42 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
     Diagram diagram;
     diagram.id = object.value(QStringLiteral("id")).toString();
     diagram.name = object.value(QStringLiteral("name")).toString();
+    const QJsonValue containersValue =
+        object.value(QStringLiteral("containers"));
+    if (!containersValue.isUndefined() && !containersValue.isArray())
+      outcome.diagnostics.append(error(
+          QStringLiteral("validation"),
+          QStringLiteral("Diagram containers must be an array"), diagram.id));
+    for (const auto &containerValue : containersValue.toArray()) {
+      const QJsonObject containerObject = containerValue.toObject();
+      ContainerPresentation container;
+      container.id = containerObject.value(QStringLiteral("id")).toString();
+      container.subjectKind =
+          containerObject.value(QStringLiteral("subjectKind")).toString();
+      container.subjectId =
+          containerObject.value(QStringLiteral("subjectId")).toString();
+      const QJsonObject geometry =
+          containerObject.value(QStringLiteral("geometry")).toObject();
+      container.geometry = {
+          geometry.value(QStringLiteral("x")).toDouble(),
+          geometry.value(QStringLiteral("y")).toDouble(),
+          geometry.value(QStringLiteral("width")).toDouble(),
+          geometry.value(QStringLiteral("height")).toDouble()};
+      const QJsonValue childIdsValue =
+          containerObject.value(QStringLiteral("childPresentationIds"));
+      if (!childIdsValue.isUndefined() && !childIdsValue.isArray())
+        outcome.diagnostics.append(error(
+            QStringLiteral("validation"),
+            QStringLiteral("Container childPresentationIds must be an array"),
+            container.id));
+      container.childPresentationIds = readStringArray(childIdsValue);
+      container.extra =
+          withoutKeys(containerObject,
+                      {QStringLiteral("id"), QStringLiteral("subjectKind"),
+                       QStringLiteral("subjectId"), QStringLiteral("geometry"),
+                       QStringLiteral("childPresentationIds")});
+      diagram.containers.append(std::move(container));
+    }
     for (const auto &nodeValue :
          object.value(QStringLiteral("nodes")).toArray()) {
       const QJsonObject nodeObject = nodeValue.toObject();
@@ -540,9 +661,17 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
                        geometry.value(QStringLiteral("y")).toDouble(),
                        geometry.value(QStringLiteral("width")).toDouble(),
                        geometry.value(QStringLiteral("height")).toDouble()};
-      node.extra = withoutKeys(nodeObject, {QStringLiteral("id"),
-                                            QStringLiteral("elementId"),
-                                            QStringLiteral("geometry")});
+      node.horizontalPortSnapPoints = readPortSnapPointCount(
+          nodeObject, QStringLiteral("horizontalPortSnapPoints"), node.id,
+          outcome.diagnostics);
+      node.verticalPortSnapPoints = readPortSnapPointCount(
+          nodeObject, QStringLiteral("verticalPortSnapPoints"), node.id,
+          outcome.diagnostics);
+      node.extra = withoutKeys(
+          nodeObject, {QStringLiteral("id"), QStringLiteral("elementId"),
+                       QStringLiteral("geometry"),
+                       QStringLiteral("horizontalPortSnapPoints"),
+                       QStringLiteral("verticalPortSnapPoints")});
       diagram.nodes.append(node);
     }
     for (const auto &connectorValue :
@@ -591,7 +720,8 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
     }
     diagram.extra = withoutKeys(
         object, {QStringLiteral("id"), QStringLiteral("name"),
-                 QStringLiteral("nodes"), QStringLiteral("connectors")});
+                 QStringLiteral("containers"), QStringLiteral("nodes"),
+                 QStringLiteral("connectors")});
     project.diagrams.append(diagram);
   }
 
@@ -718,6 +848,10 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
   };
 
   QSet<QString> elementIds;
+  QSet<QString> packageIds;
+  for (const auto &element : project.elements)
+    if (element.type == ElementType::Package)
+      packageIds.insert(element.id);
   for (const auto &element : project.elements) {
     checkId(element.id, QStringLiteral("model element"));
     elementIds.insert(element.id);
@@ -725,10 +859,9 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
       diagnostics.append(error(
           QStringLiteral("validation"),
           QStringLiteral("A model element has an empty name"), element.id));
-    if (!element.packageId.isEmpty() &&
-        !findElement(project, element.packageId))
+    if (!element.packageId.isEmpty() && !packageIds.contains(element.packageId))
       diagnostics.append(error(QStringLiteral("validation"),
-                               QStringLiteral("Package reference %1 is broken")
+                               QStringLiteral("Package reference %1 is invalid")
                                    .arg(element.packageId),
                                element.id));
   }
@@ -843,8 +976,6 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
     QString parent;
     if (!element.browserParent.kind.isEmpty()) {
       parent = parentKey(element.browserParent);
-    } else if (!element.packageId.isEmpty()) {
-      parent = QStringLiteral("element:") + element.packageId;
     } else {
       const QStringList parts =
           element.name.split(QStringLiteral("::"), Qt::SkipEmptyParts);
@@ -858,6 +989,8 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
         else
           parent = QStringLiteral("namespace:") + qualifiedPath;
       }
+      if (parent.isEmpty() && !element.packageId.isEmpty())
+        parent = QStringLiteral("element:") + element.packageId;
     }
     if (!parent.isEmpty())
       browserParentBySubject.insert(QStringLiteral("element:") + element.id,
@@ -911,9 +1044,45 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
       diagnostics.append(error(QStringLiteral("validation"),
                                QStringLiteral("A diagram has an empty name"),
                                diagram.id));
+    QSet<QString> presentationIds;
+    QSet<QString> presentedContainerSubjects;
+    for (const auto &container : diagram.containers) {
+      checkId(container.id, QStringLiteral("container presentation"));
+      presentationIds.insert(container.id);
+      const bool validFolder =
+          container.subjectKind == QStringLiteral("folder") &&
+          folderIds.contains(container.subjectId);
+      const bool validPackage =
+          container.subjectKind == QStringLiteral("package") &&
+          packageIds.contains(container.subjectId);
+      if (!validFolder && !validPackage) {
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("Container presentation references an invalid "
+                                 "folder or UML package"),
+                  container.id));
+      }
+      const QString subjectKey =
+          container.subjectKind + u':' + container.subjectId;
+      if (presentedContainerSubjects.contains(subjectKey)) {
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("A container subject appears twice on the "
+                                 "same diagram"),
+                  container.id));
+      }
+      presentedContainerSubjects.insert(subjectKey);
+      if (container.geometry.width() <= 0 || container.geometry.height() <= 0) {
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("Container presentation has invalid geometry"),
+                  container.id));
+      }
+    }
     QSet<QString> presentedElements;
     for (const auto &node : diagram.nodes) {
       checkId(node.id, QStringLiteral("node presentation"));
+      presentationIds.insert(node.id);
       if (!elementIds.contains(node.elementId))
         diagnostics.append(error(
             QStringLiteral("validation"),
@@ -929,6 +1098,65 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
         diagnostics.append(error(
             QStringLiteral("validation"),
             QStringLiteral("Node presentation has invalid geometry"), node.id));
+      if (!connector_ports::isValidSnapPointCount(
+              node.horizontalPortSnapPoints) ||
+          !connector_ports::isValidSnapPointCount(node.verticalPortSnapPoints))
+        diagnostics.append(error(
+            QStringLiteral("validation"),
+            QStringLiteral("Node presentation snap-point counts must be odd "
+                           "numbers between 1 and %1")
+                .arg(connector_ports::kMaximumSnapPointCount),
+            node.id));
+    }
+
+    QHash<QString, QString> ownerByChild;
+    for (const auto &container : diagram.containers) {
+      QSet<QString> seenChildren;
+      for (const QString &childId : container.childPresentationIds) {
+        if (childId == container.id || !presentationIds.contains(childId)) {
+          diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral("Container references an invalid child "
+                                   "presentation"),
+                    container.id));
+          continue;
+        }
+        if (seenChildren.contains(childId)) {
+          diagnostics.append(error(
+              QStringLiteral("validation"),
+              QStringLiteral("Container lists a child presentation twice"),
+              container.id));
+          continue;
+        }
+        seenChildren.insert(childId);
+        if (ownerByChild.contains(childId)) {
+          diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral("A presentation belongs to two containers"),
+                    childId));
+        } else {
+          ownerByChild.insert(childId, container.id);
+        }
+      }
+    }
+    QSet<QString> reportedContainerCycles;
+    for (const auto &container : diagram.containers) {
+      QSet<QString> path;
+      QString current = container.id;
+      while (ownerByChild.contains(current)) {
+        if (path.contains(current)) {
+          if (!reportedContainerCycles.contains(current)) {
+            reportedContainerCycles.insert(current);
+            diagnostics.append(
+                error(QStringLiteral("validation"),
+                      QStringLiteral("Diagram containment contains a cycle"),
+                      current));
+          }
+          break;
+        }
+        path.insert(current);
+        current = ownerByChild.value(current);
+      }
     }
     for (const auto &connector : diagram.connectors) {
       checkId(connector.id, QStringLiteral("connector presentation"));

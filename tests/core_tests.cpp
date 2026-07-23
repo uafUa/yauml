@@ -1,6 +1,8 @@
 #include "core/application_settings.h"
+#include "core/connector_port_layout.h"
 #include "core/cpp_import.h"
 #include "core/json5.h"
+#include "core/presentation_layout.h"
 #include "core/project_controller.h"
 #include "core/project_serializer.h"
 #include "core/workspace_controller.h"
@@ -79,16 +81,25 @@ private slots:
   void json5Profile();
   void json5SerializationUsesReadableKeys();
   void deterministicRoundTrip();
+  void cppSynchronizationSourcePersistsAndIsUndoable();
+  void saveAsRequiresExplicitProjectReplacement();
   void validationFindsBrokenReferences();
   void commandUndoRedo();
   void cppImportUsesClangAndProtectsUserEdits();
   void cppInterfacePatternClassifiesRealization();
+  void cppImportClassifiesMemberOwnershipAndDependencies();
   void cppImportScansSourceFolderWithoutBuildMetadata();
   void largeModelGeometryCommandUndoRedo();
   void bulkDiagramPlacementIsOneUndoableCommand();
+  void diagramDropSizingModes();
+  void diagramLabelsReflectPackageContext();
   void projectTreeExtendedSelection();
+  void projectTreeDeletionAndOrdering();
   void projectTreeQualifiedHierarchy();
   void browserFoldersPersistAndReorganize();
+  void folderPresentationsPersistAndRemainPresentationOnly();
+  void packagePresentationsAndReassignmentAreSemanticAndUndoable();
+  void nestedPackageMovementOnlyPromptsOnContainmentChange();
   void largeDiagramReplacementUsesFirstFreeSlot();
   void deleteElementCommandRestoresCascade();
   void reconnectRelationshipCommandUndoRedo();
@@ -96,6 +107,7 @@ private slots:
   void relationshipAndDiagramDeletionUndoRedo();
   void relationshipTypesAndPresentationRemoval();
   void connectorAnchorUndoRedo();
+  void nodePortSnapPointsUndoRedo();
   void connectorRoutingUndoRedo();
   void connectorBendPointsUndoRedo();
   void multipleDiagramWorkspace();
@@ -160,10 +172,15 @@ void CoreTests::deterministicRoundTrip() {
   project.elements.append(element);
   project.modelExtra.insert(QStringLiteral("futureRoot"),
                             QStringLiteral("retained"));
+  project.cppImport.sourceRoot = QStringLiteral("D:/sources/round-trip");
+  project.cppImport.extra.insert(QStringLiteral("futureSyncPolicy"),
+                                 QStringLiteral("retained"));
   NodePresentation node;
   node.id = newId();
   node.elementId = element.id;
   node.geometry = {10, 20, 220, 100};
+  node.horizontalPortSnapPoints = 3;
+  node.verticalPortSnapPoints = 5;
   project.diagrams[0].nodes.append(node);
   Relationship relationship;
   relationship.id = newId();
@@ -195,6 +212,12 @@ void CoreTests::deterministicRoundTrip() {
   const auto secondSave = ProjectSerializer::save(temporary.path(), project);
   QVERIFY(secondSave.ok);
   QVERIFY(secondSave.unchanged);
+  QFile manifest(
+      QDir(temporary.path()).filePath(QStringLiteral("manifest.json5")));
+  QVERIFY(manifest.open(QIODevice::ReadOnly));
+  const QByteArray manifestText = manifest.readAll();
+  QVERIFY(manifestText.contains("cppImport: {"));
+  QVERIFY(manifestText.contains("sourceRoot:"));
 
   const auto loaded = ProjectSerializer::load(temporary.path());
   QVERIFY(loaded.ok);
@@ -203,6 +226,50 @@ void CoreTests::deterministicRoundTrip() {
                .extra.value(QStringLiteral("futureField"))
                .toInt(),
            42);
+}
+
+void CoreTests::cppSynchronizationSourcePersistsAndIsUndoable() {
+  ProjectController controller;
+  CppImportPreview preview;
+  preview.ok = true;
+  preview.sourceRoot = QStringLiteral("D:/sources/configured");
+
+  // Configuring a source is a real project edit even when the source and model
+  // are already in sync and there are no semantic records to apply.
+  QCOMPARE(controller.applyCppImportPlan(preview), 0);
+  QCOMPARE(controller.data().cppImport.sourceRoot, preview.sourceRoot);
+  QVERIFY(controller.canUndo());
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Configure C++ synchronization"));
+
+  controller.undo();
+  QVERIFY(controller.data().cppImport.sourceRoot.isEmpty());
+  controller.redo();
+  QCOMPARE(controller.data().cppImport.sourceRoot, preview.sourceRoot);
+}
+
+void CoreTests::saveAsRequiresExplicitProjectReplacement() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  const QUrl destination = QUrl::fromLocalFile(temporary.path());
+
+  ProjectController original;
+  original.newProject(QStringLiteral("Original"));
+  QVERIFY(!original.saveDestinationContainsProject(destination));
+  QVERIFY(original.saveProject(destination));
+  QVERIFY(!original.saveDestinationContainsProject(destination));
+
+  ProjectController replacement;
+  replacement.newProject(QStringLiteral("Replacement"));
+  QVERIFY(replacement.saveDestinationContainsProject(destination));
+  QVERIFY(!replacement.saveProject(destination));
+  QCOMPARE(ProjectSerializer::load(temporary.path()).project.name,
+           QStringLiteral("Original"));
+
+  QVERIFY(replacement.saveProject(destination, true));
+  const LoadOutcome replaced = ProjectSerializer::load(temporary.path());
+  QVERIFY(replaced.ok);
+  QCOMPARE(replaced.project.name, QStringLiteral("Replacement"));
 }
 
 void CoreTests::validationFindsBrokenReferences() {
@@ -310,14 +377,14 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
       CppImportService::preview(sourceDirectory.path(), {});
   QVERIFY(initial.ok);
   QCOMPARE(initial.symbols.size(), 3);
-  QCOMPARE(initial.inheritances.size(), 1);
-  QCOMPARE(initial.elementApplicableCount(), 3);
+  QCOMPARE(initial.relationships.size(), 1);
+  QCOMPARE(initial.elementApplicableCount(), 4);
   QCOMPARE(initial.relationshipApplicableCount(), 1);
-  QCOMPARE(initial.applicableCount(), 4);
+  QCOMPARE(initial.applicableCount(), 5);
   QCOMPARE(initial.conflictCount(), 0);
-  QCOMPARE(initial.inheritances.first().derivedName,
+  QCOMPARE(initial.relationships.first().sourceName,
            QStringLiteral("demo::AdvancedService"));
-  QCOMPARE(initial.inheritances.first().baseName,
+  QCOMPARE(initial.relationships.first().targetName,
            QStringLiteral("demo::Service"));
   const auto initialPoint = std::find_if(
       initial.items.cbegin(), initial.items.cend(),
@@ -332,8 +399,8 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
       QStringLiteral("+ length(): double const")));
 
   ProjectController controller;
-  QCOMPARE(controller.applyCppImportPlan(initial), 4);
-  QCOMPARE(controller.data().elements.size(), 3);
+  QCOMPARE(controller.applyCppImportPlan(initial), 5);
+  QCOMPARE(controller.data().elements.size(), 4);
   QCOMPARE(controller.data().relationships.size(), 1);
   QVERIFY(controller.data().elements.first().extra.contains(
       QStringLiteral("sourceBinding")));
@@ -346,7 +413,7 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
   QVERIFY(controller.data().elements.isEmpty());
   QVERIFY(controller.data().relationships.isEmpty());
   controller.redo();
-  QCOMPARE(controller.data().elements.size(), 3);
+  QCOMPARE(controller.data().elements.size(), 4);
   QCOMPARE(controller.data().relationships.size(), 1);
 
   const QString diagramId = controller.data().diagrams.first().id;
@@ -362,6 +429,15 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
       });
   QVERIFY(serviceElement != controller.data().elements.cend());
   QVERIFY(advancedElement != controller.data().elements.cend());
+  const auto importedPackage = std::find_if(
+      controller.data().elements.cbegin(), controller.data().elements.cend(),
+      [](const ModelElement &element) {
+        return element.type == ElementType::Package &&
+               element.name == QStringLiteral("demo");
+      });
+  QVERIFY(importedPackage != controller.data().elements.cend());
+  QCOMPARE(serviceElement->packageId, importedPackage->id);
+  QCOMPARE(advancedElement->packageId, importedPackage->id);
   controller.selectObject(serviceElement->id, QStringLiteral("element"));
   controller.addSelectedToDiagram(diagramId);
   QVERIFY(controller.data().diagrams.first().connectors.isEmpty());
@@ -370,7 +446,8 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
   QCOMPARE(controller.data().diagrams.first().connectors.size(), 1);
 
   ProjectData imported = createStarterProject();
-  QCOMPARE(CppImportService::apply(imported, initial), 4);
+  QCOMPARE(CppImportService::apply(imported, initial), 5);
+  QCOMPARE(imported.cppImport.sourceRoot, initial.sourceRoot);
   QTemporaryDir importedProjectDirectory;
   QVERIFY(importedProjectDirectory.isValid());
   QVERIFY(
@@ -431,7 +508,7 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
   writeSource(true, false);
   const CppImportPreview inheritanceRemoved = CppImportService::preview(
       sourceDirectory.path(), imported.elements, imported.relationships);
-  QCOMPARE(inheritanceRemoved.inheritances.size(), 0);
+  QCOMPARE(inheritanceRemoved.relationships.size(), 0);
   QCOMPARE(inheritanceRemoved.relationshipItems.size(), 1);
   QVERIFY(inheritanceRemoved.relationshipItems.first().action ==
           CppImportAction::MissingSource);
@@ -471,27 +548,27 @@ void CoreTests::cppInterfacePatternClassifiesRealization() {
   const CppImportPreview conventional =
       CppImportService::preview(sourceDirectory.path(), {});
   QVERIFY(conventional.ok);
-  QCOMPARE(conventional.inheritances.size(), 2);
+  QCOMPARE(conventional.relationships.size(), 2);
   const auto relationshipTo = [&](const CppImportPreview &preview,
                                   const QString &baseName) {
-    return std::find_if(preview.inheritances.cbegin(),
-                        preview.inheritances.cend(),
-                        [&](const CppSourceInheritance &inheritance) {
-                          return inheritance.baseName == baseName;
+    return std::find_if(preview.relationships.cbegin(),
+                        preview.relationships.cend(),
+                        [&](const CppSourceRelationship &relationship) {
+                          return relationship.targetName == baseName;
                         });
   };
   auto interfaceEdge =
       relationshipTo(conventional, QStringLiteral("naming::IService"));
   auto baseEdge = relationshipTo(conventional, QStringLiteral("naming::Base"));
-  QVERIFY(interfaceEdge != conventional.inheritances.cend());
-  QVERIFY(baseEdge != conventional.inheritances.cend());
+  QVERIFY(interfaceEdge != conventional.relationships.cend());
+  QVERIFY(baseEdge != conventional.relationships.cend());
   QVERIFY(interfaceEdge->relationshipType == RelationshipType::Realization);
   QVERIFY(baseEdge->relationshipType == RelationshipType::Generalization);
   QVERIFY(interfaceEdge->classificationReason.contains(
       CppImportOptions::defaultInterfacePattern()));
 
   ProjectData imported = createStarterProject();
-  QCOMPARE(CppImportService::apply(imported, conventional), 5);
+  QCOMPARE(CppImportService::apply(imported, conventional), 6);
 
   CppImportOptions customOptions;
   customOptions.interfacePattern = QStringLiteral("^Base$");
@@ -538,6 +615,119 @@ void CoreTests::cppInterfacePatternClassifiesRealization() {
   QVERIFY(!invalid.diagnostics.isEmpty());
 }
 
+void CoreTests::cppImportClassifiesMemberOwnershipAndDependencies() {
+  if (!CppImportService::available())
+    QSKIP("This build was configured without libclang");
+
+  QTemporaryDir sourceDirectory;
+  QVERIFY(sourceDirectory.isValid());
+  const QString sourcePath =
+      sourceDirectory.filePath(QStringLiteral("relationships.cpp"));
+  writeTestFile(sourcePath,
+                QByteArray("namespace rel {\n"
+                           "template<class T> class OwnerPtr {};\n"
+                           "template<class T> class SharedPtr {};\n"
+                           "template<class T> class MysteryPtr {};\n"
+                           "class ValuePart {};\n"
+                           "class RawPart {};\n"
+                           "class ReferencePart {};\n"
+                           "class OwnedPart {};\n"
+                           "class SharedPart {};\n"
+                           "class UnknownPart {};\n"
+                           "class UsedPart {};\n"
+                           "class Consumer {\n"
+                           "  ValuePart value;\n"
+                           "  RawPart *raw;\n"
+                           "  ReferencePart &reference;\n"
+                           "  OwnerPtr<OwnedPart> owned;\n"
+                           "  SharedPtr<SharedPart> shared;\n"
+                           "  MysteryPtr<UnknownPart> unknown;\n"
+                           "  UsedPart make(UsedPart input);\n"
+                           "};\n"
+                           "}\n"));
+
+  QJsonObject command;
+  command.insert(QStringLiteral("directory"), sourceDirectory.path());
+  command.insert(QStringLiteral("file"), sourcePath);
+  command.insert(QStringLiteral("arguments"),
+                 QJsonArray{QStringLiteral("clang++"),
+                            QStringLiteral("-std=c++20"), sourcePath});
+  writeTestFile(
+      sourceDirectory.filePath(QStringLiteral("compile_commands.json")),
+      QJsonDocument(QJsonArray{command}).toJson(QJsonDocument::Indented));
+
+  CppImportOptions options;
+  options.owningPointerTypes = {QStringLiteral("rel::OwnerPtr")};
+  options.sharedPointerTypes = {QStringLiteral("rel::SharedPtr")};
+  const CppImportPreview preview =
+      CppImportService::preview(sourceDirectory.path(), {}, {}, options);
+  QVERIFY(preview.ok);
+
+  const auto relationshipTo = [&](const QString &targetName) {
+    return std::find_if(
+        preview.relationships.cbegin(), preview.relationships.cend(),
+        [&](const CppSourceRelationship &relationship) {
+          return relationship.sourceName == QStringLiteral("rel::Consumer") &&
+                 relationship.targetName == targetName;
+        });
+  };
+  const auto verifyType = [&](const QString &targetName,
+                              RelationshipType expected,
+                              const QString &evidenceKind) {
+    const auto relationship = relationshipTo(targetName);
+    QVERIFY2(relationship != preview.relationships.cend(),
+             qPrintable(
+                 QStringLiteral("Missing relationship to %1").arg(targetName)));
+    QVERIFY(relationship->relationshipType == expected);
+    QCOMPARE(relationship->evidenceKind, evidenceKind);
+    QVERIFY(!relationship->classificationReason.isEmpty());
+  };
+  verifyType(QStringLiteral("rel::ValuePart"), RelationshipType::Composition,
+             QStringLiteral("member"));
+  verifyType(QStringLiteral("rel::RawPart"), RelationshipType::Aggregation,
+             QStringLiteral("member"));
+  verifyType(QStringLiteral("rel::ReferencePart"),
+             RelationshipType::Aggregation, QStringLiteral("member"));
+  verifyType(QStringLiteral("rel::OwnedPart"), RelationshipType::Composition,
+             QStringLiteral("member"));
+  verifyType(QStringLiteral("rel::SharedPart"), RelationshipType::Aggregation,
+             QStringLiteral("member"));
+  verifyType(QStringLiteral("rel::UnknownPart"), RelationshipType::Association,
+             QStringLiteral("member"));
+  verifyType(QStringLiteral("rel::UsedPart"), RelationshipType::Dependency,
+             QStringLiteral("signature"));
+
+  ProjectData imported = createStarterProject();
+  QCOMPARE(CppImportService::apply(imported, preview),
+           preview.applicableCount());
+  CppImportOptions reclassifiedOptions = options;
+  reclassifiedOptions.owningPointerTypes.clear();
+  const CppImportPreview reclassified =
+      CppImportService::preview(sourceDirectory.path(), imported.elements,
+                                imported.relationships, reclassifiedOptions);
+  const auto reclassifiedOwned = std::find_if(
+      reclassified.relationshipItems.cbegin(),
+      reclassified.relationshipItems.cend(),
+      [](const CppRelationshipImportItem &item) {
+        return item.source.sourceName == QStringLiteral("rel::Consumer") &&
+               item.source.targetName == QStringLiteral("rel::OwnedPart");
+      });
+  QVERIFY(reclassifiedOwned != reclassified.relationshipItems.cend());
+  QVERIFY(reclassifiedOwned->action == CppImportAction::Update);
+  QVERIFY(reclassifiedOwned->source.relationshipType ==
+          RelationshipType::Association);
+  const qsizetype relationshipCount = imported.relationships.size();
+  QCOMPARE(CppImportService::apply(imported, reclassified), 1);
+  QCOMPARE(imported.relationships.size(), relationshipCount);
+  const auto updatedOwned = std::find_if(
+      imported.relationships.cbegin(), imported.relationships.cend(),
+      [&](const Relationship &relationship) {
+        return relationship.id == reclassifiedOwned->existingRelationshipId;
+      });
+  QVERIFY(updatedOwned != imported.relationships.cend());
+  QVERIFY(updatedOwned->type == RelationshipType::Association);
+}
+
 void CoreTests::cppImportScansSourceFolderWithoutBuildMetadata() {
   if (!CppImportService::available())
     QSKIP("This build was configured without libclang");
@@ -569,11 +759,12 @@ void CoreTests::cppImportScansSourceFolderWithoutBuildMetadata() {
   writeTestFile(root.filePath(QStringLiteral("src/Worker.cpp")),
                 QByteArray("#include \"model/Worker.h\"\n"
                            "void quick::Worker::run() {}\n"));
-  writeTestFile(
-      root.filePath(QStringLiteral("include/model/Standalone.h")),
-      QByteArray("#pragma once\n"
-                 "#include <dependency-not-installed.hpp>\n"
-                 "namespace quick { struct Standalone { int value; }; }\n"));
+  writeTestFile(root.filePath(QStringLiteral("include/model/Standalone.h")),
+                QByteArray("#pragma once\n"
+                           "#include <dependency-not-installed.hpp>\n"
+                           "namespace quick::detail {\n"
+                           "struct Standalone { int value; };\n"
+                           "}\n"));
   writeTestFile(root.filePath(QStringLiteral("build/GeneratedNoise.h")),
                 QByteArray("class GeneratedNoise {};\n"));
 
@@ -583,8 +774,8 @@ void CoreTests::cppImportScansSourceFolderWithoutBuildMetadata() {
   QVERIFY(!preview.usedCompilationDatabase);
   QVERIFY(preview.compilationDatabasePath.isEmpty());
   QCOMPARE(preview.symbols.size(), 3);
-  QCOMPARE(preview.inheritances.size(), 1);
-  QCOMPARE(preview.applicableCount(), 4);
+  QCOMPARE(preview.relationships.size(), 1);
+  QCOMPARE(preview.applicableCount(), 6);
   const auto hasSymbol = [&](const QString &name) {
     return std::any_of(preview.symbols.cbegin(), preview.symbols.cend(),
                        [&](const CppSourceSymbol &symbol) {
@@ -593,9 +784,9 @@ void CoreTests::cppImportScansSourceFolderWithoutBuildMetadata() {
   };
   QVERIFY(hasSymbol(QStringLiteral("quick::IWorker")));
   QVERIFY(hasSymbol(QStringLiteral("quick::Worker")));
-  QVERIFY(hasSymbol(QStringLiteral("quick::Standalone")));
+  QVERIFY(hasSymbol(QStringLiteral("quick::detail::Standalone")));
   QVERIFY(!hasSymbol(QStringLiteral("GeneratedNoise")));
-  QVERIFY(preview.inheritances.first().relationshipType ==
+  QVERIFY(preview.relationships.first().relationshipType ==
           RelationshipType::Realization);
   QVERIFY(std::none_of(preview.diagnostics.cbegin(), preview.diagnostics.cend(),
                        [](const Diagnostic &diagnostic) {
@@ -609,6 +800,31 @@ void CoreTests::cppImportScansSourceFolderWithoutBuildMetadata() {
                                diagnostic.message.contains(
                                    QStringLiteral("dependency-not-installed"));
                       }));
+
+  ProjectData imported = createStarterProject();
+  QCOMPARE(CppImportService::apply(imported, preview), 6);
+  const auto quickPackage =
+      std::find_if(imported.elements.cbegin(), imported.elements.cend(),
+                   [](const ModelElement &element) {
+                     return element.type == ElementType::Package &&
+                            element.name == QStringLiteral("quick");
+                   });
+  const auto detailPackage =
+      std::find_if(imported.elements.cbegin(), imported.elements.cend(),
+                   [](const ModelElement &element) {
+                     return element.type == ElementType::Package &&
+                            element.name == QStringLiteral("quick::detail");
+                   });
+  const auto standalone = std::find_if(
+      imported.elements.cbegin(), imported.elements.cend(),
+      [](const ModelElement &element) {
+        return element.name == QStringLiteral("quick::detail::Standalone");
+      });
+  QVERIFY(quickPackage != imported.elements.cend());
+  QVERIFY(detailPackage != imported.elements.cend());
+  QVERIFY(standalone != imported.elements.cend());
+  QCOMPARE(detailPackage->packageId, quickPackage->id);
+  QCOMPARE(standalone->packageId, detailPackage->id);
 }
 
 void CoreTests::largeModelGeometryCommandUndoRedo() {
@@ -670,10 +886,25 @@ void CoreTests::bulkDiagramPlacementIsOneUndoableCommand() {
   const ProjectData afterDrop = controller.data();
   QCOMPARE(afterDrop.diagrams.first().nodes.size(), 2);
   QCOMPARE(afterDrop.diagrams.first().connectors.size(), 1);
+  const auto *firstModelElement = findElement(afterDrop, firstElement);
+  const auto *secondModelElement = findElement(afterDrop, secondElement);
+  QVERIFY(firstModelElement);
+  QVERIFY(secondModelElement);
   QCOMPARE(afterDrop.diagrams.first().nodes.at(0).geometry,
-           QRectF(100.0, 200.0, 220.0, 120.0));
-  QCOMPARE(afterDrop.diagrams.first().nodes.at(1).geometry,
-           QRectF(350.0, 200.0, 220.0, 120.0));
+           QRectF(QPointF(100.0, 200.0),
+                  presentation_layout::nodeContentSize(*firstModelElement)));
+  QCOMPARE(
+      afterDrop.diagrams.first().nodes.at(1).geometry,
+      QRectF(
+          QPointF(
+              100.0 +
+                  qMax(presentation_layout::nodeContentSize(*firstModelElement)
+                           .width(),
+                       presentation_layout::nodeContentSize(*secondModelElement)
+                           .width()) +
+                  24.0,
+              200.0),
+          presentation_layout::nodeContentSize(*secondModelElement)));
 
   // A whole tree drop is one command regardless of how many presentations and
   // automatically materialized connectors it contains.
@@ -686,6 +917,90 @@ void CoreTests::bulkDiagramPlacementIsOneUndoableCommand() {
                diagramId, {firstElement, secondElement}, 0.0, 0.0),
            0);
   QCOMPARE(controller.data(), afterDrop);
+}
+
+void CoreTests::diagramDropSizingModes() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString first = controller.addElement(QStringLiteral("class"));
+  const QString second = controller.addElement(QStringLiteral("struct"));
+
+  QCOMPARE(controller.addElementsToDiagram(diagramId, {first, second}, 20.0,
+                                           30.0, QStringLiteral("fixed")),
+           2);
+  const auto fixedNodes = controller.data().diagrams.first().nodes;
+  QCOMPARE(fixedNodes.size(), 2);
+  for (const auto &node : fixedNodes)
+    QCOMPARE(node.geometry.size(),
+             QSizeF(presentation_layout::kFixedNodeWidth,
+                    presentation_layout::kFixedNodeHeight));
+  QCOMPARE(fixedNodes.at(1).geometry.x(),
+           20.0 + presentation_layout::kFixedNodeWidth + 24.0);
+
+  controller.undo();
+  QVERIFY(controller.data().diagrams.first().nodes.isEmpty());
+  QCOMPARE(controller.addElementsToDiagram(diagramId, {first, second}, 20.0,
+                                           30.0, QStringLiteral("content")),
+           2);
+  const auto &contentNodes = controller.data().diagrams.first().nodes;
+  QCOMPARE(contentNodes.at(0).geometry.size(),
+           presentation_layout::nodeContentSize(
+               *findElement(controller.data(), first)));
+  QCOMPARE(contentNodes.at(1).geometry.size(),
+           presentation_layout::nodeContentSize(
+               *findElement(controller.data(), second)));
+}
+
+void CoreTests::diagramLabelsReflectPackageContext() {
+  ProjectData project;
+
+  ModelElement company;
+  company.id = QStringLiteral("company");
+  company.type = ElementType::Package;
+  company.name = QStringLiteral("company");
+  project.elements.append(company);
+
+  ModelElement model;
+  model.id = QStringLiteral("model");
+  model.type = ElementType::Package;
+  model.name = QStringLiteral("model");
+  model.packageId = company.id;
+  project.elements.append(model);
+
+  ModelElement order;
+  order.id = QStringLiteral("order");
+  order.type = ElementType::Class;
+  order.name = QStringLiteral("company::model::Order");
+  order.packageId = model.id;
+  project.elements.append(order);
+
+  QCOMPARE(presentation_layout::fullyQualifiedElementName(project, model),
+           QStringLiteral("company::model"));
+  QCOMPARE(presentation_layout::fullyQualifiedElementName(project, order),
+           QStringLiteral("company::model::Order"));
+
+  // Root presentations retain the stored name. A package frame removes only
+  // its own qualified prefix, leaving deeper semantic context visible when
+  // the element is shown in an ancestor package.
+  QCOMPARE(presentation_layout::elementDisplayNameInPackage(project, order, {}),
+           QStringLiteral("company::model::Order"));
+  QCOMPARE(presentation_layout::elementDisplayNameInPackage(project, order,
+                                                            company.id),
+           QStringLiteral("model::Order"));
+  QCOMPARE(presentation_layout::elementDisplayNameInPackage(project, order,
+                                                            model.id),
+           QStringLiteral("Order"));
+
+  ContainerPresentation packageFrame;
+  packageFrame.subjectKind = QStringLiteral("package");
+  packageFrame.subjectId = model.id;
+  ContainerPresentation rootPackageFrame;
+  rootPackageFrame.subjectKind = QStringLiteral("package");
+  rootPackageFrame.subjectId = company.id;
+  QCOMPARE(presentation_layout::containerDisplayName(project, packageFrame),
+           QStringLiteral("company::model"));
+  QVERIFY(presentation_layout::containerTitleWidth(project, packageFrame) >
+          presentation_layout::containerTitleWidth(project, rootPackageFrame));
 }
 
 void CoreTests::projectTreeExtendedSelection() {
@@ -723,6 +1038,62 @@ void CoreTests::projectTreeExtendedSelection() {
   tree->selectWithModifiers(&selection, third, Qt::ShiftModifier);
   QCOMPARE(tree->elementIdsForIndexes(selection.selectedRows()),
            QStringList({firstElement, secondElement, thirdElement}));
+}
+
+void CoreTests::projectTreeDeletionAndOrdering() {
+  ProjectController controller;
+  const QString first = controller.addElement(QStringLiteral("class"));
+  const QString second = controller.addElement(QStringLiteral("struct"));
+  const QString third = controller.addElement(QStringLiteral("class"));
+  ProjectTreeModel *tree = controller.treeModel();
+
+  QCOMPARE(tree->indexForObject(first, QStringLiteral("element")).row(), 0);
+  QCOMPARE(tree->indexForObject(second, QStringLiteral("element")).row(), 1);
+  QVERIFY(
+      controller.canReorderBrowserItem(QStringLiteral("element"), second, -1));
+  QVERIFY(controller.reorderBrowserItem(QStringLiteral("element"), second, -1));
+  QCOMPARE(tree->indexForObject(second, QStringLiteral("element")).row(), 0);
+  QCOMPARE(tree->indexForObject(first, QStringLiteral("element")).row(), 1);
+  QVERIFY(
+      !controller.canReorderBrowserItem(QStringLiteral("element"), second, -1));
+
+  controller.undo();
+  QCOMPARE(tree->indexForObject(first, QStringLiteral("element")).row(), 0);
+  QCOMPARE(tree->indexForObject(second, QStringLiteral("element")).row(), 1);
+  controller.redo();
+
+  const QString selectedItems = tree->browserItemsJsonForIndexes(
+      {tree->indexForObject(second, QStringLiteral("element")),
+       tree->indexForObject(first, QStringLiteral("element"))});
+  QVERIFY(controller.canReorderBrowserItemsAround(
+      selectedItems, QStringLiteral("element"), third));
+  QVERIFY(controller.reorderBrowserItemsAround(
+      selectedItems, QStringLiteral("element"), third, false));
+  QCOMPARE(tree->indexForObject(third, QStringLiteral("element")).row(), 0);
+  QCOMPARE(tree->indexForObject(second, QStringLiteral("element")).row(), 1);
+  QCOMPARE(tree->indexForObject(first, QStringLiteral("element")).row(), 2);
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Reorder 2 project-tree items"));
+  controller.undo();
+  QCOMPARE(tree->indexForObject(second, QStringLiteral("element")).row(), 0);
+  QCOMPARE(tree->indexForObject(first, QStringLiteral("element")).row(), 1);
+  QCOMPARE(tree->indexForObject(third, QStringLiteral("element")).row(), 2);
+
+  const ProjectData beforeDelete = controller.data();
+  controller.deleteBrowserItems(selectedItems);
+  QCOMPARE(controller.data().elements.size(), 1);
+  QCOMPARE(controller.data().elements.first().id, third);
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Delete 2 project-tree items"));
+  controller.undo();
+  QCOMPARE(controller.data(), beforeDelete);
+
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(temporary.path(), controller.data()).ok);
+  const LoadOutcome loaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(loaded.ok);
+  QCOMPARE(loaded.project, controller.data());
 }
 
 void CoreTests::projectTreeQualifiedHierarchy() {
@@ -884,6 +1255,267 @@ void CoreTests::browserFoldersPersistAndReorganize() {
   QCOMPARE(loaded.project, controller.data());
 }
 
+void CoreTests::folderPresentationsPersistAndRemainPresentationOnly() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString first = controller.addElement(QStringLiteral("class"));
+  const QString second = controller.addElement(QStringLiteral("struct"));
+  const QString folder = controller.addBrowserFolder(
+      QStringLiteral("model"), {}, QStringLiteral("Architecture"));
+  const QString subfolder = controller.addBrowserFolder(
+      QStringLiteral("folder"), folder, QStringLiteral("Details"));
+  QVERIFY(!folder.isEmpty());
+  QVERIFY(!subfolder.isEmpty());
+
+  const auto itemsJson = [](const QString &kind, const QString &id) {
+    return QString::fromUtf8(
+        QJsonDocument(QJsonArray{QJsonObject{{QStringLiteral("kind"), kind},
+                                             {QStringLiteral("id"), id}}})
+            .toJson(QJsonDocument::Compact));
+  };
+  QVERIFY(
+      controller.moveBrowserItems(itemsJson(QStringLiteral("element"), first),
+                                  QStringLiteral("folder"), folder));
+  QVERIFY(
+      controller.moveBrowserItems(itemsJson(QStringLiteral("element"), second),
+                                  QStringLiteral("folder"), subfolder));
+
+  QCOMPARE(controller.addTreeItemsToDiagram(
+               diagramId, {first, second},
+               itemsJson(QStringLiteral("folder"), folder), 100.0, 100.0),
+           4);
+  const ProjectData afterDrop = controller.data();
+  const Diagram &diagram = afterDrop.diagrams.first();
+  QCOMPARE(diagram.containers.size(), 2);
+  QCOMPARE(diagram.nodes.size(), 2);
+  const auto rootFrame =
+      std::find_if(diagram.containers.cbegin(), diagram.containers.cend(),
+                   [&](const ContainerPresentation &candidate) {
+                     return candidate.subjectId == folder;
+                   });
+  const auto childFrame =
+      std::find_if(diagram.containers.cbegin(), diagram.containers.cend(),
+                   [&](const ContainerPresentation &candidate) {
+                     return candidate.subjectId == subfolder;
+                   });
+  QVERIFY(rootFrame != diagram.containers.cend());
+  QVERIFY(childFrame != diagram.containers.cend());
+  const auto firstNode =
+      std::find_if(diagram.nodes.cbegin(), diagram.nodes.cend(),
+                   [&](const NodePresentation &candidate) {
+                     return candidate.elementId == first;
+                   });
+  const auto secondNode =
+      std::find_if(diagram.nodes.cbegin(), diagram.nodes.cend(),
+                   [&](const NodePresentation &candidate) {
+                     return candidate.elementId == second;
+                   });
+  QVERIFY(firstNode != diagram.nodes.cend());
+  QVERIFY(secondNode != diagram.nodes.cend());
+  QVERIFY(rootFrame->childPresentationIds.contains(childFrame->id));
+  QVERIFY(rootFrame->childPresentationIds.contains(firstNode->id));
+  QCOMPARE(childFrame->childPresentationIds, QStringList({secondNode->id}));
+  QVERIFY(ProjectSerializer::validate(afterDrop).isEmpty());
+  ProjectData cyclic = afterDrop;
+  auto *cyclicChild = findContainer(cyclic.diagrams.first(), childFrame->id);
+  QVERIFY(cyclicChild);
+  cyclicChild->childPresentationIds.append(rootFrame->id);
+  QVERIFY(!ProjectSerializer::validate(cyclic).isEmpty());
+
+  controller.editText(folder, QStringLiteral("name"), -1,
+                      QStringLiteral("Architecture frame"));
+  QCOMPARE(findBrowserFolder(controller.data(), folder)->name,
+           QStringLiteral("Architecture frame"));
+  controller.undo();
+  QCOMPARE(controller.data(), afterDrop);
+
+  controller.undo();
+  QVERIFY(controller.data().diagrams.first().containers.isEmpty());
+  QVERIFY(controller.data().diagrams.first().nodes.isEmpty());
+  controller.redo();
+  QCOMPARE(controller.data(), afterDrop);
+
+  controller.removeContainerPresentation(diagramId, rootFrame->id);
+  QCOMPARE(controller.data().diagrams.first().containers.size(), 1);
+  QVERIFY(ProjectSerializer::validate(controller.data()).isEmpty());
+  controller.undo();
+  QCOMPARE(controller.data(), afterDrop);
+
+  controller.deleteBrowserFolder(folder);
+  QVERIFY(!findBrowserFolder(controller.data(), folder));
+  QCOMPARE(controller.data().diagrams.first().containers.size(), 1);
+  QCOMPARE(findBrowserFolder(controller.data(), subfolder)->parent,
+           (BrowserParent{QStringLiteral("model"), {}}));
+  QVERIFY(ProjectSerializer::validate(controller.data()).isEmpty());
+  controller.undo();
+  QCOMPARE(controller.data(), afterDrop);
+
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(temporary.path(), controller.data()).ok);
+  const LoadOutcome loaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(loaded.ok);
+  QCOMPARE(loaded.project, controller.data());
+}
+
+void CoreTests::packagePresentationsAndReassignmentAreSemanticAndUndoable() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString packageId = controller.addElement(QStringLiteral("package"));
+  const QString classId = controller.addElement(QStringLiteral("class"));
+
+  QJsonObject movedClass;
+  movedClass.insert(QStringLiteral("kind"), QStringLiteral("element"));
+  movedClass.insert(QStringLiteral("id"), classId);
+  const QString movedItemsJson = QString::fromUtf8(
+      QJsonDocument(QJsonArray{movedClass}).toJson(QJsonDocument::Compact));
+  QVERIFY(!controller
+               .browserMovePackageChangeSummary(
+                   movedItemsJson, QStringLiteral("element"), packageId)
+               .isEmpty());
+  QVERIFY(controller
+              .browserMovePackageChangeSummary(
+                  movedItemsJson, QStringLiteral("element"), packageId)
+              .contains(QStringLiteral("Class1")));
+  QVERIFY(controller.moveBrowserItemsWithPackageReassignment(
+      movedItemsJson, QStringLiteral("element"), packageId));
+  const auto *movedClassElement = findElement(controller.data(), classId);
+  QVERIFY(movedClassElement);
+  QCOMPARE(movedClassElement->packageId, packageId);
+  QCOMPARE(movedClassElement->browserParent,
+           (BrowserParent{QStringLiteral("element"), packageId}));
+
+  controller.undo();
+  movedClassElement = findElement(controller.data(), classId);
+  QVERIFY(movedClassElement);
+  QVERIFY(movedClassElement->packageId.isEmpty());
+  QVERIFY(movedClassElement->browserParent.kind.isEmpty());
+  controller.redo();
+
+  // The project-tree double-click path treats a package as a container and
+  // expands its contents; it must never create a class-style package node.
+  controller.selectObject(packageId, QStringLiteral("element"));
+  controller.addSelectedToDiagram(diagramId);
+  const auto &diagram = controller.data().diagrams.first();
+  QCOMPARE(diagram.containers.size(), 1);
+  QCOMPARE(diagram.nodes.size(), 1);
+  QCOMPARE(diagram.nodes.first().elementId, classId);
+  QCOMPARE(diagram.containers.first().subjectKind, QStringLiteral("package"));
+  QCOMPARE(diagram.containers.first().subjectId, packageId);
+  QCOMPARE(diagram.containers.first().childPresentationIds,
+           QStringList{diagram.nodes.first().id});
+  QVERIFY(ProjectSerializer::validate(controller.data()).isEmpty());
+  QVERIFY(controller
+              .presentationMovePackageChangeSummary(
+                  diagramId, {diagram.nodes.first().id},
+                  diagram.containers.first().id)
+              .isEmpty());
+
+  QVariantMap unchangedGeometry;
+  unchangedGeometry.insert(QStringLiteral("id"), diagram.nodes.first().id);
+  unchangedGeometry.insert(QStringLiteral("x"),
+                           diagram.nodes.first().geometry.x());
+  unchangedGeometry.insert(QStringLiteral("y"),
+                           diagram.nodes.first().geometry.y());
+  unchangedGeometry.insert(QStringLiteral("width"),
+                           diagram.nodes.first().geometry.width());
+  unchangedGeometry.insert(QStringLiteral("height"),
+                           diagram.nodes.first().geometry.height());
+  QVERIFY(!controller
+               .presentationMovePackageChangeSummary(
+                   diagramId, {diagram.nodes.first().id}, {})
+               .isEmpty());
+  QVERIFY(controller
+              .presentationMovePackageChangeSummary(
+                  diagramId, {diagram.nodes.first().id}, {})
+              .contains(QStringLiteral("Class1")));
+  controller.movePresentationsToContainer(
+      diagramId, {unchangedGeometry}, {diagram.nodes.first().id}, {},
+      QStringLiteral("Move diagram element"), true);
+  QVERIFY(findElement(controller.data(), classId)->packageId.isEmpty());
+  QVERIFY(controller.data()
+              .diagrams.first()
+              .containers.first()
+              .childPresentationIds.isEmpty());
+  controller.undo();
+  QCOMPARE(findElement(controller.data(), classId)->packageId, packageId);
+  QCOMPARE(controller.data()
+               .diagrams.first()
+               .containers.first()
+               .childPresentationIds,
+           QStringList{diagram.nodes.first().id});
+
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(temporary.path(), controller.data()).ok);
+  const LoadOutcome loaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(loaded.ok);
+  QCOMPARE(loaded.project, controller.data());
+
+  controller.undo();
+  QVERIFY(controller.data().diagrams.first().containers.isEmpty());
+  QVERIFY(controller.data().diagrams.first().nodes.isEmpty());
+  controller.redo();
+  QCOMPARE(controller.data().diagrams.first().containers.size(), 1);
+  QCOMPARE(controller.data().diagrams.first().nodes.size(), 1);
+}
+
+void CoreTests::nestedPackageMovementOnlyPromptsOnContainmentChange() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString parentPackage =
+      controller.addElement(QStringLiteral("package"));
+  const QString childPackage = controller.addElement(QStringLiteral("package"));
+  controller.selectObject(childPackage, QStringLiteral("element"));
+  controller.setSelectedName(QStringLiteral("Nested"));
+
+  const QString childJson = QString::fromUtf8(
+      QJsonDocument(QJsonArray{QJsonObject{
+                        {QStringLiteral("kind"), QStringLiteral("element")},
+                        {QStringLiteral("id"), childPackage}}})
+          .toJson(QJsonDocument::Compact));
+  QVERIFY(controller.moveBrowserItemsWithPackageReassignment(
+      childJson, QStringLiteral("element"), parentPackage));
+  controller.selectObject(parentPackage, QStringLiteral("element"));
+  controller.addSelectedToDiagram(diagramId);
+
+  const Diagram &diagram = controller.data().diagrams.first();
+  const auto parentFrame =
+      std::find_if(diagram.containers.cbegin(), diagram.containers.cend(),
+                   [&](const ContainerPresentation &candidate) {
+                     return candidate.subjectId == parentPackage;
+                   });
+  const auto childFrame =
+      std::find_if(diagram.containers.cbegin(), diagram.containers.cend(),
+                   [&](const ContainerPresentation &candidate) {
+                     return candidate.subjectId == childPackage;
+                   });
+  QVERIFY(parentFrame != diagram.containers.cend());
+  QVERIFY(childFrame != diagram.containers.cend());
+  QVERIFY(parentFrame->childPresentationIds.contains(childFrame->id));
+
+  // A move within the current package changes geometry only. Crossing the
+  // frame boundary still offers the explicit semantic package change.
+  QVERIFY(controller
+              .presentationMovePackageChangeSummary(diagramId, {childFrame->id},
+                                                    parentFrame->id)
+              .isEmpty());
+  const QString detachPrompt = controller.presentationMovePackageChangeSummary(
+      diagramId, {childFrame->id}, {});
+  QVERIFY(detachPrompt.contains(QStringLiteral("Nested")));
+  QVERIFY(detachPrompt.contains(QStringLiteral("model root")));
+
+  const ProjectData beforeDelete = controller.data();
+  controller.deleteElement(parentPackage);
+  QCOMPARE(findElement(controller.data(), childPackage)->packageId, QString{});
+  QCOMPARE(controller.data().diagrams.first().containers.size(), 1);
+  QCOMPARE(controller.data().diagrams.first().containers.first().subjectId,
+           childPackage);
+  QVERIFY(ProjectSerializer::validate(controller.data()).isEmpty());
+  controller.undo();
+  QCOMPARE(controller.data(), beforeDelete);
+}
+
 void CoreTests::largeDiagramReplacementUsesFirstFreeSlot() {
   QTemporaryDir temporary;
   QVERIFY(temporary.isValid());
@@ -908,7 +1540,12 @@ void CoreTests::largeDiagramReplacementUsesFirstFreeSlot() {
                      return candidate.elementId == QStringLiteral("element-0");
                    });
   QVERIFY(replaced != replacedDiagram.nodes.cend());
-  QCOMPARE(replaced->geometry, QRectF(50.0, 50.0, 220.0, 120.0));
+  const auto *replacedElement =
+      findElement(controller.data(), QStringLiteral("element-0"));
+  QVERIFY(replacedElement);
+  QCOMPARE(replaced->geometry,
+           QRectF(QPointF(50.0, 50.0),
+                  presentation_layout::nodeContentSize(*replacedElement)));
   QVERIFY(
       std::none_of(replacedDiagram.nodes.cbegin(), replacedDiagram.nodes.cend(),
                    [&](const NodePresentation &candidate) {
@@ -1112,6 +1749,39 @@ void CoreTests::connectorAnchorUndoRedo() {
   controller.redo();
   QVERIFY(connector()->sourceAnchor.side == ConnectorSide::Right);
   QCOMPARE(connector()->sourceAnchor.offset, 0.25);
+}
+
+void CoreTests::nodePortSnapPointsUndoRedo() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  controller.addElement(QStringLiteral("class"), diagramId);
+  const QString nodeId = controller.data().diagrams.first().nodes.first().id;
+  const auto node = [&]() {
+    return findNode(controller.data().diagrams.first(), nodeId);
+  };
+
+  QCOMPARE(node()->horizontalPortSnapPoints,
+           connector_ports::kDefaultSnapPointCount);
+  QCOMPARE(node()->verticalPortSnapPoints,
+           connector_ports::kDefaultSnapPointCount);
+  controller.setNodePortSnapPoints(diagramId, nodeId, 3, 5);
+  QCOMPARE(node()->horizontalPortSnapPoints, 3);
+  QCOMPARE(node()->verticalPortSnapPoints, 5);
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Change connector snap points"));
+
+  controller.undo();
+  QCOMPARE(node()->horizontalPortSnapPoints, 1);
+  QCOMPARE(node()->verticalPortSnapPoints, 1);
+  controller.redo();
+  QCOMPARE(node()->horizontalPortSnapPoints, 3);
+  QCOMPARE(node()->verticalPortSnapPoints, 5);
+
+  // Even external values cannot create a layout without a center point.
+  controller.setNodePortSnapPoints(diagramId, nodeId, 4, 100);
+  QCOMPARE(node()->horizontalPortSnapPoints, 5);
+  QCOMPARE(node()->verticalPortSnapPoints,
+           connector_ports::kMaximumSnapPointCount);
 }
 
 void CoreTests::connectorRoutingUndoRedo() {
@@ -1443,9 +2113,15 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(settings.alignmentGuidesEnabled(),
              ApplicationSettings::kDefaultAlignmentGuidesEnabled);
     QCOMPARE(settings.gridSpacing(), ApplicationSettings::kDefaultGridSpacing);
+    QCOMPARE(settings.diagramItemSizingMode(), QStringLiteral("content"));
     QCOMPARE(settings.defaultConnectorRouting(), QStringLiteral("straight"));
     QCOMPARE(settings.cppInterfacePattern(),
              ApplicationSettings::defaultCppInterfacePattern());
+    QCOMPARE(settings.cppOwningPointerTypes(),
+             ApplicationSettings::defaultCppOwningPointerTypes());
+    QCOMPARE(settings.cppSharedPointerTypes(),
+             ApplicationSettings::defaultCppSharedPointerTypes());
+    QCOMPARE(settings.packageReassignmentPolicy(), QStringLiteral("ask"));
     QCOMPARE(settings.relationshipGestureKeys(),
              ApplicationSettings::defaultRelationshipGestureKeys());
     QSignalSpy changes(&settings,
@@ -1454,10 +2130,19 @@ void CoreTests::applicationPreferencesPersist() {
     settings.setSnapToGridEnabled(false);
     settings.setAlignmentGuidesEnabled(false);
     settings.setGridSpacing(35);
+    settings.setDiagramItemSizingMode(QStringLiteral("fixed"));
     settings.setDefaultConnectorRouting(QStringLiteral("orthogonal"));
+    settings.setPackageReassignmentPolicy(QStringLiteral("allow"));
     QVERIFY(settings.setCppInterfacePattern(QStringLiteral("^Abstract.*$")));
     QVERIFY(!settings.setCppInterfacePattern(QStringLiteral("[")));
     QCOMPARE(settings.cppInterfacePattern(), QStringLiteral("^Abstract.*$"));
+    settings.setCppPointerTypes(
+        {QStringLiteral(" custom::Owner<> "), QStringLiteral("custom::Owner")},
+        {QStringLiteral("custom::Shared"), QStringLiteral("custom::Owner")});
+    QCOMPARE(settings.cppOwningPointerTypes(),
+             QStringList({QStringLiteral("custom::Owner")}));
+    QCOMPARE(settings.cppSharedPointerTypes(),
+             QStringList({QStringLiteral("custom::Shared")}));
     QVariantMap gestureKeys =
         ApplicationSettings::defaultRelationshipGestureKeys();
     gestureKeys.insert(QStringLiteral("dependency"), QStringLiteral("X"));
@@ -1477,8 +2162,14 @@ void CoreTests::applicationPreferencesPersist() {
     QVERIFY(!restored.snapToGridEnabled());
     QVERIFY(!restored.alignmentGuidesEnabled());
     QCOMPARE(restored.gridSpacing(), 35);
+    QCOMPARE(restored.diagramItemSizingMode(), QStringLiteral("fixed"));
     QCOMPARE(restored.defaultConnectorRouting(), QStringLiteral("orthogonal"));
     QCOMPARE(restored.cppInterfacePattern(), QStringLiteral("^Abstract.*$"));
+    QCOMPARE(restored.cppOwningPointerTypes(),
+             QStringList({QStringLiteral("custom::Owner")}));
+    QCOMPARE(restored.cppSharedPointerTypes(),
+             QStringList({QStringLiteral("custom::Shared")}));
+    QCOMPARE(restored.packageReassignmentPolicy(), QStringLiteral("allow"));
     QVariantMap expectedGestureKeys =
         ApplicationSettings::defaultRelationshipGestureKeys();
     expectedGestureKeys.insert(QStringLiteral("dependency"),
@@ -1490,9 +2181,13 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(restored.relationshipGestureKeys(), expectedGestureKeys);
     restored.setDefaultDistributionGap(-10);
     restored.setGridSpacing(-10);
+    restored.setDiagramItemSizingMode(QStringLiteral("invalid"));
+    restored.setPackageReassignmentPolicy(QStringLiteral("invalid"));
     QCOMPARE(restored.defaultDistributionGap(),
              ApplicationSettings::kMinimumDistributionGap);
     QCOMPARE(restored.gridSpacing(), ApplicationSettings::kMinimumGridSpacing);
+    QCOMPARE(restored.diagramItemSizingMode(), QStringLiteral("content"));
+    QCOMPARE(restored.packageReassignmentPolicy(), QStringLiteral("ask"));
     restored.resetDefaults();
     QCOMPARE(restored.defaultDistributionGap(),
              ApplicationSettings::kDefaultDistributionGap);
@@ -1501,9 +2196,15 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(restored.alignmentGuidesEnabled(),
              ApplicationSettings::kDefaultAlignmentGuidesEnabled);
     QCOMPARE(restored.gridSpacing(), ApplicationSettings::kDefaultGridSpacing);
+    QCOMPARE(restored.diagramItemSizingMode(), QStringLiteral("content"));
     QCOMPARE(restored.defaultConnectorRouting(), QStringLiteral("straight"));
     QCOMPARE(restored.cppInterfacePattern(),
              ApplicationSettings::defaultCppInterfacePattern());
+    QCOMPARE(restored.cppOwningPointerTypes(),
+             ApplicationSettings::defaultCppOwningPointerTypes());
+    QCOMPARE(restored.cppSharedPointerTypes(),
+             ApplicationSettings::defaultCppSharedPointerTypes());
+    QCOMPARE(restored.packageReassignmentPolicy(), QStringLiteral("ask"));
     QCOMPARE(restored.relationshipGestureKeys(),
              ApplicationSettings::defaultRelationshipGestureKeys());
   }

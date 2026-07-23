@@ -201,6 +201,15 @@ const NodePresentation *findNode(const Diagram &diagram, const QString &id) {
   return findById(diagram.nodes, id);
 }
 
+ContainerPresentation *findContainer(Diagram &diagram, const QString &id) {
+  return findById(diagram.containers, id);
+}
+
+const ContainerPresentation *findContainer(const Diagram &diagram,
+                                           const QString &id) {
+  return findById(diagram.containers, id);
+}
+
 ConnectorPresentation *findConnector(Diagram &diagram, const QString &id) {
   return findById(diagram.connectors, id);
 }

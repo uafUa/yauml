@@ -11,6 +11,10 @@ Item {
         canvas.addElementsAt(elementIds, x, y)
     }
 
+    function addTreeItemsAt(elementIds, subjectsJson, x, y) {
+        canvas.addTreeItemsAt(elementIds, subjectsJson, x, y)
+    }
+
     DiagramCanvas {
         id: canvas
         anchors.fill: parent
@@ -20,12 +24,16 @@ Item {
         snapToGridEnabled: applicationSettings.snapToGridEnabled
         alignmentGuidesEnabled: applicationSettings.alignmentGuidesEnabled
         gridSpacing: applicationSettings.gridSpacing
+        diagramItemSizingMode: applicationSettings.diagramItemSizingMode
         defaultConnectorRouting: applicationSettings.defaultConnectorRouting
+        packageReassignmentPolicy:
+            applicationSettings.packageReassignmentPolicy
         relationshipGestureKeys: applicationSettings.relationshipGestureKeys
 
         onContextMenuRequested: function(target, menuX, menuY) {
             const menu = target === "element" ? elementMenu
-                       : target === "connector" ? connectorMenu : canvasMenu
+                       : target === "connector" ? connectorMenu
+                       : target === "container" ? containerMenu : canvasMenu
             menu.x = menuX
             menu.y = menuY
             menu.open()
@@ -56,11 +64,85 @@ Item {
             editor.forceActiveFocus()
             editor.selectAll()
         }
+
+        onPackageReassignmentRequested: function(message) {
+            packageMoveConfirmation.message = message
+            packageMoveConfirmation.open()
+        }
     }
 
     Connections {
         target: uiTheme
         function onPaletteChanged() { canvas.refreshTheme() }
+    }
+
+    Dialog {
+        id: packageMoveConfirmation
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(460, parent.width - 40)
+        modal: true
+        focus: true
+        title: qsTr("Change UML package?")
+        standardButtons: Dialog.Yes | Dialog.No
+        property string message: ""
+        onAccepted: canvas.confirmPendingPackageReassignment()
+        onRejected: canvas.cancelPendingPackageReassignment()
+
+        contentItem: Label {
+            text: packageMoveConfirmation.message
+            wrapMode: Text.Wrap
+            padding: 16
+        }
+    }
+
+    Dialog {
+        id: portSnapPointsDialog
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(430, parent.width - 40)
+        modal: true
+        focus: true
+        title: qsTr("Connector snap points")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onAccepted: canvas.setSelectedPortSnapPoints(
+                        horizontalSnapPoints.value,
+                        verticalSnapPoints.value)
+
+        contentItem: GridLayout {
+            columns: 2
+            columnSpacing: 14
+            rowSpacing: 10
+
+            Label {
+                Layout.columnSpan: 2
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Snap points are evenly distributed along each side. Odd values preserve the point at the exact center.")
+            }
+            Label { text: qsTr("Top and bottom") }
+            SpinBox {
+                id: horizontalSnapPoints
+                from: 1
+                to: 31
+                stepSize: 2
+                editable: true
+                validator: RegularExpressionValidator {
+                    regularExpression: /^(?:[13579]|[12][13579]|31)$/
+                }
+            }
+            Label { text: qsTr("Left and right") }
+            SpinBox {
+                id: verticalSnapPoints
+                from: 1
+                to: 31
+                stepSize: 2
+                editable: true
+                validator: RegularExpressionValidator {
+                    regularExpression: /^(?:[13579]|[12][13579]|31)$/
+                }
+            }
+        }
     }
 
     Label {
@@ -132,6 +214,19 @@ Item {
             MenuItem { action: distributeVerticallyAction }
         }
         MenuSeparator {}
+        MenuItem { action: fitSelectionAction }
+        MenuItem {
+            text: qsTr("Connector snap points…")
+            enabled: canvas.selectedNodeCount === 1
+            onTriggered: {
+                horizontalSnapPoints.value =
+                    canvas.selectedHorizontalPortSnapPoints
+                verticalSnapPoints.value =
+                    canvas.selectedVerticalPortSnapPoints
+                portSnapPointsDialog.open()
+            }
+        }
+        MenuSeparator {}
         MenuItem {
             text: canvas.selectedNodeCount > 1
                   ? qsTr("Remove presentations from diagram")
@@ -172,6 +267,26 @@ Item {
         }
         MenuSeparator {}
         MenuItem { text: qsTr("Delete relationship"); onTriggered: canvas.deleteSelectedConnector() }
+    }
+
+    Menu {
+        id: containerMenu
+        title: qsTr("Folder frame")
+        MenuItem { action: fitSelectionAction }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Remove frame from diagram")
+            onTriggered: canvas.removeSelectedPresentations()
+        }
+    }
+
+    Action {
+        id: fitSelectionAction
+        text: qsTr("Fit to content")
+        shortcut: "Ctrl+Shift+F"
+        enabled: root.visible && !editor.visible
+                 && (canvas.selectedNodeCount > 0 || canvas.containerSelected)
+        onTriggered: canvas.fitSelectionToContent()
     }
 
     Action {
@@ -267,7 +382,8 @@ Item {
         sequences: ["Delete"]
         context: Qt.WindowShortcut
         enabled: root.visible && !editor.visible
-                 && (canvas.selectedNodeCount > 0 || canvas.connectorSelected)
+                 && (canvas.selectedNodeCount > 0 || canvas.containerSelected
+                     || canvas.connectorSelected)
         onActivated: canvas.bendPointSelected
                      ? canvas.removeSelectedBendPoint()
                      : canvas.connectorSelected

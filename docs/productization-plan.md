@@ -1,7 +1,8 @@
 # uuml Productization Plan
 
-Status: command foundation and Phase 3.1–3.5 implemented; Phase 3.6 and Phase 4
-C++ import foundation are in progress
+Status: command foundation and Phase 3 implemented; Phase 4 source import and
+relationship inference are implemented, with synchronization hardening in
+progress
 
 The product owner accepted the MVP on 2026-07-21. This plan turns the broader
 architecture roadmap into bounded, testable delivery tranches. MVP audit notes
@@ -78,6 +79,9 @@ history memory grow with total project size rather than the size of each edit.
 - Rectangular lasso selection is implemented as the multi-object interaction
   foundation. Plain drag replaces selection, Shift adds, and Ctrl toggles;
   selection-only frames retain text atlases for large-diagram responsiveness.
+  Empty container interiors behave as diagram workspace for lasso gestures;
+  container movement is intentionally restricted to the frame header and
+  resizing to its bottom-right handle.
 - Alignment, equal sizing, minimum-gap edge-to-edge distribution, and keyboard
   nudging are implemented through diagram-local actions and shortcuts. The
   distribution fallback gap is an application preference persisted through
@@ -87,6 +91,11 @@ history memory grow with total project size rather than the size of each edit.
   display themed alignment guides, multi-selections retain their internal
   geometry, and holding Alt temporarily suppresses snapping. Grid spacing and
   both snapping modes are persisted application preferences.
+- A persisted **Diagram item sizing** preference chooses between the traditional
+  fixed 220 × 120 rectangle and a rectangle measured from visible text when
+  items are added from the project tree. Bulk drops use compact content-aware
+  spacing. Diagram context menus expose an undoable **Fit to content** action
+  for both elements and container frames.
 - Treat a multi-object operation as one undoable transaction.
 
 ### 3.5 Connector routing and direct interaction — implemented
@@ -127,6 +136,13 @@ history memory grow with total project size rather than the size of each edit.
   endpoint—is valid, and a new self-connection receives a persisted outside
   loop. Escape and empty-space drops restore the original connection without
   touching model or undo state.
+- Connector ends magnetically snap to presentation-local port points during
+  creation and endpoint dragging. Top/bottom share one configurable odd count;
+  left/right share another, with one centered point per side by default.
+  Available points are shown only during connector interaction, Alt preserves
+  fully free perimeter placement, and relative offsets keep snapped ends on
+  their points as presentations resize. Counts are persisted and changed
+  through one undoable presentation command.
 - The Connectors preferences page implements both the default connector shape
   and editors for all six relationship gesture keys. Assignments are applied
   atomically, normalized to uppercase, restricted to one letter or digit, and
@@ -135,7 +151,7 @@ history memory grow with total project size rather than the size of each edit.
 - Keep routing mode, semantic direction, endpoint attachments, bend constraints,
   and self-connections intact across save/load and exact command undo/redo.
 
-### 3.6 Hierarchical project browser and diagram containers — in progress
+### 3.6 Hierarchical project browser and diagram containers — implemented
 
 - Extended selection and native cross-window drag/drop are implemented for
   model types. Ctrl toggles rows, Shift selects ranges, and one drop creates a
@@ -151,26 +167,49 @@ history memory grow with total project size rather than the size of each edit.
   drag/drop reorganizes selected elements or folders with cycle protection;
   create, rename, move, and delete are compact undoable commands. Deleting a
   folder promotes its direct contents instead of deleting semantic model data.
-- Represent semantic ownership independently from browser organization. C++
-  namespaces, UML packages, and nested types participate in qualified identity;
-  custom folders do not. A browser folder therefore stores only grouping and
-  ordering metadata and may be nested at any visible semantic level without
-  changing source bindings or UML meaning.
+  Delete is available from the tree context menu and applies atomically to the
+  complete extended selection. Persisted cross-type sibling ordering can be
+  changed by dragging one or more selected siblings to the top or bottom edge
+  of another row; an insertion rail previews the destination. Dropping in the
+  center of a container retains the existing move-into behavior. The
+  context-menu **Move up** and **Move down** actions remain available as an
+  alternative.
+- Represent semantic ownership independently from browser organization. A C++
+  namespace is imported as the corresponding UML package; there is no parallel
+  namespace container kind. UML packages and nested types participate in
+  qualified identity, while custom folders do not. A browser folder therefore
+  stores only grouping and ordering metadata and may be nested at any visible
+  semantic level without changing source bindings or UML meaning.
 - Resolve every tree drag to a de-duplicated set of leaf subjects. Dragging a
   namespace, package, custom folder, or type with nested types includes all its
   descendants; overlapping selections place each subject once.
-- Persist diagram containment explicitly rather than inferring it permanently
-  from rectangle overlap. A container presentation owns child presentation IDs,
-  rejects cycles, renders below its descendants, and moves descendants by the
-  same delta. Dropping or moving a child across a container boundary updates
-  membership through one undoable command; resizing a container does not scale
-  its children.
-- Treat a namespace/package frame as a diagram-specific view of semantic
-  ownership. A diagram may show only a chosen subset of the package or
-  namespace contents. Tree-drop expansion initializes that subset, but later
-  source imports do not silently add presentations. C++ namespaces and UML
-  packages remain distinct semantic kinds even if their frames share rendering
-  and containment mechanics.
+- Custom-folder container presentations are implemented as explicit persisted
+  frames that own child presentation IDs and reject missing, multiply-owned,
+  or cyclic membership. Dropping a folder creates its nested folder frames,
+  missing leaf presentations, and eligible connectors through one compact undo
+  command. Frames render below their descendants; moving a frame moves its
+  complete subtree, while resizing changes only the frame. Removing a frame or
+  deleting its browser folder promotes its children without deleting semantic
+  elements. Frame colors participate in the centralized theme editor.
+- Boundary editing is implemented: the innermost eligible frame at the
+  completed drag's release point becomes the explicit owner. Dropping at the
+  diagram root removes ownership, nested frames can be detached or reparented,
+  and moving frames exclude their own subtree as a target to prevent cycles.
+  Geometry and membership changes share one compact undoable command;
+  incidental rectangle overlap never changes ownership.
+- UML package frames are implemented with conventional tabbed rendering and the
+  same explicit, persisted membership mechanism as custom-folder frames.
+  Dragging a package from the tree creates nested package frames, content-sized
+  leaf presentations, and eligible connectors as one undoable command. A
+  diagram may show only a chosen subset; later source imports do not silently
+  add presentations.
+- The persisted **Package reassignment by drag and drop** preference provides
+  **Disallow**, **Ask** (default), and **Allow** policies. It governs both
+  project-tree and diagram-frame boundary drops. Approved moves change visual
+  ownership, browser placement, and semantic package assignment atomically;
+  cancellation changes nothing. Prompts are raised only when the presentation
+  actually crosses a container boundary and identify the affected elements.
+  Custom folders remain presentation-only.
 
 ### 3.7 Project and presentation styling — deferred
 
@@ -184,7 +223,8 @@ history memory grow with total project size rather than the size of each edit.
 ## Phase 4: C++ import and synchronization — in progress
 
 - Folder-first libclang AST indexing is implemented for classes, structs,
-  fields, methods, and direct base relationships. A user selects only the source
+  fields, methods, base relationships, member types, and operation-signature
+  types. A user selects only the source
   root: the importer recursively discovers C++ files, infers common include
   roots, tolerates missing external dependencies, and avoids build or vendored
   trees. If a compilation database is present, it is discovered and used
@@ -196,12 +236,30 @@ history memory grow with total project size rather than the size of each edit.
   persistent source bindings and provenance, last-imported baselines, and
   user-authoritative conflict handling. GUI apply is one undoable command;
   `cpp-preview` and `cpp-import` expose the same rules headlessly. Imported
-  inheritance is semantic relationship data and gains diagram connectors only
+  relationships are semantic model data and gain diagram connectors only
   where both endpoint presentations exist. Conflicts are structured log entries
   and never overwrite manual model edits.
-- Add explicit conflict-resolution choices, rename/move matching, further
-  relationship discovery, and repeatable synchronization controls in subsequent
-  slices.
+- C++ namespaces are materialized as source-bound UML package elements.
+  Imported types reference those packages through stable IDs, including nested
+  namespaces. Package assignment participates in the same three-way baseline:
+  a manual reassignment is retained, and a simultaneous source namespace change
+  is logged as a conflict rather than overwriting the user model.
+- Member ownership and signature-use relationships are implemented.
+  By-value members and configured owning pointer templates produce composition;
+  configured shared pointer templates and raw pointer/reference members produce
+  aggregation; unknown wrappers remain association; and parameter/return-only
+  use produces dependency. Owning and shared pointer templates are editable,
+  persisted preferences (defaulting to `std::unique_ptr` and
+  `std::shared_ptr`). Reclassification keeps stable bindings and therefore uses
+  the normal user-authoritative conflict rules.
+- Per-project repeatable synchronization controls are implemented. Applying a
+  successful preview persists its source root in the project manifest as part
+  of the same compact undo command as semantic changes. **Synchronize C++**
+  reruns discovery without another folder prompt, **Change C++ source…**
+  reconfigures it through preview, and headless `cpp-preview`/`cpp-import` may
+  omit the source argument once a project has one configured.
+- Add explicit conflict-resolution choices and rename/move matching in
+  subsequent slices.
 
 ## Phase 5: scale and hardening
 

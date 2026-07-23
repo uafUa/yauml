@@ -8,12 +8,20 @@
 
 namespace uuml {
 
+struct ContainerChildrenChange {
+  QString containerId;
+  QStringList before;
+  QStringList after;
+};
+
 class CreateElementCommand final : public ProjectCommand {
 public:
   CreateElementCommand(ProjectController *controller,
                        const ProjectData &project, ModelElement element,
                        QString diagramId,
-                       std::optional<NodePresentation> presentation);
+                       std::optional<NodePresentation> nodePresentation,
+                       std::optional<ContainerPresentation>
+                           containerPresentation = std::nullopt);
 
 private:
   void execute(ProjectData &project) override;
@@ -22,7 +30,8 @@ private:
   ModelElement m_element;
   qsizetype m_elementIndex;
   QString m_diagramId;
-  std::optional<NodePresentation> m_presentation;
+  std::optional<NodePresentation> m_nodePresentation;
+  std::optional<ContainerPresentation> m_containerPresentation;
   qsizetype m_presentationIndex = -1;
 };
 
@@ -31,7 +40,8 @@ public:
   ApplyCppImportCommand(ProjectController *controller,
                         const ProjectData &project,
                         QList<ModelElement> desiredElements,
-                        QList<Relationship> desiredRelationships);
+                        QList<Relationship> desiredRelationships,
+                        QString sourceRoot);
 
 private:
   struct ElementChange {
@@ -50,6 +60,9 @@ private:
 
   QList<ElementChange> m_changes;
   QList<RelationshipChange> m_relationshipChanges;
+  QString m_sourceRootBefore;
+  QString m_sourceRootAfter;
+  bool m_sourceRootChanged = false;
 };
 
 class CreateBrowserFolderCommand final : public ProjectCommand {
@@ -82,10 +95,11 @@ private:
 
 class MoveBrowserItemsCommand final : public ProjectCommand {
 public:
-  MoveBrowserItemsCommand(ProjectController *controller,
-                          const ProjectData &project,
-                          const QStringList &elementIds,
-                          const QStringList &folderIds, BrowserParent target);
+  MoveBrowserItemsCommand(
+      ProjectController *controller, const ProjectData &project,
+      const QStringList &elementIds, const QStringList &folderIds,
+      BrowserParent target,
+      std::optional<QString> targetPackageId = std::nullopt);
 
 private:
   struct ParentChange {
@@ -94,12 +108,31 @@ private:
     BrowserParent before;
     BrowserParent after;
   };
+  struct PackageChange {
+    QString elementId;
+    QString before;
+    QString after;
+  };
 
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
   void apply(ProjectData &project, bool forward);
 
   QList<ParentChange> m_changes;
+  QList<PackageChange> m_packageChanges;
+};
+
+class ReorderBrowserItemsCommand final : public ProjectCommand {
+public:
+  ReorderBrowserItemsCommand(ProjectController *controller, QStringList before,
+                             QStringList after, int itemCount = 1);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QStringList m_before;
+  QStringList m_after;
 };
 
 class DeleteBrowserFolderCommand final : public ProjectCommand {
@@ -114,6 +147,12 @@ private:
     BrowserParent before;
     BrowserParent after;
   };
+  struct DiagramContainer {
+    QString diagramId;
+    qsizetype index;
+    ContainerPresentation value;
+    std::optional<ContainerChildrenChange> ownerChange;
+  };
 
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
@@ -121,7 +160,9 @@ private:
 
   BrowserFolder m_folder;
   qsizetype m_index = -1;
+  qsizetype m_browserOrderIndex = -1;
   QList<ParentChange> m_changes;
+  QList<DiagramContainer> m_diagramContainers;
 };
 
 class CreateDiagramCommand final : public ProjectCommand {
@@ -187,6 +228,41 @@ private:
   QList<PositionedConnector> m_connectors;
 };
 
+// A project-tree container drop can add folder/package frames, leaf
+// presentations, connectors, and membership changes as one compact undo
+// transaction.
+class AddContainerPresentationsCommand final : public ProjectCommand {
+public:
+  AddContainerPresentationsCommand(
+      ProjectController *controller, const ProjectData &project,
+      QString diagramId, QList<ContainerPresentation> containers,
+      QList<NodePresentation> nodes, QList<ConnectorPresentation> connectors,
+      QList<ContainerChildrenChange> membershipChanges);
+
+private:
+  struct PositionedContainer {
+    qsizetype index;
+    ContainerPresentation value;
+  };
+  struct PositionedNode {
+    qsizetype index;
+    NodePresentation value;
+  };
+  struct PositionedConnector {
+    qsizetype index;
+    ConnectorPresentation value;
+  };
+
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  QList<PositionedContainer> m_containers;
+  QList<PositionedNode> m_nodes;
+  QList<PositionedConnector> m_connectors;
+  QList<ContainerChildrenChange> m_membershipChanges;
+};
+
 class RemovePresentationsCommand final : public ProjectCommand {
 public:
   RemovePresentationsCommand(ProjectController *controller,
@@ -209,6 +285,23 @@ private:
   QString m_diagramId;
   QList<PositionedNode> m_nodes;
   QList<PositionedConnector> m_connectors;
+  QList<ContainerChildrenChange> m_membershipChanges;
+};
+
+class RemoveContainerPresentationCommand final : public ProjectCommand {
+public:
+  RemoveContainerPresentationCommand(ProjectController *controller,
+                                     const ProjectData &project,
+                                     QString diagramId, QString containerId);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  ContainerPresentation m_container;
+  qsizetype m_index = -1;
+  std::optional<ContainerChildrenChange> m_ownerChange;
 };
 
 class DeleteDiagramCommand final : public ProjectCommand {
@@ -261,6 +354,10 @@ private:
     qsizetype index;
     NodePresentation value;
   };
+  struct PositionedContainer {
+    qsizetype index;
+    ContainerPresentation value;
+  };
   struct PositionedConnector {
     qsizetype index;
     ConnectorPresentation value;
@@ -269,6 +366,9 @@ private:
     QString diagramId;
     QList<PositionedNode> nodes;
     QList<PositionedConnector> connectors;
+    QList<ContainerChildrenChange> membershipChanges;
+    std::optional<PositionedContainer> container;
+    std::optional<ContainerChildrenChange> containerOwnerChange;
   };
   struct BrowserParentChange {
     QString kind;
@@ -276,28 +376,43 @@ private:
     BrowserParent before;
     BrowserParent after;
   };
+  struct PackageChange {
+    QString elementId;
+    QString before;
+    QString after;
+  };
 
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
 
   ModelElement m_element;
   qsizetype m_elementIndex;
+  qsizetype m_browserOrderIndex = -1;
   QList<PositionedRelationship> m_relationships;
   QList<DiagramRecords> m_diagrams;
   QList<BrowserParentChange> m_browserParentChanges;
+  QList<PackageChange> m_packageChanges;
 };
 
-struct NodeGeometryChange {
-  QString nodeId;
+struct PresentationGeometryChange {
+  QString presentationId;
   QRectF before;
   QRectF after;
 };
 
-class UpdateNodeGeometriesCommand final : public ProjectCommand {
+struct ElementPackageChange {
+  QString elementId;
+  QString before;
+  QString after;
+};
+
+class UpdatePresentationGeometriesCommand final : public ProjectCommand {
 public:
-  UpdateNodeGeometriesCommand(ProjectController *controller, QString diagramId,
-                              QList<NodeGeometryChange> changes,
-                              QString description);
+  UpdatePresentationGeometriesCommand(
+      ProjectController *controller, QString diagramId,
+      QList<PresentationGeometryChange> changes,
+      QList<ContainerChildrenChange> membershipChanges,
+      QList<ElementPackageChange> packageChanges, QString description);
 
 private:
   void execute(ProjectData &project) override;
@@ -305,7 +420,29 @@ private:
   void apply(ProjectData &project, bool forward);
 
   QString m_diagramId;
-  QList<NodeGeometryChange> m_changes;
+  QList<PresentationGeometryChange> m_changes;
+  QList<ContainerChildrenChange> m_membershipChanges;
+  QList<ElementPackageChange> m_packageChanges;
+};
+
+class SetNodePortSnapPointsCommand final : public ProjectCommand {
+public:
+  SetNodePortSnapPointsCommand(ProjectController *controller, QString diagramId,
+                               QString nodeId, int beforeHorizontal,
+                               int beforeVertical, int afterHorizontal,
+                               int afterVertical);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, int horizontal, int vertical);
+
+  QString m_diagramId;
+  QString m_nodeId;
+  int m_beforeHorizontal;
+  int m_beforeVertical;
+  int m_afterHorizontal;
+  int m_afterVertical;
 };
 
 class CreateRelationshipCommand final : public ProjectCommand {

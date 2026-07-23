@@ -1,6 +1,8 @@
 #include "core/project_controller.h"
 
+#include "core/connector_port_layout.h"
 #include "core/cpp_import.h"
+#include "core/presentation_layout.h"
 #include "core/project_command.h"
 #include "core/project_commands.h"
 #include "core/project_serializer.h"
@@ -24,10 +26,6 @@ namespace {
 
 constexpr qreal kDefaultNodeX = 50.0;
 constexpr qreal kDefaultNodeY = 50.0;
-constexpr qreal kDefaultNodeWidth = 220.0;
-constexpr qreal kDefaultNodeHeight = 120.0;
-constexpr qreal kNodeHorizontalSpacing = 250.0;
-constexpr qreal kNodeVerticalSpacing = 160.0;
 constexpr qreal kNodeClearance = 12.0;
 constexpr int kPlacementColumns = 12;
 
@@ -69,8 +67,6 @@ QString effectiveBrowserParentKey(const ProjectData &project,
     return {};
   if (!element->browserParent.kind.isEmpty())
     return browserParentSubjectKey(element->browserParent);
-  if (!element->packageId.isEmpty())
-    return browserSubjectKey(QStringLiteral("element"), element->packageId);
 
   const QStringList parts =
       element->name.split(QStringLiteral("::"), Qt::SkipEmptyParts);
@@ -88,7 +84,170 @@ QString effectiveBrowserParentKey(const ProjectData &project,
     if (owner != project.elements.cend())
       parent = browserSubjectKey(QStringLiteral("element"), owner->id);
   }
-  return parent;
+  return !parent.isEmpty()
+             ? parent
+             : browserSubjectKey(QStringLiteral("element"), element->packageId);
+}
+
+QStringList normalizedBrowserItemOrder(const ProjectData &project) {
+  QStringList result;
+  QSet<QString> seen;
+  const auto appendIfValid = [&](const QString &key) {
+    if (seen.contains(key))
+      return;
+    const int separator = key.indexOf(u':');
+    if (separator <= 0)
+      return;
+    const QString kind = key.left(separator);
+    const QString id = key.mid(separator + 1);
+    const bool valid =
+        (kind == QStringLiteral("element") && findElement(project, id)) ||
+        (kind == QStringLiteral("folder") && findBrowserFolder(project, id));
+    if (!valid)
+      return;
+    seen.insert(key);
+    result.append(key);
+  };
+  for (const QString &key : project.browserItemOrder)
+    appendIfValid(key);
+  for (const auto &folder : project.browserFolders)
+    appendIfValid(browserSubjectKey(QStringLiteral("folder"), folder.id));
+  for (const auto &element : project.elements)
+    appendIfValid(browserSubjectKey(QStringLiteral("element"), element.id));
+  return result;
+}
+
+QStringList browserItemKeysFromJson(const ProjectData &project,
+                                    const QString &itemsJson) {
+  QJsonParseError parseError;
+  const QJsonDocument document =
+      QJsonDocument::fromJson(itemsJson.toUtf8(), &parseError);
+  if (parseError.error != QJsonParseError::NoError || !document.isArray())
+    return {};
+
+  QStringList keys;
+  QSet<QString> seen;
+  for (const QJsonValue &value : document.array()) {
+    const QJsonObject object = value.toObject();
+    const QString kind = object.value(QStringLiteral("kind")).toString();
+    const QString id = object.value(QStringLiteral("id")).toString();
+    const bool valid =
+        (kind == QStringLiteral("element") && findElement(project, id)) ||
+        (kind == QStringLiteral("folder") && findBrowserFolder(project, id));
+    const QString key = browserSubjectKey(kind, id);
+    if (valid && !key.isEmpty() && !seen.contains(key)) {
+      seen.insert(key);
+      keys.append(key);
+    }
+  }
+  return keys;
+}
+
+QString packageIdForBrowserTarget(const ProjectData &project,
+                                  const QString &targetKind,
+                                  const QString &targetId) {
+  if (targetKind == QStringLiteral("element")) {
+    const ModelElement *target = findElement(project, targetId);
+    if (!target)
+      return {};
+    return target->type == ElementType::Package ? target->id
+                                                : target->packageId;
+  }
+
+  QSet<QString> visited;
+  QString current = effectiveBrowserParentKey(project, targetKind, targetId);
+  while (!current.isEmpty() && !visited.contains(current)) {
+    visited.insert(current);
+    const int separator = current.indexOf(u':');
+    if (separator <= 0)
+      break;
+    const QString kind = current.left(separator);
+    const QString id = current.mid(separator + 1);
+    if (kind == QStringLiteral("element")) {
+      const ModelElement *candidate = findElement(project, id);
+      if (candidate && candidate->type == ElementType::Package)
+        return candidate->id;
+    }
+    current = effectiveBrowserParentKey(project, kind, id);
+  }
+  return {};
+}
+
+QString packageIdForDiagramContainer(const Diagram &diagram,
+                                     const QString &containerId) {
+  QHash<QString, QString> ownerByChild;
+  for (const auto &container : diagram.containers)
+    for (const QString &childId : container.childPresentationIds)
+      ownerByChild.insert(childId, container.id);
+
+  QSet<QString> visited;
+  QString current = containerId;
+  while (!current.isEmpty() && !visited.contains(current)) {
+    visited.insert(current);
+    const auto *container = findContainer(diagram, current);
+    if (!container)
+      break;
+    if (container->subjectKind == QStringLiteral("package"))
+      return container->subjectId;
+    current = ownerByChild.value(current);
+  }
+  return {};
+}
+
+QString ownerContainerIdForPresentation(const Diagram &diagram,
+                                        const QString &presentationId) {
+  for (const auto &container : diagram.containers)
+    if (container.childPresentationIds.contains(presentationId))
+      return container.id;
+  return {};
+}
+
+QString packageTargetLabel(const ProjectData &project,
+                           const QString &packageId) {
+  if (const auto *package = findElement(project, packageId))
+    return QStringLiteral("package \"%1\"").arg(package->name);
+  return QStringLiteral("the model root");
+}
+
+QString packageReassignmentPrompt(const ProjectData &project,
+                                  const QSet<QString> &elementIds,
+                                  const QString &targetPackageId) {
+  QStringList names;
+  names.reserve(elementIds.size());
+  for (const auto &element : project.elements)
+    if (elementIds.contains(element.id))
+      names.append(element.name);
+  if (names.isEmpty())
+    return {};
+
+  const QString targetLabel = packageTargetLabel(project, targetPackageId);
+  if (names.size() == 1)
+    return QStringLiteral("Move \"%1\" to %2?")
+        .arg(names.constFirst(), targetLabel);
+
+  constexpr int kVisibleNameLimit = 8;
+  QStringList visibleNames;
+  const qsizetype visibleCount =
+      std::min(names.size(), qsizetype{kVisibleNameLimit});
+  visibleNames.reserve(visibleCount + 1);
+  for (int index = 0; index < visibleCount; ++index)
+    visibleNames.append(QStringLiteral("• %1").arg(names.at(index)));
+  if (names.size() > kVisibleNameLimit)
+    visibleNames.append(
+        QStringLiteral("• …and %1 more").arg(names.size() - kVisibleNameLimit));
+  return QStringLiteral("Move these %1 elements to %2?\n\n%3")
+      .arg(names.size())
+      .arg(targetLabel, visibleNames.join(u'\n'));
+}
+
+QString elementIdForPresentation(const Diagram &diagram,
+                                 const QString &presentationId) {
+  if (const auto *node = findNode(diagram, presentationId))
+    return node->elementId;
+  const auto *container = findContainer(diagram, presentationId);
+  return container && container->subjectKind == QStringLiteral("package")
+             ? container->subjectId
+             : QString{};
 }
 
 bool browserContainerExists(const ProjectData &project,
@@ -104,18 +263,21 @@ bool browserContainerExists(const ProjectData &project,
   return false;
 }
 
-QRectF firstAvailableNodeGeometry(const Diagram &diagram) {
+QRectF firstAvailableNodeGeometry(const Diagram &diagram,
+                                  const QSizeF &nodeSize) {
   // Reusing the first open slot keeps newly placed nodes near the diagram's
   // origin and, importantly, restores holes left by removed presentations. A
   // node-count-based diagonal offset sends additions thousands of pixels away
   // on large diagrams, making a successful placement appear to have failed.
   const qsizetype candidateCount = diagram.nodes.size() + 1;
+  const qreal horizontalSpacing = nodeSize.width() + 24.0;
+  const qreal verticalSpacing = nodeSize.height() + 24.0;
   for (qsizetype index = 0; index < candidateCount; ++index) {
     const int column = static_cast<int>(index % kPlacementColumns);
     const int row = static_cast<int>(index / kPlacementColumns);
-    const QRectF candidate(kDefaultNodeX + column * kNodeHorizontalSpacing,
-                           kDefaultNodeY + row * kNodeVerticalSpacing,
-                           kDefaultNodeWidth, kDefaultNodeHeight);
+    const QRectF candidate(kDefaultNodeX + column * horizontalSpacing,
+                           kDefaultNodeY + row * verticalSpacing,
+                           nodeSize.width(), nodeSize.height());
     const bool occupied =
         std::any_of(diagram.nodes.cbegin(), diagram.nodes.cend(),
                     [&](const NodePresentation &node) {
@@ -131,11 +293,11 @@ QRectF firstAvailableNodeGeometry(const Diagram &diagram) {
   // Very large or irregular presentations can cover several logical slots.
   // Falling back below the current content guarantees a usable position while
   // keeping the search above bounded by the number of existing nodes.
-  qreal contentBottom = kDefaultNodeY - kNodeVerticalSpacing;
+  qreal contentBottom = kDefaultNodeY - verticalSpacing;
   for (const auto &node : diagram.nodes)
     contentBottom = std::max(contentBottom, node.geometry.bottom());
-  return {kDefaultNodeX, contentBottom + kNodeClearance, kDefaultNodeWidth,
-          kDefaultNodeHeight};
+  return {kDefaultNodeX, contentBottom + kNodeClearance, nodeSize.width(),
+          nodeSize.height()};
 }
 
 QList<ConnectorPresentation>
@@ -302,6 +464,124 @@ selfConnectorBendPoints(const QRectF &rect, const ConnectorAnchor &source,
   return bendPoints;
 }
 
+QHash<QString, QString> containerOwners(const Diagram &diagram) {
+  QHash<QString, QString> owners;
+  for (const auto &container : diagram.containers)
+    for (const QString &childId : container.childPresentationIds)
+      owners.insert(childId, container.id);
+  return owners;
+}
+
+bool containerSubtreeContains(const Diagram &diagram,
+                              const QString &containerId,
+                              const QString &presentationId,
+                              QSet<QString> &visited) {
+  if (visited.contains(containerId))
+    return false;
+  visited.insert(containerId);
+  const auto *container = findContainer(diagram, containerId);
+  if (!container)
+    return false;
+  for (const QString &childId : container->childPresentationIds) {
+    if (childId == presentationId)
+      return true;
+    if (findContainer(diagram, childId) &&
+        containerSubtreeContains(diagram, childId, presentationId, visited))
+      return true;
+  }
+  return false;
+}
+
+QList<ContainerChildrenChange>
+membershipChangesForDrop(const Diagram &diagram,
+                         const QStringList &orderedPresentationIds,
+                         const QString &targetContainerId) {
+  const auto owners = containerOwners(diagram);
+  QSet<QString> movedIds;
+  QStringList validIds;
+  validIds.reserve(orderedPresentationIds.size());
+  for (const QString &id : orderedPresentationIds) {
+    if (movedIds.contains(id) ||
+        (!findNode(diagram, id) && !findContainer(diagram, id)))
+      continue;
+    movedIds.insert(id);
+    validIds.append(id);
+  }
+
+  // If callers ever provide a complete moving subtree, only its outermost
+  // presentation changes owner. Descendant membership must remain intact.
+  QStringList topLevelIds;
+  for (const QString &id : validIds) {
+    QString ownerId = owners.value(id);
+    QSet<QString> visited;
+    bool hasMovedAncestor = false;
+    while (!ownerId.isEmpty() && !visited.contains(ownerId)) {
+      if (movedIds.contains(ownerId)) {
+        hasMovedAncestor = true;
+        break;
+      }
+      visited.insert(ownerId);
+      ownerId = owners.value(ownerId);
+    }
+    if (!hasMovedAncestor)
+      topLevelIds.append(id);
+  }
+
+  const bool targetExists =
+      targetContainerId.isEmpty() ||
+      findContainer(diagram, targetContainerId) != nullptr;
+  QHash<QString, QStringList> afterByContainer;
+  const auto editableChildren =
+      [&](const QString &containerId) -> QStringList & {
+    auto found = afterByContainer.find(containerId);
+    if (found == afterByContainer.end()) {
+      const auto *container = findContainer(diagram, containerId);
+      found = afterByContainer.insert(
+          containerId,
+          container ? container->childPresentationIds : QStringList{});
+    }
+    return found.value();
+  };
+
+  for (const QString &presentationId : topLevelIds) {
+    const QString currentOwnerId = owners.value(presentationId);
+    QString destinationId = targetContainerId;
+    bool validDestination = targetExists;
+    if (destinationId == presentationId || movedIds.contains(destinationId))
+      validDestination = false;
+    if (validDestination && findContainer(diagram, presentationId)) {
+      QSet<QString> visited;
+      if (containerSubtreeContains(diagram, presentationId, destinationId,
+                                   visited))
+        validDestination = false;
+    }
+    // Geometry can still be committed if an impossible programmatic target is
+    // supplied, but membership must remain valid and cycle-free.
+    if (!validDestination)
+      destinationId = currentOwnerId;
+    if (destinationId == currentOwnerId)
+      continue;
+
+    if (!currentOwnerId.isEmpty())
+      editableChildren(currentOwnerId).removeAll(presentationId);
+    if (!destinationId.isEmpty()) {
+      QStringList &children = editableChildren(destinationId);
+      if (!children.contains(presentationId))
+        children.append(presentationId);
+    }
+  }
+
+  QList<ContainerChildrenChange> changes;
+  for (const auto &container : diagram.containers) {
+    const auto after = afterByContainer.constFind(container.id);
+    if (after != afterByContainer.cend() &&
+        *after != container.childPresentationIds)
+      changes.append(
+          {container.id, container.childPresentationIds, after.value()});
+  }
+  return changes;
+}
+
 } // namespace
 
 ProjectController::ProjectController(QObject *parent)
@@ -430,12 +710,33 @@ bool ProjectController::openProject(const QUrl &url) {
   return true;
 }
 
-bool ProjectController::saveProject(const QUrl &url) {
+bool ProjectController::saveDestinationContainsProject(const QUrl &url) const {
+  const QString path = normalizedLocalPath(url);
+  if (path.isEmpty())
+    return false;
+  const QString destination = ProjectSerializer::normalizeProjectPath(path);
+  if (!m_projectPath.isEmpty() &&
+      QDir::cleanPath(destination)
+              .compare(QDir::cleanPath(m_projectPath), Qt::CaseInsensitive) ==
+          0)
+    return false;
+  return QFileInfo::exists(
+      QDir(destination).filePath(QStringLiteral("manifest.json5")));
+}
+
+bool ProjectController::saveProject(const QUrl &url, bool overwriteExisting) {
   const QString path = normalizedLocalPath(url);
   if (path.isEmpty()) {
     m_diagnostics.addError(
         QStringLiteral("persistence"),
         QStringLiteral("Choose a project directory before saving"));
+    return false;
+  }
+  if (!overwriteExisting && saveDestinationContainsProject(url)) {
+    m_diagnostics.addWarning(
+        QStringLiteral("persistence"),
+        QStringLiteral("The selected folder already contains a u uml project; "
+                       "confirm replacement before saving"));
     return false;
   }
   const auto outcome = ProjectSerializer::save(path, m_data);
@@ -467,24 +768,42 @@ int ProjectController::applyCppImportPlan(const CppImportPreview &preview) {
   for (const auto &item : preview.relationshipItems)
     if (item.isApplicable())
       desiredRelationships.append(item.desiredRelationship);
-  if (desiredElements.isEmpty() && desiredRelationships.isEmpty())
+  const bool sourceRootChanged =
+      !preview.sourceRoot.isEmpty() &&
+      preview.sourceRoot != m_data.cppImport.sourceRoot;
+  if (desiredElements.isEmpty() && desiredRelationships.isEmpty() &&
+      !sourceRootChanged)
     return 0;
   const int count = desiredElements.size() + desiredRelationships.size();
   pushCommand(std::make_unique<ApplyCppImportCommand>(
-      this, m_data, std::move(desiredElements),
-      std::move(desiredRelationships)));
+      this, m_data, std::move(desiredElements), std::move(desiredRelationships),
+      preview.sourceRoot));
   return count;
 }
 
 QString ProjectController::addElement(const QString &type,
                                       const QString &diagramId) {
-  return addElementAt(type, diagramId, std::numeric_limits<qreal>::quiet_NaN(),
-                      std::numeric_limits<qreal>::quiet_NaN());
+  return addElementAtImpl(type, diagramId,
+                          std::numeric_limits<qreal>::quiet_NaN(),
+                          std::numeric_limits<qreal>::quiet_NaN(), false);
 }
 
 QString ProjectController::addElementAt(const QString &type,
                                         const QString &diagramId, qreal x,
                                         qreal y) {
+  return addElementAtImpl(type, diagramId, x, y, false);
+}
+
+QString ProjectController::addElementCenteredAt(const QString &type,
+                                                const QString &diagramId,
+                                                qreal centerX, qreal centerY) {
+  return addElementAtImpl(type, diagramId, centerX, centerY, true);
+}
+
+QString ProjectController::addElementAtImpl(const QString &type,
+                                            const QString &diagramId, qreal x,
+                                            qreal y,
+                                            bool coordinatesAreCenter) {
   bool ok = false;
   const ElementType elementType = elementTypeFromString(type, &ok);
   if (!ok) {
@@ -513,18 +832,42 @@ QString ProjectController::addElementAt(const QString &type,
     element.enumLiterals = {QStringLiteral("Value")};
   }
 
-  std::optional<NodePresentation> presentation;
+  std::optional<NodePresentation> nodePresentation;
+  std::optional<ContainerPresentation> containerPresentation;
   if (const auto *diagram = findDiagram(m_data, diagramId)) {
-    NodePresentation node;
-    node.id = newId();
-    node.elementId = element.id;
-    node.geometry = std::isfinite(x) && std::isfinite(y)
-                        ? QRectF(x, y, kDefaultNodeWidth, kDefaultNodeHeight)
-                        : firstAvailableNodeGeometry(*diagram);
-    presentation = std::move(node);
+    if (elementType == ElementType::Package) {
+      ContainerPresentation container;
+      container.id = newId();
+      container.subjectKind = QStringLiteral("package");
+      container.subjectId = element.id;
+      container.geometry =
+          QRectF(kDefaultNodeX + diagram->containers.size() * 36.0,
+                 kDefaultNodeY + diagram->containers.size() * 36.0,
+                 presentation_layout::kMinimumContainerWidth, 200.0);
+      if (std::isfinite(x) && std::isfinite(y)) {
+        container.geometry.moveTopLeft({x, y});
+        if (coordinatesAreCenter)
+          container.geometry.moveCenter({x, y});
+      }
+      containerPresentation = std::move(container);
+    } else {
+      NodePresentation node;
+      node.id = newId();
+      node.elementId = element.id;
+      const QSizeF contentSize = presentation_layout::nodeContentSize(element);
+      if (std::isfinite(x) && std::isfinite(y)) {
+        node.geometry = QRectF(QPointF(x, y), contentSize);
+        if (coordinatesAreCenter)
+          node.geometry.moveCenter({x, y});
+      } else {
+        node.geometry = firstAvailableNodeGeometry(*diagram, contentSize);
+      }
+      nodePresentation = std::move(node);
+    }
   }
   pushCommand(std::make_unique<CreateElementCommand>(
-      this, m_data, element, diagramId, std::move(presentation)));
+      this, m_data, element, diagramId, std::move(nodePresentation),
+      std::move(containerPresentation)));
   selectObject(element.id, QStringLiteral("element"));
   return element.id;
 }
@@ -577,9 +920,190 @@ void ProjectController::deleteBrowserFolder(const QString &folderId) {
       std::make_unique<DeleteBrowserFolderCommand>(this, m_data, folderId));
 }
 
+void ProjectController::deleteBrowserItems(const QString &itemsJson) {
+  QJsonParseError parseError;
+  const QJsonDocument document =
+      QJsonDocument::fromJson(itemsJson.toUtf8(), &parseError);
+  if (parseError.error != QJsonParseError::NoError || !document.isArray())
+    return;
+
+  QStringList folderIds;
+  QStringList elementIds;
+  QStringList diagramIds;
+  QSet<QString> seen;
+  for (const QJsonValue &value : document.array()) {
+    const QJsonObject object = value.toObject();
+    const QString kind = object.value(QStringLiteral("kind")).toString();
+    const QString id = object.value(QStringLiteral("id")).toString();
+    const QString key = kind + u':' + id;
+    if (id.isEmpty() || seen.contains(key))
+      continue;
+    seen.insert(key);
+    if (kind == QStringLiteral("folder") && findBrowserFolder(m_data, id))
+      folderIds.append(id);
+    else if (kind == QStringLiteral("element") && findElement(m_data, id))
+      elementIds.append(id);
+    else if (kind == QStringLiteral("diagram") && findDiagram(m_data, id))
+      diagramIds.append(id);
+  }
+  const int requestedCount =
+      folderIds.size() + elementIds.size() + diagramIds.size();
+  if (requestedCount == 0)
+    return;
+
+  m_undoStack.beginMacro(
+      requestedCount == 1
+          ? QStringLiteral("Delete project-tree item")
+          : QStringLiteral("Delete %1 project-tree items").arg(requestedCount));
+  for (const QString &folderId : folderIds)
+    pushCommand(
+        std::make_unique<DeleteBrowserFolderCommand>(this, m_data, folderId));
+  for (const QString &elementId : elementIds)
+    pushCommand(
+        std::make_unique<DeleteElementCommand>(this, m_data, elementId));
+  for (const QString &diagramId : diagramIds)
+    deleteDiagram(diagramId);
+  m_undoStack.endMacro();
+  clearSelection();
+}
+
+bool ProjectController::canReorderBrowserItem(const QString &kind,
+                                              const QString &id,
+                                              int direction) const {
+  if ((kind != QStringLiteral("element") && kind != QStringLiteral("folder")) ||
+      direction == 0)
+    return false;
+  const QString key = browserSubjectKey(kind, id);
+  const QString parent = effectiveBrowserParentKey(m_data, kind, id);
+  QStringList siblings;
+  for (const QString &candidate : normalizedBrowserItemOrder(m_data)) {
+    const int separator = candidate.indexOf(u':');
+    if (separator > 0 &&
+        effectiveBrowserParentKey(m_data, candidate.left(separator),
+                                  candidate.mid(separator + 1)) == parent)
+      siblings.append(candidate);
+  }
+  const int position = siblings.indexOf(key);
+  return position >= 0 &&
+         (direction < 0 ? position > 0 : position + 1 < siblings.size());
+}
+
+bool ProjectController::reorderBrowserItem(const QString &kind,
+                                           const QString &id, int direction) {
+  if (!canReorderBrowserItem(kind, id, direction))
+    return false;
+  QStringList after = normalizedBrowserItemOrder(m_data);
+  const QString key = browserSubjectKey(kind, id);
+  const QString parent = effectiveBrowserParentKey(m_data, kind, id);
+  QString adjacentKey;
+  bool found = false;
+  for (int index = 0; index < after.size(); ++index) {
+    const QString &candidate = after.at(index);
+    const int separator = candidate.indexOf(u':');
+    if (separator <= 0 ||
+        effectiveBrowserParentKey(m_data, candidate.left(separator),
+                                  candidate.mid(separator + 1)) != parent)
+      continue;
+    if (candidate == key) {
+      if (direction < 0)
+        break;
+      found = true;
+      continue;
+    }
+    if (direction < 0)
+      adjacentKey = candidate;
+    else if (found) {
+      adjacentKey = candidate;
+      break;
+    }
+  }
+  const int itemIndex = after.indexOf(key);
+  const int adjacentIndex = after.indexOf(adjacentKey);
+  if (itemIndex < 0 || adjacentIndex < 0)
+    return false;
+  std::swap(after[itemIndex], after[adjacentIndex]);
+  pushCommand(std::make_unique<ReorderBrowserItemsCommand>(
+      this, m_data.browserItemOrder, std::move(after)));
+  return true;
+}
+
+bool ProjectController::canReorderBrowserItemsAround(
+    const QString &itemsJson, const QString &targetKind,
+    const QString &targetId) const {
+  if (targetKind != QStringLiteral("element") &&
+      targetKind != QStringLiteral("folder"))
+    return false;
+  const QString targetKey = browserSubjectKey(targetKind, targetId);
+  const QStringList movedKeys = browserItemKeysFromJson(m_data, itemsJson);
+  if (targetKey.isEmpty() || movedKeys.isEmpty() ||
+      movedKeys.contains(targetKey))
+    return false;
+
+  const QString targetParent =
+      effectiveBrowserParentKey(m_data, targetKind, targetId);
+  return std::all_of(
+      movedKeys.cbegin(), movedKeys.cend(), [&](const QString &key) {
+        const int separator = key.indexOf(u':');
+        return separator > 0 && effectiveBrowserParentKey(
+                                    m_data, key.left(separator),
+                                    key.mid(separator + 1)) == targetParent;
+      });
+}
+
+bool ProjectController::reorderBrowserItemsAround(const QString &itemsJson,
+                                                  const QString &targetKind,
+                                                  const QString &targetId,
+                                                  bool before) {
+  if (!canReorderBrowserItemsAround(itemsJson, targetKind, targetId))
+    return false;
+
+  const QStringList normalized = normalizedBrowserItemOrder(m_data);
+  const QStringList requestedKeys = browserItemKeysFromJson(m_data, itemsJson);
+  const QSet<QString> requested(requestedKeys.cbegin(), requestedKeys.cend());
+  QStringList movedKeys;
+  QStringList after;
+  movedKeys.reserve(requested.size());
+  after.reserve(normalized.size());
+  for (const QString &key : normalized) {
+    if (requested.contains(key))
+      movedKeys.append(key);
+    else
+      after.append(key);
+  }
+
+  const QString targetKey = browserSubjectKey(targetKind, targetId);
+  int insertionIndex = after.indexOf(targetKey);
+  if (insertionIndex < 0)
+    return false;
+  if (!before)
+    ++insertionIndex;
+  for (qsizetype index = 0; index < movedKeys.size(); ++index)
+    after.insert(insertionIndex + index, movedKeys.at(index));
+  if (after == normalized)
+    return false;
+
+  pushCommand(std::make_unique<ReorderBrowserItemsCommand>(
+      this, m_data.browserItemOrder, std::move(after),
+      static_cast<int>(movedKeys.size())));
+  return true;
+}
+
 bool ProjectController::moveBrowserItems(const QString &itemsJson,
                                          const QString &targetKind,
                                          const QString &targetId) {
+  return moveBrowserItemsImpl(itemsJson, targetKind, targetId, false);
+}
+
+bool ProjectController::moveBrowserItemsWithPackageReassignment(
+    const QString &itemsJson, const QString &targetKind,
+    const QString &targetId) {
+  return moveBrowserItemsImpl(itemsJson, targetKind, targetId, true);
+}
+
+bool ProjectController::moveBrowserItemsImpl(const QString &itemsJson,
+                                             const QString &targetKind,
+                                             const QString &targetId,
+                                             bool reassignPackage) {
   const BrowserParent target{targetKind, targetId};
   if (!browserContainerExists(m_data, target))
     return false;
@@ -667,11 +1191,17 @@ bool ProjectController::moveBrowserItems(const QString &itemsJson,
       folderIds.append(item.id);
   }
 
+  const QString targetPackageId =
+      reassignPackage ? packageIdForBrowserTarget(m_data, targetKind, targetId)
+                      : QString{};
+
   const bool changesAnything =
       std::any_of(elementIds.cbegin(), elementIds.cend(),
                   [&](const QString &id) {
                     const ModelElement *element = findElement(m_data, id);
-                    return element && element->browserParent != target;
+                    return element && (element->browserParent != target ||
+                                       (reassignPackage &&
+                                        element->packageId != targetPackageId));
                   }) ||
       std::any_of(folderIds.cbegin(), folderIds.cend(), [&](const QString &id) {
         const BrowserFolder *folder = findBrowserFolder(m_data, id);
@@ -680,21 +1210,68 @@ bool ProjectController::moveBrowserItems(const QString &itemsJson,
   if (!changesAnything)
     return false;
   pushCommand(std::make_unique<MoveBrowserItemsCommand>(
-      this, m_data, elementIds, folderIds, target));
+      this, m_data, elementIds, folderIds, target,
+      reassignPackage ? std::optional<QString>(targetPackageId)
+                      : std::nullopt));
   return true;
 }
 
-void ProjectController::addSelectedToDiagram(const QString &diagramId) {
+QString ProjectController::browserMovePackageChangeSummary(
+    const QString &itemsJson, const QString &targetKind,
+    const QString &targetId) const {
+  const QString targetPackageId =
+      packageIdForBrowserTarget(m_data, targetKind, targetId);
+
+  QJsonParseError parseError;
+  const QJsonDocument document =
+      QJsonDocument::fromJson(itemsJson.toUtf8(), &parseError);
+  if (parseError.error != QJsonParseError::NoError || !document.isArray())
+    return {};
+
+  QSet<QString> changedElementIds;
+  for (const QJsonValue &value : document.array()) {
+    const QJsonObject object = value.toObject();
+    if (object.value(QStringLiteral("kind")).toString() !=
+        QStringLiteral("element"))
+      continue;
+    const auto *element =
+        findElement(m_data, object.value(QStringLiteral("id")).toString());
+    if (element && element->packageId != targetPackageId)
+      changedElementIds.insert(element->id);
+  }
+  return packageReassignmentPrompt(m_data, changedElementIds, targetPackageId);
+}
+
+void ProjectController::addSelectedToDiagram(const QString &diagramId,
+                                             const QString &sizingMode) {
   if (m_selectedKind != QStringLiteral("element"))
     return;
+  const ModelElement *element = findElement(m_data, m_selectedId);
+  if (element && element->type == ElementType::Package) {
+    const QModelIndex packageIndex =
+        m_treeModel->indexForObject(m_selectedId, QStringLiteral("element"));
+    const QStringList containedElements =
+        m_treeModel->elementIdsForIndexes({packageIndex});
+    QJsonObject subject;
+    subject.insert(QStringLiteral("kind"), QStringLiteral("element"));
+    subject.insert(QStringLiteral("id"), m_selectedId);
+    addTreeItemsToDiagram(
+        diagramId, containedElements,
+        QString::fromUtf8(
+            QJsonDocument(QJsonArray{subject}).toJson(QJsonDocument::Compact)),
+        std::numeric_limits<qreal>::quiet_NaN(),
+        std::numeric_limits<qreal>::quiet_NaN(), sizingMode);
+    return;
+  }
   addElementsToDiagram(diagramId, {m_selectedId},
                        std::numeric_limits<qreal>::quiet_NaN(),
-                       std::numeric_limits<qreal>::quiet_NaN());
+                       std::numeric_limits<qreal>::quiet_NaN(), sizingMode);
 }
 
 int ProjectController::addElementsToDiagram(const QString &diagramId,
                                             const QStringList &elementIds,
-                                            qreal x, qreal y) {
+                                            qreal x, qreal y,
+                                            const QString &sizingMode) {
   const auto *diagram = findDiagram(m_data, diagramId);
   if (!diagram || elementIds.isEmpty())
     return 0;
@@ -732,18 +1309,29 @@ int ProjectController::addElementsToDiagram(const QString &diagramId,
   Diagram prospective = *diagram;
   const bool hasDropPosition = std::isfinite(x) && std::isfinite(y);
   constexpr int kBulkPlacementColumns = 5;
+  QHash<QString, QSizeF> contentSizeByElement;
+  qreal placementWidth = 0.0;
+  qreal placementHeight = 0.0;
+  for (const QString &elementId : acceptedIds) {
+    const QSizeF size = presentation_layout::nodePlacementSize(
+        *findElement(m_data, elementId), sizingMode);
+    contentSizeByElement.insert(elementId, size);
+    placementWidth = std::max(placementWidth, size.width() + 24.0);
+    placementHeight = std::max(placementHeight, size.height() + 24.0);
+  }
   for (int index = 0; index < acceptedIds.size(); ++index) {
     NodePresentation node;
     node.id = newId();
     node.elementId = acceptedIds.at(index);
+    const QSizeF contentSize = contentSizeByElement.value(node.elementId);
     if (hasDropPosition) {
       const int column = index % kBulkPlacementColumns;
       const int row = index / kBulkPlacementColumns;
-      node.geometry = QRectF(x + column * kNodeHorizontalSpacing,
-                             y + row * kNodeVerticalSpacing, kDefaultNodeWidth,
-                             kDefaultNodeHeight);
+      node.geometry = QRectF(
+          QPointF(x + column * placementWidth, y + row * placementHeight),
+          contentSize);
     } else {
-      node.geometry = firstAvailableNodeGeometry(prospective);
+      node.geometry = firstAvailableNodeGeometry(prospective, contentSize);
     }
     prospective.nodes.append(node);
     presentations.append(std::move(node));
@@ -768,6 +1356,366 @@ int ProjectController::addElementsToDiagram(const QString &diagramId,
   return acceptedIds.size();
 }
 
+int ProjectController::addTreeItemsToDiagram(const QString &diagramId,
+                                             const QStringList &elementIds,
+                                             const QString &subjectsJson,
+                                             qreal x, qreal y,
+                                             const QString &sizingMode) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram)
+    return 0;
+
+  struct ContainerSubject {
+    QString kind;
+    QString id;
+    QString browserKind;
+
+    QString key() const { return kind + u':' + id; }
+  };
+
+  const auto containerSubjectForBrowserItem =
+      [&](const QString &kind,
+          const QString &id) -> std::optional<ContainerSubject> {
+    if (kind == QStringLiteral("folder") && findBrowserFolder(m_data, id))
+      return ContainerSubject{QStringLiteral("folder"), id, kind};
+    const ModelElement *element =
+        kind == QStringLiteral("element") ? findElement(m_data, id) : nullptr;
+    if (element && element->type == ElementType::Package)
+      return ContainerSubject{QStringLiteral("package"), id, kind};
+    return std::nullopt;
+  };
+
+  QJsonParseError parseError;
+  const QJsonDocument subjects =
+      QJsonDocument::fromJson(subjectsJson.toUtf8(), &parseError);
+  QSet<QString> rootBrowserKeys;
+  if (parseError.error == QJsonParseError::NoError && subjects.isArray()) {
+    for (const QJsonValue &value : subjects.array()) {
+      const QJsonObject object = value.toObject();
+      const QString kind = object.value(QStringLiteral("kind")).toString();
+      const QString id = object.value(QStringLiteral("id")).toString();
+      if (containerSubjectForBrowserItem(kind, id))
+        rootBrowserKeys.insert(browserSubjectKey(kind, id));
+    }
+  }
+  if (rootBrowserKeys.isEmpty())
+    return addElementsToDiagram(diagramId, elementIds, x, y, sizingMode);
+
+  const auto parentOfKey = [&](const QString &key) {
+    const int separator = key.indexOf(u':');
+    return separator > 0
+               ? effectiveBrowserParentKey(m_data, key.left(separator),
+                                           key.mid(separator + 1))
+               : QString{};
+  };
+  const auto belongsToSelectedContainer = [&](const QString &kind,
+                                              const QString &id) {
+    QSet<QString> visited;
+    QString current = browserSubjectKey(kind, id);
+    while (!current.isEmpty() && !visited.contains(current)) {
+      visited.insert(current);
+      if (rootBrowserKeys.contains(current))
+        return true;
+      current = parentOfKey(current);
+    }
+    return false;
+  };
+
+  QList<ContainerSubject> includedSubjects;
+  for (const auto &folder : m_data.browserFolders)
+    if (belongsToSelectedContainer(QStringLiteral("folder"), folder.id))
+      includedSubjects.append(
+          {QStringLiteral("folder"), folder.id, QStringLiteral("folder")});
+  for (const auto &element : m_data.elements)
+    if (element.type == ElementType::Package &&
+        belongsToSelectedContainer(QStringLiteral("element"), element.id))
+      includedSubjects.append(
+          {QStringLiteral("package"), element.id, QStringLiteral("element")});
+
+  QSet<QString> includedSubjectKeys;
+  for (const auto &subject : includedSubjects)
+    includedSubjectKeys.insert(subject.key());
+
+  const auto subjectKeyForBrowserKey = [&](const QString &browserKey) {
+    const int separator = browserKey.indexOf(u':');
+    if (separator <= 0)
+      return QString{};
+    const auto subject = containerSubjectForBrowserItem(
+        browserKey.left(separator), browserKey.mid(separator + 1));
+    return subject ? subject->key() : QString{};
+  };
+  const auto containerDepth = [&](const ContainerSubject &subject) {
+    int depth = 0;
+    QSet<QString> visited;
+    QString current =
+        effectiveBrowserParentKey(m_data, subject.browserKind, subject.id);
+    while (!current.isEmpty() && !visited.contains(current)) {
+      visited.insert(current);
+      if (includedSubjectKeys.contains(subjectKeyForBrowserKey(current)))
+        ++depth;
+      current = parentOfKey(current);
+    }
+    return depth;
+  };
+  std::stable_sort(
+      includedSubjects.begin(), includedSubjects.end(),
+      [&](const ContainerSubject &left, const ContainerSubject &right) {
+        return containerDepth(left) < containerDepth(right);
+      });
+
+  QSet<QString> requestedElements(elementIds.cbegin(), elementIds.cend());
+  QStringList acceptedElementIds;
+  for (const auto &element : m_data.elements)
+    if (requestedElements.contains(element.id) &&
+        element.type != ElementType::Package)
+      acceptedElementIds.append(element.id);
+
+  const auto includedContainerAncestors = [&](const QString &kind,
+                                              const QString &id) {
+    QStringList result;
+    QSet<QString> visited;
+    QString current = effectiveBrowserParentKey(m_data, kind, id);
+    while (!current.isEmpty() && !visited.contains(current)) {
+      visited.insert(current);
+      const QString subjectKey = subjectKeyForBrowserKey(current);
+      if (includedSubjectKeys.contains(subjectKey))
+        result.append(subjectKey);
+      current = parentOfKey(current);
+    }
+    return result;
+  };
+  QHash<QString, QStringList> containerAncestorsByElement;
+  for (const QString &elementId : acceptedElementIds)
+    containerAncestorsByElement.insert(
+        elementId,
+        includedContainerAncestors(QStringLiteral("element"), elementId));
+
+  Diagram prospective = *diagram;
+  QHash<QString, QString> nodeIdByElement;
+  QHash<QString, QRectF> nodeGeometryByElement;
+  for (const auto &node : diagram->nodes) {
+    nodeIdByElement.insert(node.elementId, node.id);
+    nodeGeometryByElement.insert(node.elementId, node.geometry);
+  }
+
+  QList<NodePresentation> newNodes;
+  const bool hasDropPosition = std::isfinite(x) && std::isfinite(y);
+  constexpr int kBulkPlacementColumns = 5;
+  QHash<QString, QSizeF> contentSizeByElement;
+  qreal placementWidth = 0.0;
+  qreal placementHeight = 0.0;
+  for (const QString &elementId : acceptedElementIds) {
+    const auto *element = findElement(m_data, elementId);
+    if (!element)
+      continue;
+    const QSizeF size =
+        presentation_layout::nodePlacementSize(*element, sizingMode);
+    contentSizeByElement.insert(elementId, size);
+    placementWidth = std::max(placementWidth, size.width() + 24.0);
+    placementHeight = std::max(placementHeight, size.height() + 24.0);
+  }
+  int placementIndex = 0;
+  for (const QString &elementId : acceptedElementIds) {
+    if (nodeIdByElement.contains(elementId))
+      continue;
+    NodePresentation node;
+    node.id = newId();
+    node.elementId = elementId;
+    const QSizeF contentSize = contentSizeByElement.value(elementId);
+    if (hasDropPosition) {
+      const int column = placementIndex % kBulkPlacementColumns;
+      const int row = placementIndex / kBulkPlacementColumns;
+      node.geometry = QRectF(QPointF(x + 30.0 + column * placementWidth,
+                                     y + 50.0 + row * placementHeight),
+                             contentSize);
+    } else {
+      node.geometry = firstAvailableNodeGeometry(prospective, contentSize);
+    }
+    ++placementIndex;
+    nodeIdByElement.insert(elementId, node.id);
+    nodeGeometryByElement.insert(elementId, node.geometry);
+    prospective.nodes.append(node);
+    newNodes.append(std::move(node));
+  }
+
+  QHash<QString, QString> containerIdBySubject;
+  for (const auto &container : diagram->containers)
+    containerIdBySubject.insert(
+        container.subjectKind + u':' + container.subjectId, container.id);
+
+  QList<ContainerPresentation> newContainers;
+  QHash<QString, qsizetype> newContainerIndexById;
+  int emptyContainerIndex = 0;
+  for (const auto &subject : includedSubjects) {
+    if (containerIdBySubject.contains(subject.key()))
+      continue;
+    ContainerPresentation container;
+    container.id = newId();
+    container.subjectKind = subject.kind;
+    container.subjectId = subject.id;
+
+    QRectF contentBounds;
+    bool hasContent = false;
+    for (const QString &elementId : acceptedElementIds) {
+      if (!containerAncestorsByElement.value(elementId).contains(
+              subject.key()) ||
+          !nodeGeometryByElement.contains(elementId))
+        continue;
+      const QRectF geometry = nodeGeometryByElement.value(elementId);
+      contentBounds = hasContent ? contentBounds.united(geometry) : geometry;
+      hasContent = true;
+    }
+    if (hasContent) {
+      container.geometry = contentBounds.adjusted(
+          -presentation_layout::kContainerHorizontalPadding,
+          -presentation_layout::kContainerTopPadding,
+          presentation_layout::kContainerHorizontalPadding,
+          presentation_layout::kContainerBottomPadding);
+      container.geometry.setWidth(
+          qMax(presentation_layout::kMinimumContainerWidth,
+               container.geometry.width()));
+      container.geometry.setHeight(
+          qMax(presentation_layout::kMinimumContainerHeight,
+               container.geometry.height()));
+    } else {
+      const qreal baseX = hasDropPosition ? x : kDefaultNodeX;
+      const qreal baseY = hasDropPosition ? y : kDefaultNodeY;
+      container.geometry =
+          QRectF(baseX + emptyContainerIndex * 36.0,
+                 baseY + emptyContainerIndex * 36.0,
+                 presentation_layout::kMinimumContainerWidth, 200.0);
+      ++emptyContainerIndex;
+    }
+    containerIdBySubject.insert(subject.key(), container.id);
+    newContainerIndexById.insert(container.id, newContainers.size());
+    newContainers.append(std::move(container));
+  }
+
+  // A nested frame can be wider than the leaf nodes that established its
+  // initial bounds (notably because frames have a minimum size). Expand each
+  // newly created ancestor around all descendant frames after every frame has
+  // concrete geometry.
+  for (const auto &subject : includedSubjects) {
+    const QString containerId = containerIdBySubject.value(subject.key());
+    const auto parentIndex = newContainerIndexById.constFind(containerId);
+    if (parentIndex == newContainerIndexById.cend())
+      continue;
+    QRectF expanded = newContainers[*parentIndex].geometry;
+    for (const auto &candidate : includedSubjects) {
+      if (candidate.key() == subject.key() ||
+          !includedContainerAncestors(candidate.browserKind, candidate.id)
+               .contains(subject.key()))
+        continue;
+      const QString candidateId = containerIdBySubject.value(candidate.key());
+      QRectF candidateGeometry;
+      const auto newCandidate = newContainerIndexById.constFind(candidateId);
+      if (newCandidate != newContainerIndexById.cend())
+        candidateGeometry = newContainers[*newCandidate].geometry;
+      else if (const auto *existing = findContainer(*diagram, candidateId))
+        candidateGeometry = existing->geometry;
+      if (!candidateGeometry.isNull())
+        expanded = expanded.united(
+            candidateGeometry.adjusted(-20.0, -40.0, 20.0, 20.0));
+    }
+    newContainers[*parentIndex].geometry = expanded;
+  }
+
+  QHash<QString, QString> desiredOwnerByChild;
+  QStringList desiredChildOrder;
+  const auto nearestPresentedContainerSubject = [&](const QString &kind,
+                                                    const QString &id) {
+    QSet<QString> visited;
+    QString current = effectiveBrowserParentKey(m_data, kind, id);
+    while (!current.isEmpty() && !visited.contains(current)) {
+      visited.insert(current);
+      const QString subjectKey = subjectKeyForBrowserKey(current);
+      if (containerIdBySubject.contains(subjectKey))
+        return subjectKey;
+      current = parentOfKey(current);
+    }
+    return QString{};
+  };
+  for (const auto &subject : includedSubjects) {
+    const QString ownerSubject =
+        nearestPresentedContainerSubject(subject.browserKind, subject.id);
+    if (!ownerSubject.isEmpty()) {
+      const QString childId = containerIdBySubject.value(subject.key());
+      desiredOwnerByChild.insert(childId,
+                                 containerIdBySubject.value(ownerSubject));
+      desiredChildOrder.append(childId);
+    }
+  }
+  for (const QString &elementId : acceptedElementIds) {
+    const QString ownerSubject =
+        nearestPresentedContainerSubject(QStringLiteral("element"), elementId);
+    if (!ownerSubject.isEmpty()) {
+      const QString childId = nodeIdByElement.value(elementId);
+      desiredOwnerByChild.insert(childId,
+                                 containerIdBySubject.value(ownerSubject));
+      desiredChildOrder.append(childId);
+    }
+  }
+
+  QSet<QString> affectedChildIds;
+  for (auto owner = desiredOwnerByChild.cbegin();
+       owner != desiredOwnerByChild.cend(); ++owner)
+    affectedChildIds.insert(owner.key());
+
+  QHash<QString, QStringList> existingChildrenAfter;
+  for (const auto &container : diagram->containers) {
+    QStringList children = container.childPresentationIds;
+    children.removeIf([&](const QString &childId) {
+      return affectedChildIds.contains(childId);
+    });
+    existingChildrenAfter.insert(container.id, std::move(children));
+  }
+  for (const QString &childId : desiredChildOrder) {
+    const QString containerId = desiredOwnerByChild.value(childId);
+    const auto existing = existingChildrenAfter.find(containerId);
+    if (existing != existingChildrenAfter.end()) {
+      if (!existing->contains(childId))
+        existing->append(childId);
+      continue;
+    }
+    const auto newContainerIndex = newContainerIndexById.constFind(containerId);
+    if (newContainerIndex != newContainerIndexById.cend()) {
+      auto &newContainer = newContainers[*newContainerIndex];
+      if (!newContainer.childPresentationIds.contains(childId))
+        newContainer.childPresentationIds.append(childId);
+    }
+  }
+
+  QList<ContainerChildrenChange> membershipChanges;
+  for (const auto &container : diagram->containers) {
+    const QStringList after = existingChildrenAfter.value(container.id);
+    if (after != container.childPresentationIds)
+      membershipChanges.append(
+          {container.id, container.childPresentationIds, after});
+  }
+
+  QList<ConnectorPresentation> connectors;
+  for (const auto &node : newNodes) {
+    auto additions =
+        connectorsForNewPresentation(m_data, prospective, node.elementId);
+    prospective.connectors.append(additions);
+    connectors.append(std::move(additions));
+  }
+
+  if (newContainers.isEmpty() && newNodes.isEmpty() &&
+      membershipChanges.isEmpty()) {
+    m_diagnostics.addInfo(
+        QStringLiteral("command"),
+        QStringLiteral("The selected containers and their contents are already "
+                       "on this diagram"));
+    return 0;
+  }
+  const int changes = qMax(1, newContainers.size() + newNodes.size());
+  pushCommand(std::make_unique<AddContainerPresentationsCommand>(
+      this, m_data, diagramId, std::move(newContainers), std::move(newNodes),
+      std::move(connectors), std::move(membershipChanges)));
+  return changes;
+}
+
 void ProjectController::removePresentations(const QString &diagramId,
                                             const QStringList &nodeIds) {
   if (nodeIds.isEmpty())
@@ -781,6 +1729,16 @@ void ProjectController::removePresentations(const QString &diagramId,
     return;
   pushCommand(std::make_unique<RemovePresentationsCommand>(this, m_data,
                                                            diagramId, ids));
+  clearSelection();
+}
+
+void ProjectController::removeContainerPresentation(
+    const QString &diagramId, const QString &containerId) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || !findContainer(*diagram, containerId))
+    return;
+  pushCommand(std::make_unique<RemoveContainerPresentationCommand>(
+      this, m_data, diagramId, containerId));
   clearSelection();
 }
 
@@ -863,44 +1821,142 @@ void ProjectController::updateNodeGeometry(const QString &diagramId,
 
 void ProjectController::updateNodeGeometries(const QString &diagramId,
                                              const QVariantList &geometries) {
-  updateNodeGeometries(diagramId, geometries,
-                       QStringLiteral("Move or resize diagram elements"));
+  updatePresentationGeometries(
+      diagramId, geometries, QStringLiteral("Move or resize diagram elements"));
 }
 
-void ProjectController::updateNodeGeometries(const QString &diagramId,
-                                             const QVariantList &geometries,
-                                             const QString &description) {
+void ProjectController::setNodePortSnapPoints(const QString &diagramId,
+                                              const QString &nodeId,
+                                              int horizontalPointCount,
+                                              int verticalPointCount) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *node = diagram ? findNode(*diagram, nodeId) : nullptr;
+  if (!node)
+    return;
+
+  const int horizontal =
+      connector_ports::normalizedSnapPointCount(horizontalPointCount);
+  const int vertical =
+      connector_ports::normalizedSnapPointCount(verticalPointCount);
+  if (node->horizontalPortSnapPoints == horizontal &&
+      node->verticalPortSnapPoints == vertical)
+    return;
+
+  pushCommand(std::make_unique<SetNodePortSnapPointsCommand>(
+      this, diagramId, nodeId, node->horizontalPortSnapPoints,
+      node->verticalPortSnapPoints, horizontal, vertical));
+}
+
+void ProjectController::updatePresentationGeometries(
+    const QString &diagramId, const QVariantList &geometries,
+    const QString &description) {
+  commitPresentationChanges(diagramId, geometries, {}, std::nullopt,
+                            description);
+}
+
+void ProjectController::movePresentationsToContainer(
+    const QString &diagramId, const QVariantList &geometries,
+    const QStringList &movedPresentationIds, const QString &targetContainerId,
+    const QString &description, bool reassignPackage) {
+  commitPresentationChanges(diagramId, geometries, movedPresentationIds,
+                            targetContainerId, description, reassignPackage);
+}
+
+QString ProjectController::presentationMovePackageChangeSummary(
+    const QString &diagramId, const QStringList &movedPresentationIds,
+    const QString &targetContainerId) const {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram)
+    return {};
+
+  const QString targetPackageId =
+      packageIdForDiagramContainer(*diagram, targetContainerId);
+
+  QSet<QString> changedElementIds;
+  for (const QString &presentationId : movedPresentationIds) {
+    if (ownerContainerIdForPresentation(*diagram, presentationId) ==
+        targetContainerId)
+      continue;
+    const QString elementId =
+        elementIdForPresentation(*diagram, presentationId);
+    const auto *element = findElement(m_data, elementId);
+    if (element && element->packageId != targetPackageId)
+      changedElementIds.insert(elementId);
+  }
+  return packageReassignmentPrompt(m_data, changedElementIds, targetPackageId);
+}
+
+void ProjectController::commitPresentationChanges(
+    const QString &diagramId, const QVariantList &geometries,
+    const QStringList &movedPresentationIds,
+    const std::optional<QString> &targetContainerId, const QString &description,
+    bool reassignPackage) {
   const auto *diagram = findDiagram(m_data, diagramId);
   if (!diagram)
     return;
 
-  QList<NodeGeometryChange> changes;
+  QList<PresentationGeometryChange> changes;
   QHash<QString, int> changeIndex;
   for (const auto &value : geometries) {
     const QVariantMap map = value.toMap();
-    const QString nodeId = map.value(QStringLiteral("id")).toString();
-    const auto *node = findNode(*diagram, nodeId);
-    if (!node)
+    const QString presentationId = map.value(QStringLiteral("id")).toString();
+    const auto *node = findNode(*diagram, presentationId);
+    const auto *container = findContainer(*diagram, presentationId);
+    if (!node && !container)
       continue;
+    const qreal minimumWidth = container
+                                   ? presentation_layout::kMinimumContainerWidth
+                                   : presentation_layout::kMinimumNodeWidth;
+    const qreal minimumHeight =
+        container ? presentation_layout::kMinimumContainerHeight
+                  : presentation_layout::kMinimumNodeHeight;
     const QRectF geometry(
         map.value(QStringLiteral("x")).toDouble(),
         map.value(QStringLiteral("y")).toDouble(),
-        qMax(120.0, map.value(QStringLiteral("width")).toDouble()),
-        qMax(60.0, map.value(QStringLiteral("height")).toDouble()));
-    const auto existing = changeIndex.constFind(nodeId);
+        qMax(minimumWidth, map.value(QStringLiteral("width")).toDouble()),
+        qMax(minimumHeight, map.value(QStringLiteral("height")).toDouble()));
+    const auto existing = changeIndex.constFind(presentationId);
     if (existing == changeIndex.cend()) {
-      changeIndex.insert(nodeId, static_cast<int>(changes.size()));
-      changes.append({nodeId, node->geometry, geometry});
+      changeIndex.insert(presentationId, static_cast<int>(changes.size()));
+      changes.append({presentationId,
+                      node ? node->geometry : container->geometry, geometry});
     } else {
       changes[*existing].after = geometry;
     }
   }
-  changes.removeIf([](const NodeGeometryChange &change) {
+  changes.removeIf([](const PresentationGeometryChange &change) {
     return change.before == change.after;
   });
-  if (!changes.isEmpty())
-    pushCommand(std::make_unique<UpdateNodeGeometriesCommand>(
-        this, diagramId, std::move(changes), description));
+  const QList<ContainerChildrenChange> membershipChanges =
+      targetContainerId
+          ? membershipChangesForDrop(*diagram, movedPresentationIds,
+                                     *targetContainerId)
+          : QList<ContainerChildrenChange>{};
+
+  QList<ElementPackageChange> packageChanges;
+  if (reassignPackage && targetContainerId) {
+    const QString targetPackageId =
+        packageIdForDiagramContainer(*diagram, *targetContainerId);
+    QSet<QString> seenElementIds;
+    for (const QString &presentationId : movedPresentationIds) {
+      if (ownerContainerIdForPresentation(*diagram, presentationId) ==
+          *targetContainerId)
+        continue;
+      const QString elementId =
+          elementIdForPresentation(*diagram, presentationId);
+      const auto *element = findElement(m_data, elementId);
+      if (!element || seenElementIds.contains(elementId) ||
+          element->packageId == targetPackageId)
+        continue;
+      seenElementIds.insert(elementId);
+      packageChanges.append({elementId, element->packageId, targetPackageId});
+    }
+  }
+  if (!changes.isEmpty() || !membershipChanges.isEmpty() ||
+      !packageChanges.isEmpty())
+    pushCommand(std::make_unique<UpdatePresentationGeometriesCommand>(
+        this, diagramId, std::move(changes), membershipChanges,
+        std::move(packageChanges), description));
 }
 
 QString ProjectController::createRelationship(const QString &diagramId,
@@ -1245,6 +2301,12 @@ void ProjectController::editText(const QString &objectId, const QString &field,
     if (before != trimmed)
       pushCommand(std::make_unique<EditElementTextCommand>(
           this, objectId, property, index, before, trimmed, description));
+    return;
+  }
+  if (const auto *folder = findBrowserFolder(m_data, objectId)) {
+    if (field == QStringLiteral("name") && folder->name != trimmed)
+      pushCommand(std::make_unique<RenameBrowserFolderCommand>(
+          this, objectId, folder->name, trimmed));
     return;
   }
   if (const auto *relationship = findRelationship(m_data, objectId)) {

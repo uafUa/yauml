@@ -20,11 +20,16 @@ constexpr auto kDefaultDistributionGapKey = "defaultDistributionGap";
 constexpr auto kSnapToGridEnabledKey = "snapToGridEnabled";
 constexpr auto kAlignmentGuidesEnabledKey = "alignmentGuidesEnabled";
 constexpr auto kGridSpacingKey = "gridSpacing";
+constexpr auto kDiagramItemSizingModeKey = "itemSizingMode";
 constexpr auto kConnectorSettingsGroup = "preferences/connectors";
 constexpr auto kDefaultConnectorRoutingKey = "defaultRouting";
 constexpr auto kRelationshipGestureKeySuffix = "GestureKey";
 constexpr auto kCppImportSettingsGroup = "preferences/cppImport";
 constexpr auto kCppInterfacePatternKey = "interfacePattern";
+constexpr auto kCppOwningPointerTypesKey = "owningPointerTypes";
+constexpr auto kCppSharedPointerTypesKey = "sharedPointerTypes";
+constexpr auto kModelingSettingsGroup = "preferences/modeling";
+constexpr auto kPackageReassignmentPolicyKey = "packageReassignmentPolicy";
 constexpr auto kHistorySettingsGroup = "history";
 constexpr auto kRecentProjectsKey = "recentProjects";
 
@@ -83,6 +88,36 @@ bool normalizeRelationshipGestureKeys(const QVariantMap &candidate,
   return true;
 }
 
+QString normalizedPackageReassignmentPolicy(const QString &candidate) {
+  const QString normalized = candidate.trimmed().toLower();
+  if (normalized == QStringLiteral("disallow") ||
+      normalized == QStringLiteral("allow"))
+    return normalized;
+  return QStringLiteral("ask");
+}
+
+QString normalizedDiagramItemSizingMode(const QString &candidate) {
+  return candidate.trimmed().toLower() == QStringLiteral("fixed")
+             ? QStringLiteral("fixed")
+             : QStringLiteral("content");
+}
+
+QStringList normalizedCppTypeNames(const QStringList &candidates) {
+  QStringList normalized;
+  for (QString candidate : candidates) {
+    candidate = candidate.trimmed();
+    while (candidate.startsWith(QStringLiteral("::")))
+      candidate.remove(0, 2);
+    candidate.remove(QRegularExpression(QStringLiteral("\\s+")));
+    const qsizetype templateStart = candidate.indexOf(u'<');
+    if (templateStart >= 0)
+      candidate.truncate(templateStart);
+    if (!candidate.isEmpty() && !normalized.contains(candidate))
+      normalized.append(std::move(candidate));
+  }
+  return normalized;
+}
+
 } // namespace
 
 ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
@@ -105,6 +140,11 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
   m_gridSpacing = validGridSpacing(
       settings.value(QLatin1String(kGridSpacingKey), kDefaultGridSpacing)
           .toInt());
+  m_diagramItemSizingMode = normalizedDiagramItemSizingMode(
+      settings
+          .value(QLatin1String(kDiagramItemSizingModeKey),
+                 QLatin1String(kDefaultDiagramItemSizingMode))
+          .toString());
   settings.endGroup();
 
   settings.beginGroup(QLatin1String(kConnectorSettingsGroup));
@@ -143,6 +183,26 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
               QRegularExpression(storedInterfacePattern).isValid()
           ? storedInterfacePattern
           : defaultCppInterfacePattern();
+  m_cppOwningPointerTypes = normalizedCppTypeNames(
+      settings
+          .value(QLatin1String(kCppOwningPointerTypesKey),
+                 defaultCppOwningPointerTypes())
+          .toStringList());
+  m_cppSharedPointerTypes = normalizedCppTypeNames(
+      settings
+          .value(QLatin1String(kCppSharedPointerTypesKey),
+                 defaultCppSharedPointerTypes())
+          .toStringList());
+  for (const QString &owningType : std::as_const(m_cppOwningPointerTypes))
+    m_cppSharedPointerTypes.removeAll(owningType);
+  settings.endGroup();
+
+  settings.beginGroup(QLatin1String(kModelingSettingsGroup));
+  m_packageReassignmentPolicy = normalizedPackageReassignmentPolicy(
+      settings
+          .value(QLatin1String(kPackageReassignmentPolicyKey),
+                 defaultPackageReassignmentPolicy())
+          .toString());
   settings.endGroup();
 
   settings.beginGroup(QLatin1String(kHistorySettingsGroup));
@@ -174,6 +234,18 @@ QVariantMap ApplicationSettings::defaultRelationshipGestureKeys() {
 
 QString ApplicationSettings::defaultCppInterfacePattern() {
   return CppImportOptions::defaultInterfacePattern();
+}
+
+QStringList ApplicationSettings::defaultCppOwningPointerTypes() {
+  return CppImportOptions::defaultOwningPointerTypes();
+}
+
+QStringList ApplicationSettings::defaultCppSharedPointerTypes() {
+  return CppImportOptions::defaultSharedPointerTypes();
+}
+
+QString ApplicationSettings::defaultPackageReassignmentPolicy() {
+  return QStringLiteral("ask");
 }
 
 void ApplicationSettings::setDefaultDistributionGap(int gap) {
@@ -218,6 +290,19 @@ void ApplicationSettings::setGridSpacing(int spacing) {
   m_gridSpacing = validSpacing;
   persistDiagramPreferences();
   emit gridSpacingChanged();
+}
+
+QString ApplicationSettings::diagramItemSizingMode() const {
+  return m_diagramItemSizingMode;
+}
+
+void ApplicationSettings::setDiagramItemSizingMode(const QString &mode) {
+  const QString normalized = normalizedDiagramItemSizingMode(mode);
+  if (m_diagramItemSizingMode == normalized)
+    return;
+  m_diagramItemSizingMode = normalized;
+  persistDiagramPreferences();
+  emit diagramItemSizingModeChanged();
 }
 
 QString ApplicationSettings::defaultConnectorRouting() const {
@@ -271,6 +356,44 @@ bool ApplicationSettings::isValidCppInterfacePattern(
   return !pattern.isEmpty() && QRegularExpression(pattern).isValid();
 }
 
+QStringList ApplicationSettings::cppOwningPointerTypes() const {
+  return m_cppOwningPointerTypes;
+}
+
+QStringList ApplicationSettings::cppSharedPointerTypes() const {
+  return m_cppSharedPointerTypes;
+}
+
+void ApplicationSettings::setCppPointerTypes(const QStringList &owningTypes,
+                                             const QStringList &sharedTypes) {
+  QStringList normalizedOwning = normalizedCppTypeNames(owningTypes);
+  QStringList normalizedShared = normalizedCppTypeNames(sharedTypes);
+  // An overlap is ambiguous. Exclusive ownership is the stronger declaration,
+  // so it wins deterministically and the type is removed from the shared list.
+  for (const QString &owningType : std::as_const(normalizedOwning))
+    normalizedShared.removeAll(owningType);
+  if (m_cppOwningPointerTypes == normalizedOwning &&
+      m_cppSharedPointerTypes == normalizedShared)
+    return;
+  m_cppOwningPointerTypes = std::move(normalizedOwning);
+  m_cppSharedPointerTypes = std::move(normalizedShared);
+  persistCppImportPreferences();
+  emit cppPointerTypesChanged();
+}
+
+QString ApplicationSettings::packageReassignmentPolicy() const {
+  return m_packageReassignmentPolicy;
+}
+
+void ApplicationSettings::setPackageReassignmentPolicy(const QString &policy) {
+  const QString normalized = normalizedPackageReassignmentPolicy(policy);
+  if (m_packageReassignmentPolicy == normalized)
+    return;
+  m_packageReassignmentPolicy = normalized;
+  persistModelingPreferences();
+  emit packageReassignmentPolicyChanged();
+}
+
 QVariantList ApplicationSettings::recentProjects() const {
   QVariantList entries;
   entries.reserve(m_recentProjectPaths.size());
@@ -320,9 +443,13 @@ void ApplicationSettings::resetDefaults() {
   setSnapToGridEnabled(kDefaultSnapToGridEnabled);
   setAlignmentGuidesEnabled(kDefaultAlignmentGuidesEnabled);
   setGridSpacing(kDefaultGridSpacing);
+  setDiagramItemSizingMode(QLatin1String(kDefaultDiagramItemSizingMode));
   setDefaultConnectorRouting(toString(kDefaultConnectorRouting));
   setRelationshipGestureKeys(makeDefaultRelationshipGestureKeys());
   setCppInterfacePattern(defaultCppInterfacePattern());
+  setCppPointerTypes(defaultCppOwningPointerTypes(),
+                     defaultCppSharedPointerTypes());
+  setPackageReassignmentPolicy(defaultPackageReassignmentPolicy());
 }
 
 void ApplicationSettings::persistDiagramPreferences() const {
@@ -334,6 +461,8 @@ void ApplicationSettings::persistDiagramPreferences() const {
   settings.setValue(QLatin1String(kAlignmentGuidesEnabledKey),
                     m_alignmentGuidesEnabled);
   settings.setValue(QLatin1String(kGridSpacingKey), m_gridSpacing);
+  settings.setValue(QLatin1String(kDiagramItemSizingModeKey),
+                    m_diagramItemSizingMode);
   settings.endGroup();
   settings.sync();
 }
@@ -355,6 +484,19 @@ void ApplicationSettings::persistCppImportPreferences() const {
   settings.beginGroup(QLatin1String(kCppImportSettingsGroup));
   settings.setValue(QLatin1String(kCppInterfacePatternKey),
                     m_cppInterfacePattern);
+  settings.setValue(QLatin1String(kCppOwningPointerTypesKey),
+                    m_cppOwningPointerTypes);
+  settings.setValue(QLatin1String(kCppSharedPointerTypesKey),
+                    m_cppSharedPointerTypes);
+  settings.endGroup();
+  settings.sync();
+}
+
+void ApplicationSettings::persistModelingPreferences() const {
+  QSettings settings;
+  settings.beginGroup(QLatin1String(kModelingSettingsGroup));
+  settings.setValue(QLatin1String(kPackageReassignmentPolicyKey),
+                    m_packageReassignmentPolicy);
   settings.endGroup();
   settings.sync();
 }

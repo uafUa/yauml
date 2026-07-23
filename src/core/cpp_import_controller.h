@@ -18,6 +18,12 @@ class CppImportController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
   Q_PROPERTY(bool canApply READ canApply NOTIFY previewChanged)
+  Q_PROPERTY(bool canSynchronize READ canSynchronize NOTIFY
+                 synchronizationStateChanged)
+  Q_PROPERTY(QString configuredSourceRoot READ configuredSourceRoot NOTIFY
+                 synchronizationStateChanged)
+  Q_PROPERTY(
+      QString previewSourceRoot READ previewSourceRoot NOTIFY previewChanged)
   Q_PROPERTY(QString summary READ summary NOTIFY previewChanged)
   Q_PROPERTY(QString compilationDatabasePath READ compilationDatabasePath NOTIFY
                  previewChanged)
@@ -30,17 +36,22 @@ public:
 
   bool busy() const;
   bool canApply() const;
+  bool canSynchronize() const;
+  QString configuredSourceRoot() const;
+  QString previewSourceRoot() const;
   QString summary() const;
   QString compilationDatabasePath() const;
   QVariantList previewItems() const;
 
   Q_INVOKABLE void preview(const QUrl &sourceOrBuildDirectory);
+  Q_INVOKABLE void synchronize();
   Q_INVOKABLE void applyPreview();
   Q_INVOKABLE void clearPreview();
 
 signals:
   void busyChanged();
   void previewChanged();
+  void synchronizationStateChanged();
   void attentionRequired();
   void importApplied(int count);
 
@@ -55,6 +66,7 @@ private:
   CppImportPreview m_preview;
   QVariantList m_previewItems;
   QString m_summary;
+  QString m_requestedSourcePath;
   bool m_busy = false;
 };
 

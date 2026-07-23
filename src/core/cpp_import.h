@@ -21,8 +21,12 @@ QString toString(CppImportAction action);
 
 struct CppImportOptions {
   static QString defaultInterfacePattern();
+  static QStringList defaultOwningPointerTypes();
+  static QStringList defaultSharedPointerTypes();
 
   QString interfacePattern = defaultInterfacePattern();
+  QStringList owningPointerTypes = defaultOwningPointerTypes();
+  QStringList sharedPointerTypes = defaultSharedPointerTypes();
 };
 
 // A compiler-owned description of one C++ record. Keeping discovery separate
@@ -31,6 +35,10 @@ struct CppImportOptions {
 struct CppSourceSymbol {
   QString symbolId;
   QString qualifiedName;
+  // Only language namespaces are represented here. Enclosing record names
+  // remain part of qualifiedName so nested C++ types stay nested UML types
+  // rather than being mistaken for packages.
+  QString namespacePath;
   ElementType elementType = ElementType::Class;
   QStringList attributes;
   QStringList operations;
@@ -42,21 +50,23 @@ struct CppSourceSymbol {
   bool operator==(const CppSourceSymbol &) const = default;
 };
 
-// Direct inheritance discovered from a CXXBaseSpecifier. Both endpoints use
-// Clang identities rather than names so namespace moves and same-named types do
-// not accidentally connect unrelated model elements.
-struct CppSourceInheritance {
+// A semantic relationship inferred from C++ source. Both endpoints use Clang
+// identities rather than names so namespace moves and same-named types do not
+// accidentally connect unrelated model elements. evidenceKind describes the
+// evidence that produced the relationship and is persisted for synchronization.
+struct CppSourceRelationship {
   QString symbolId;
-  QString derivedSymbolId;
-  QString baseSymbolId;
-  QString derivedName;
-  QString baseName;
+  QString sourceSymbolId;
+  QString targetSymbolId;
+  QString sourceName;
+  QString targetName;
+  QString evidenceKind;
   RelationshipType relationshipType = RelationshipType::Generalization;
   QString classificationReason;
   QString filePath;
   int line = 0;
 
-  bool operator==(const CppSourceInheritance &) const = default;
+  bool operator==(const CppSourceRelationship &) const = default;
 };
 
 struct CppImportItem {
@@ -74,7 +84,7 @@ struct CppImportItem {
 
 struct CppRelationshipImportItem {
   CppImportAction action = CppImportAction::Unchanged;
-  CppSourceInheritance source;
+  CppSourceRelationship source;
   Relationship desiredRelationship;
   QString existingRelationshipId;
   QString message;
@@ -89,7 +99,7 @@ struct CppImportPreview {
   QString compilationDatabasePath;
   QString sourceRoot;
   QList<CppSourceSymbol> symbols;
-  QList<CppSourceInheritance> inheritances;
+  QList<CppSourceRelationship> relationships;
   QList<CppImportItem> items;
   QList<CppRelationshipImportItem> relationshipItems;
   // Discovery diagnostics are retained separately so Apply can re-plan

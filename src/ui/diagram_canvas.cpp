@@ -1,9 +1,12 @@
 #include "ui/diagram_canvas.h"
 
 #include "core/application_settings.h"
+#include "core/connector_port_layout.h"
+#include "core/presentation_layout.h"
 #include "core/project_controller.h"
 #include "ui/connector_routing.h"
 #include "ui/diagram_arrangement.h"
+#include "ui/diagram_clipping.h"
 #include "ui/diagram_snapping.h"
 #include "ui/relationship_style.h"
 #include "ui/text_occlusion.h"
@@ -26,18 +29,26 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <optional>
 
 namespace uuml {
 namespace {
 
-constexpr qreal kHeaderHeight = 30.0;
-constexpr qreal kLineHeight = 21.0;
-constexpr qreal kPadding = 8.0;
+constexpr qreal kHeaderHeight = presentation_layout::kNodeHeaderHeight;
+constexpr qreal kLineHeight = presentation_layout::kNodeLineHeight;
+constexpr qreal kPadding = presentation_layout::kNodeTextPadding;
 constexpr qreal kSnapToleranceViewPixels = 8.0;
-constexpr qreal kMinimumNodeWidth = 120.0;
-constexpr qreal kMinimumNodeHeight = 60.0;
+constexpr qreal kMinimumNodeWidth = presentation_layout::kMinimumNodeWidth;
+constexpr qreal kMinimumNodeHeight = presentation_layout::kMinimumNodeHeight;
+constexpr qreal kContainerHeaderHeight =
+    presentation_layout::kContainerHeaderHeight;
+constexpr qreal kMinimumContainerWidth =
+    presentation_layout::kMinimumContainerWidth;
+constexpr qreal kMinimumContainerHeight =
+    presentation_layout::kMinimumContainerHeight;
 constexpr int kTextAtlasSize = 2048;
 constexpr int kTextAtlasPadding = 2;
+constexpr qreal kPortSnapToleranceViewPixels = 10.0;
 
 struct RenderNode {
   QRectF rect;
@@ -47,6 +58,20 @@ struct RenderNode {
   QStringList operations;
   QStringList enumLiterals;
   bool selected = false;
+  QRectF clipRect;
+  bool hasClip = false;
+};
+
+struct RenderContainer {
+  QRectF rect;
+  QString name;
+  qreal titleWidth = 0.0;
+  bool package = false;
+  bool selected = false;
+  int depth = 0;
+  QRectF clipRect;
+  bool hasClip = false;
+  ui::ContainerOverflowEdges overflowEdges;
 };
 
 struct RenderConnector {
@@ -59,9 +84,18 @@ struct RenderConnector {
   bool preview = false;
 };
 
+struct RenderPortSnapPoint {
+  QPointF position;
+  bool active = false;
+  QRectF clipRect;
+  bool hasClip = false;
+};
+
 struct SceneSnapshot {
+  QVector<RenderContainer> containers;
   QVector<RenderNode> nodes;
   QVector<RenderConnector> connectors;
+  QVector<RenderPortSnapPoint> portSnapPoints;
   QVector<QLineF> alignmentGuides;
   QRectF lassoRect;
   bool lassoVisible = false;
@@ -186,6 +220,43 @@ ConnectorAnchor anchorAtPerimeterPoint(const QRectF &rect,
   return anchor;
 }
 
+ConnectorAnchor snappedAnchorAtPerimeterPoint(const NodePresentation &node,
+                                              const QRectF &rect,
+                                              const QPointF &point,
+                                              qreal tolerance,
+                                              bool *snapped = nullptr) {
+  ConnectorAnchor anchor = anchorAtPerimeterPoint(rect, point);
+  const bool horizontalSide =
+      anchor.side == ConnectorSide::Top || anchor.side == ConnectorSide::Bottom;
+  const qreal sideLength = horizontalSide ? rect.width() : rect.height();
+  anchor.offset = connector_ports::snapOffset(
+      anchor.offset, sideLength,
+      connector_ports::snapPointCountForSide(node, anchor.side), tolerance,
+      snapped);
+  return anchor;
+}
+
+void appendPortSnapPoints(SceneSnapshot &snapshot, const NodePresentation &node,
+                          const QRectF &rect,
+                          const std::optional<ConnectorAnchor> &activeAnchor,
+                          const QRectF &clipRect = {},
+                          bool hasClip = false) {
+  constexpr ConnectorSide sides[] = {ConnectorSide::Top, ConnectorSide::Right,
+                                     ConnectorSide::Bottom,
+                                     ConnectorSide::Left};
+  for (const ConnectorSide side : sides) {
+    const int count = connector_ports::snapPointCountForSide(node, side);
+    for (const qreal offset : connector_ports::snapOffsets(count)) {
+      const ConnectorAnchor anchor{side, offset};
+      const bool active = activeAnchor && activeAnchor->side == side &&
+                          std::abs(activeAnchor->offset - offset) < 0.000001;
+      snapshot.portSnapPoints.append(
+          {connectorAnchorPoint(rect, anchor, rect.center()), active, clipRect,
+           hasClip});
+    }
+  }
+}
+
 bool nearRectanglePerimeter(const QRectF &rect, const QPointF &point,
                             qreal tolerance) {
   if (!rect.adjusted(-tolerance, -tolerance, tolerance, tolerance)
@@ -239,6 +310,12 @@ void appendRect(QVector<QSGGeometry::ColoredPoint2D> &vertices,
                  rect.bottomRight(), color);
 }
 
+void appendClippedRect(QVector<QSGGeometry::ColoredPoint2D> &vertices,
+                       const QRectF &rect, const QColor &color,
+                       const QRectF &clipRect, bool hasClip) {
+  appendRect(vertices, hasClip ? rect.intersected(clipRect) : rect, color);
+}
+
 void appendLine(QVector<QSGGeometry::ColoredPoint2D> &vertices,
                 const QPointF &start, const QPointF &end, qreal width,
                 const QColor &color) {
@@ -250,6 +327,32 @@ void appendLine(QVector<QSGGeometry::ColoredPoint2D> &vertices,
                        delta.x() / length * width / 2.0);
   appendTriangle(vertices, start + normal, start - normal, end + normal, color);
   appendTriangle(vertices, end + normal, start - normal, end - normal, color);
+}
+
+void appendClippedAxisLine(QVector<QSGGeometry::ColoredPoint2D> &vertices,
+                           const QPointF &start, const QPointF &end,
+                           qreal width, const QColor &color,
+                           const QRectF &clipRect, bool hasClip) {
+  if (!hasClip) {
+    appendLine(vertices, start, end, width, color);
+    return;
+  }
+
+  const qreal halfWidth = width / 2.0;
+  QRectF stroke;
+  if (qFuzzyCompare(start.y(), end.y())) {
+    stroke = QRectF(std::min(start.x(), end.x()), start.y() - halfWidth,
+                    std::abs(end.x() - start.x()), width);
+  } else if (qFuzzyCompare(start.x(), end.x())) {
+    stroke = QRectF(start.x() - halfWidth, std::min(start.y(), end.y()), width,
+                    std::abs(end.y() - start.y()));
+  } else {
+    // Container and node chrome only uses axis-aligned segments. Retain the
+    // ordinary line as a defensive fallback if that invariant changes.
+    appendLine(vertices, start, end, width, color);
+    return;
+  }
+  appendRect(vertices, stroke.intersected(clipRect), color);
 }
 
 void appendAntialiasedLine(QVector<QSGGeometry::ColoredPoint2D> &vertices,
@@ -395,6 +498,78 @@ void appendBorder(QVector<QSGGeometry::ColoredPoint2D> &vertices,
   appendRect(vertices, {rect.left(), rect.top(), width, rect.height()}, color);
   appendRect(vertices, {rect.right() - width, rect.top(), width, rect.height()},
              color);
+}
+
+void appendClippedBorder(QVector<QSGGeometry::ColoredPoint2D> &vertices,
+                         const QRectF &rect, qreal width, const QColor &color,
+                         const QRectF &clipRect, bool hasClip) {
+  appendClippedRect(vertices,
+                    {rect.left(), rect.top(), rect.width(), width}, color,
+                    clipRect, hasClip);
+  appendClippedRect(vertices,
+                    {rect.left(), rect.bottom() - width, rect.width(), width},
+                    color, clipRect, hasClip);
+  appendClippedRect(vertices,
+                    {rect.left(), rect.top(), width, rect.height()}, color,
+                    clipRect, hasClip);
+  appendClippedRect(vertices,
+                    {rect.right() - width, rect.top(), width, rect.height()},
+                    color, clipRect, hasClip);
+}
+
+void appendContainerOutline(
+    QVector<QSGGeometry::ColoredPoint2D> &vertices,
+    const RenderContainer &container, qreal zoom,
+    const ui::UiPalette &palette) {
+  const QColor &border =
+      container.selected ? palette.accent : palette.containerBorder;
+  const qreal borderWidth = (container.selected ? 3.0 : 1.2) / zoom;
+  if (container.package) {
+    const qreal tabHeight = 24.0;
+    const qreal tabWidth =
+        std::clamp(container.titleWidth, 90.0, container.rect.width());
+    const QPointF topLeft = container.rect.topLeft();
+    const QPointF tabTopRight(container.rect.left() + tabWidth,
+                              container.rect.top());
+    const QPointF tabBottomRight(container.rect.left() + tabWidth,
+                                 container.rect.top() + tabHeight);
+    const QPointF bodyTopRight(container.rect.right(),
+                               container.rect.top() + tabHeight);
+    appendClippedAxisLine(vertices, topLeft,
+                          QPointF(tabTopRight.x(), topLeft.y()), borderWidth,
+                          border, container.clipRect, container.hasClip);
+    appendClippedAxisLine(vertices, tabTopRight, tabBottomRight, borderWidth,
+                          border, container.clipRect, container.hasClip);
+    appendClippedAxisLine(vertices, tabBottomRight, bodyTopRight, borderWidth,
+                          border, container.clipRect, container.hasClip);
+    appendClippedAxisLine(vertices, bodyTopRight, container.rect.bottomRight(),
+                          borderWidth, border, container.clipRect,
+                          container.hasClip);
+    appendClippedAxisLine(vertices, container.rect.bottomRight(),
+                          container.rect.bottomLeft(), borderWidth, border,
+                          container.clipRect, container.hasClip);
+    appendClippedAxisLine(vertices, container.rect.bottomLeft(), topLeft,
+                          borderWidth, border, container.clipRect,
+                          container.hasClip);
+  } else {
+    appendClippedBorder(vertices, container.rect, borderWidth, border,
+                        container.clipRect, container.hasClip);
+    appendClippedAxisLine(
+        vertices,
+        QPointF(container.rect.left(),
+                container.rect.top() + kContainerHeaderHeight),
+        QPointF(container.rect.right(),
+                container.rect.top() + kContainerHeaderHeight),
+        1.0 / zoom, border, container.clipRect, container.hasClip);
+  }
+
+  if (container.selected) {
+    const qreal handle = 9.0 / zoom;
+    appendClippedRect(vertices,
+                      {container.rect.right() - handle,
+                       container.rect.bottom() - handle, handle, handle},
+                      palette.accent, container.clipRect, container.hasClip);
+  }
 }
 
 QSGGeometryNode *
@@ -812,9 +987,38 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
                             int detail) {
   const auto &palette = ui::uiPalette();
   QVector<QSGGeometry::ColoredPoint2D> vertices;
-  vertices.reserve(snapshot.nodes.size() * 48 +
-                   snapshot.connectors.size() * 96);
+  vertices.reserve(
+      snapshot.containers.size() * 32 + snapshot.nodes.size() * 48 +
+      snapshot.connectors.size() * 96 + snapshot.portSnapPoints.size() * 12);
 
+  for (const auto &container : snapshot.containers) {
+    if (container.package) {
+      const qreal tabHeight = 24.0;
+      const qreal tabWidth =
+          std::clamp(container.titleWidth, 90.0, container.rect.width());
+      const QRectF tab(container.rect.left(), container.rect.top(), tabWidth,
+                       tabHeight);
+      const QRectF body(container.rect.left(), container.rect.top() + tabHeight,
+                        container.rect.width(),
+                        container.rect.height() - tabHeight);
+      appendClippedRect(vertices, body, palette.containerFill,
+                        container.clipRect, container.hasClip);
+      appendClippedRect(vertices, tab, palette.containerHeaderFill,
+                        container.clipRect, container.hasClip);
+    } else {
+      appendClippedRect(vertices, container.rect, palette.containerFill,
+                        container.clipRect, container.hasClip);
+      appendClippedRect(
+          vertices,
+          {container.rect.left(), container.rect.top(), container.rect.width(),
+           kContainerHeaderHeight},
+          palette.containerHeaderFill, container.clipRect, container.hasClip);
+    }
+  }
+
+  // Container fills are diagram backgrounds for interaction purposes. Draw
+  // the translucent selection area above them so a lasso started inside a
+  // frame remains as visible as one started on the root canvas.
   if (snapshot.lassoVisible)
     appendRect(vertices, snapshot.lassoRect, palette.selectionOverlay);
 
@@ -851,35 +1055,96 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
 
   for (const auto &node : snapshot.nodes) {
     const QColor &border = node.selected ? palette.accent : palette.nodeBorder;
-    appendRect(vertices, node.rect, elementColor(node.type, palette));
-    appendRect(
+    appendClippedRect(vertices, node.rect, elementColor(node.type, palette),
+                      node.clipRect, node.hasClip);
+    appendClippedRect(
         vertices,
         {node.rect.left(), node.rect.top(), node.rect.width(), kHeaderHeight},
-        elementColor(node.type, palette).darker(104));
-    appendBorder(vertices, node.rect, (node.selected ? 3.0 : 1.2) / zoom,
-                 border);
+        elementColor(node.type, palette).darker(104), node.clipRect,
+        node.hasClip);
+    appendClippedBorder(vertices, node.rect,
+                        (node.selected ? 3.0 : 1.2) / zoom, border,
+                        node.clipRect, node.hasClip);
     if (detail > 0) {
-      appendLine(vertices,
-                 QPointF(node.rect.left(), node.rect.top() + kHeaderHeight),
-                 QPointF(node.rect.right(), node.rect.top() + kHeaderHeight),
-                 1.0 / zoom, palette.compartmentLine);
+      appendClippedAxisLine(
+          vertices, QPointF(node.rect.left(), node.rect.top() + kHeaderHeight),
+          QPointF(node.rect.right(), node.rect.top() + kHeaderHeight),
+          1.0 / zoom, palette.compartmentLine, node.clipRect, node.hasClip);
     }
     if (detail == 2 && node.type != ElementType::Enumeration &&
         !node.attributes.isEmpty() && !node.operations.isEmpty()) {
       const qreal y = node.rect.top() + kHeaderHeight +
                       node.attributes.size() * kLineHeight;
       if (y <= node.rect.bottom())
-        appendLine(vertices, QPointF(node.rect.left(), y),
-                   QPointF(node.rect.right(), y), 1.0 / zoom,
-                   palette.compartmentDivider);
+        appendClippedAxisLine(
+            vertices, QPointF(node.rect.left(), y),
+            QPointF(node.rect.right(), y), 1.0 / zoom,
+            palette.compartmentDivider, node.clipRect, node.hasClip);
     }
     if (node.selected) {
       const qreal handle = 9.0 / zoom;
-      appendRect(vertices,
-                 {node.rect.right() - handle, node.rect.bottom() - handle,
-                  handle, handle},
-                 palette.accent);
+      appendClippedRect(vertices,
+                        {node.rect.right() - handle,
+                         node.rect.bottom() - handle, handle, handle},
+                        palette.accent, node.clipRect, node.hasClip);
     }
+  }
+
+  // Child geometry is clipped just inside the frame, and this final outline
+  // pass guarantees that selected/thicker borders remain crisp at every zoom.
+  for (const auto &container : snapshot.containers)
+    appendContainerOutline(vertices, container, zoom, palette);
+
+  // A short warning-colored segment on an edge signals that direct children
+  // continue beyond that side of the container's visible content area.
+  for (const auto &container : snapshot.containers) {
+    if (!container.overflowEdges)
+      continue;
+    const qreal headerHeight =
+        container.package ? 24.0 : kContainerHeaderHeight;
+    const QRectF contentRect(
+        container.rect.left(), container.rect.top() + headerHeight,
+        container.rect.width(), container.rect.height() - headerHeight);
+    const qreal markerLength = 28.0 / zoom;
+    const qreal markerThickness = 4.0 / zoom;
+    const auto appendMarker = [&](const QRectF &marker) {
+      appendClippedRect(vertices, marker, palette.warningBorder,
+                        container.clipRect, container.hasClip);
+    };
+    if (container.overflowEdges.testFlag(ui::ContainerOverflowEdge::Left))
+      appendMarker({contentRect.left(), contentRect.center().y() -
+                                            markerLength / 2.0,
+                    markerThickness, markerLength});
+    if (container.overflowEdges.testFlag(ui::ContainerOverflowEdge::Right))
+      appendMarker({contentRect.right() - markerThickness,
+                    contentRect.center().y() - markerLength / 2.0,
+                    markerThickness, markerLength});
+    if (container.overflowEdges.testFlag(ui::ContainerOverflowEdge::Top))
+      appendMarker({contentRect.center().x() - markerLength / 2.0,
+                    contentRect.top(), markerLength, markerThickness});
+    if (container.overflowEdges.testFlag(ui::ContainerOverflowEdge::Bottom))
+      appendMarker({contentRect.center().x() - markerLength / 2.0,
+                    contentRect.bottom() - markerThickness, markerLength,
+                    markerThickness});
+  }
+
+  // Port targets are transient interaction aids. A hollow square is available
+  // for snapping; a filled square is the point currently holding the end.
+  const qreal snapOuterSize = 8.0 / zoom;
+  const qreal snapInnerSize = 4.0 / zoom;
+  for (const auto &point : snapshot.portSnapPoints) {
+    appendClippedRect(vertices,
+                      {point.position.x() - snapOuterSize / 2.0,
+                       point.position.y() - snapOuterSize / 2.0, snapOuterSize,
+                       snapOuterSize},
+                      palette.accent, point.clipRect, point.hasClip);
+    appendClippedRect(
+        vertices,
+        {point.position.x() - snapInnerSize / 2.0,
+         point.position.y() - snapInnerSize / 2.0, snapInnerSize,
+         snapInnerSize},
+        point.active ? palette.activeHandleFill : palette.surface,
+        point.clipRect, point.hasClip);
   }
   // Selection handles must be drawn after element fills. Endpoint handles sit
   // on element edges, so drawing them with the connector body would hide half
@@ -945,8 +1210,45 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
 
   QList<QRectF> allNodeRects;
   allNodeRects.reserve(snapshot.nodes.size());
-  for (const auto &node : snapshot.nodes)
-    allNodeRects.append(node.rect);
+  for (const auto &node : snapshot.nodes) {
+    const QRectF visibleRect =
+        node.hasClip ? node.rect.intersected(node.clipRect) : node.rect;
+    if (!visibleRect.isEmpty())
+      allNodeRects.append(visibleRect);
+  }
+
+  for (qsizetype containerIndex = 0;
+       containerIndex < snapshot.containers.size(); ++containerIndex) {
+    const auto &container = snapshot.containers.at(containerIndex);
+    if (coverage.isValid() && !coverage.intersects(container.rect))
+      continue;
+    const qreal titleWidth =
+        container.package
+            ? std::clamp(container.titleWidth, 90.0,
+                         container.rect.width()) -
+                  2.0 * kPadding
+            : container.rect.width() - 2 * kPadding;
+    const qreal titleHeight = container.package ? 24.0 : kContainerHeaderHeight;
+    QRectF clip = container.rect.adjusted(kPadding, 0, -kPadding, 0);
+    if (container.hasClip)
+      clip = clip.intersected(container.clipRect);
+    const QRectF target(container.rect.left() + kPadding, container.rect.top(),
+                        titleWidth, titleHeight);
+    QList<QRectF> occluders = allNodeRects;
+    for (qsizetype later = containerIndex + 1;
+         later < snapshot.containers.size(); ++later) {
+      const auto &laterContainer = snapshot.containers.at(later);
+      const QRectF laterVisible =
+          laterContainer.hasClip
+              ? laterContainer.rect.intersected(laterContainer.clipRect)
+              : laterContainer.rect;
+      if (laterVisible.intersects(target))
+        occluders.append(laterVisible);
+    }
+    appendVisibleText(target, clip, container.name, header,
+                      palette.containerTitleText,
+                      Qt::AlignVCenter | Qt::AlignLeft, occluders);
+  }
 
   for (const auto &connector : snapshot.connectors) {
     if (detail != 2 || connector.name.isEmpty() || connector.points.size() < 2)
@@ -966,10 +1268,18 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
     QList<QRectF> laterNodeRects;
     for (qsizetype later = nodeIndex + 1; later < snapshot.nodes.size();
          ++later) {
-      if (snapshot.nodes.at(later).rect.intersects(node.rect))
-        laterNodeRects.append(snapshot.nodes.at(later).rect);
+      const auto &laterNode = snapshot.nodes.at(later);
+      const QRectF laterVisible =
+          laterNode.hasClip
+              ? laterNode.rect.intersected(laterNode.clipRect)
+              : laterNode.rect;
+      if (laterVisible.intersects(node.rect))
+        laterNodeRects.append(laterVisible);
     }
-    const QRectF nodeTextClip = node.rect.adjusted(kPadding, 0, -kPadding, 0);
+    QRectF nodeTextClip =
+        node.rect.adjusted(kPadding, 0, -kPadding, 0);
+    if (node.hasClip)
+      nodeTextClip = nodeTextClip.intersected(node.clipRect);
     const QRectF headerTarget(node.rect.left() + kPadding, node.rect.top(),
                               node.rect.width() - 2 * kPadding, kHeaderHeight);
     appendVisibleText(headerTarget, nodeTextClip, node.name, header,
@@ -1028,7 +1338,8 @@ void DiagramCanvas::setProject(ProjectController *project) {
     connect(m_project, &ProjectController::stateChanged, this, [this] {
       m_sceneDirty = true;
       m_textDirty = true;
-      if (!m_selectedConnector.isEmpty())
+      if (!m_selectedNodes.isEmpty() || !m_selectedConnector.isEmpty() ||
+          !m_selectedContainer.isEmpty())
         emit canvasSelectionChanged();
       update();
     });
@@ -1058,6 +1369,10 @@ bool DiagramCanvas::connectorSelected() const {
   return !m_selectedConnector.isEmpty();
 }
 
+bool DiagramCanvas::containerSelected() const {
+  return !m_selectedContainer.isEmpty();
+}
+
 bool DiagramCanvas::bendPointSelected() const {
   if (m_selectedBendPoint < 0)
     return false;
@@ -1076,6 +1391,28 @@ QString DiagramCanvas::selectedConnectorRouting() const {
   const auto *d = diagram();
   const auto *connector = d ? findConnector(*d, m_selectedConnector) : nullptr;
   return connector ? toString(connector->routing) : QString{};
+}
+
+int DiagramCanvas::selectedHorizontalPortSnapPoints() const {
+  if (m_selectedNodes.size() != 1)
+    return connector_ports::kDefaultSnapPointCount;
+  const auto *currentDiagram = diagram();
+  const auto *node =
+      currentDiagram ? findNode(*currentDiagram, *m_selectedNodes.constBegin())
+                     : nullptr;
+  return node ? node->horizontalPortSnapPoints
+              : connector_ports::kDefaultSnapPointCount;
+}
+
+int DiagramCanvas::selectedVerticalPortSnapPoints() const {
+  if (m_selectedNodes.size() != 1)
+    return connector_ports::kDefaultSnapPointCount;
+  const auto *currentDiagram = diagram();
+  const auto *node =
+      currentDiagram ? findNode(*currentDiagram, *m_selectedNodes.constBegin())
+                     : nullptr;
+  return node ? node->verticalPortSnapPoints
+              : connector_ports::kDefaultSnapPointCount;
 }
 
 QVariantMap DiagramCanvas::relationshipGestureKeys() const {
@@ -1168,6 +1505,20 @@ void DiagramCanvas::setGridSpacing(int spacing) {
   update();
 }
 
+QString DiagramCanvas::diagramItemSizingMode() const {
+  return m_diagramItemSizingMode;
+}
+
+void DiagramCanvas::setDiagramItemSizingMode(const QString &mode) {
+  const QString normalized = mode.trimmed().toLower() == QStringLiteral("fixed")
+                                 ? QStringLiteral("fixed")
+                                 : QStringLiteral("content");
+  if (m_diagramItemSizingMode == normalized)
+    return;
+  m_diagramItemSizingMode = normalized;
+  emit diagramItemSizingModeChanged();
+}
+
 QString DiagramCanvas::defaultConnectorRouting() const {
   return toString(m_defaultConnectorRouting);
 }
@@ -1180,6 +1531,21 @@ void DiagramCanvas::setDefaultConnectorRouting(const QString &routing) {
     return;
   m_defaultConnectorRouting = parsed;
   emit defaultConnectorRoutingChanged();
+}
+
+QString DiagramCanvas::packageReassignmentPolicy() const {
+  return m_packageReassignmentPolicy;
+}
+
+void DiagramCanvas::setPackageReassignmentPolicy(const QString &policy) {
+  QString normalized = policy.trimmed().toLower();
+  if (normalized != QStringLiteral("allow") &&
+      normalized != QStringLiteral("disallow"))
+    normalized = QStringLiteral("ask");
+  if (m_packageReassignmentPolicy == normalized)
+    return;
+  m_packageReassignmentPolicy = normalized;
+  emit packageReassignmentPolicyChanged();
 }
 
 void DiagramCanvas::refreshTheme() {
@@ -1195,6 +1561,49 @@ const Diagram *DiagramCanvas::diagram() const {
 
 QRectF DiagramCanvas::nodeGeometry(const NodePresentation &node) const {
   return m_previewGeometry.value(node.id, node.geometry);
+}
+
+QRectF
+DiagramCanvas::containerGeometry(const ContainerPresentation &container) const {
+  return m_previewGeometry.value(container.id, container.geometry);
+}
+
+QRectF DiagramCanvas::containerChildViewport(
+    const ContainerPresentation &container) const {
+  const auto *currentDiagram = diagram();
+  return currentDiagram
+             ? ui::DiagramClipLayout(*currentDiagram, m_previewGeometry)
+                   .childViewport(container)
+             : QRectF{};
+}
+
+QRectF DiagramCanvas::presentationClipRect(const QString &presentationId,
+                                           bool *hasClip) const {
+  const auto *currentDiagram = diagram();
+  if (!currentDiagram) {
+    *hasClip = false;
+    return {};
+  }
+  const ui::PresentationClip clip =
+      ui::DiagramClipLayout(*currentDiagram, m_previewGeometry)
+          .clipFor(presentationId);
+  *hasClip = clip.active;
+  return clip.rect;
+}
+
+QRectF
+DiagramCanvas::visibleNodeGeometry(const NodePresentation &node) const {
+  bool hasClip = false;
+  const QRectF clip = presentationClipRect(node.id, &hasClip);
+  return hasClip ? nodeGeometry(node).intersected(clip) : nodeGeometry(node);
+}
+
+QRectF DiagramCanvas::visibleContainerGeometry(
+    const ContainerPresentation &container) const {
+  bool hasClip = false;
+  const QRectF clip = presentationClipRect(container.id, &hasClip);
+  return hasClip ? containerGeometry(container).intersected(clip)
+                 : containerGeometry(container);
 }
 
 QPointF DiagramCanvas::toScene(const QPointF &point) const {
@@ -1377,7 +1786,8 @@ int DiagramCanvas::nearestConnectorSegment(
       }));
 }
 
-void DiagramCanvas::updateEndpointDrag(const QPointF &scenePoint) {
+void DiagramCanvas::updateEndpointDrag(const QPointF &scenePoint,
+                                       bool suppressSnapping) {
   const auto *d = diagram();
   if (!d || m_selectedConnector.isEmpty())
     return;
@@ -1389,12 +1799,20 @@ void DiagramCanvas::updateEndpointDrag(const QPointF &scenePoint) {
   if (const auto *targetNode = hitNode(scenePoint)) {
     m_endpointDragTargetNode = targetNode->id;
     m_endpointDragAnchor =
-        anchorAtPerimeterPoint(nodeGeometry(*targetNode), scenePoint);
+        suppressSnapping
+            ? anchorAtPerimeterPoint(nodeGeometry(*targetNode), scenePoint)
+            : snappedAnchorAtPerimeterPoint(
+                  *targetNode, nodeGeometry(*targetNode), scenePoint,
+                  kPortSnapToleranceViewPixels / m_zoom,
+                  &m_endpointDragSnapped);
+    if (suppressSnapping)
+      m_endpointDragSnapped = false;
   } else {
     // While detached, the endpoint follows the pointer. No model state changes
     // until release over a valid presentation.
     m_endpointDragTargetNode.clear();
     m_endpointDragAnchor = {ConnectorSide::Automatic, 0.5};
+    m_endpointDragSnapped = false;
   }
   m_endpointDragActive = true;
   m_sceneDirty = true;
@@ -1421,6 +1839,7 @@ void DiagramCanvas::cancelEndpointDrag() {
   m_endpointDragPoint = {};
   m_endpointDragAnchor = {};
   m_endpointDragActive = false;
+  m_endpointDragSnapped = false;
   if (m_interaction == Interaction::MoveSourcePort ||
       m_interaction == Interaction::MoveTargetPort)
     m_interaction = Interaction::None;
@@ -1484,45 +1903,71 @@ bool DiagramCanvas::startConnectorGesture(const QString &relationshipType) {
     return false;
 
   m_connectorGestureSourceNode = sourceNode->id;
+  const bool suppressSnapping = m_pressModifiers.testFlag(Qt::AltModifier);
   m_connectorGestureSourceAnchor =
-      anchorAtPerimeterPoint(sourceRect, m_pressScene);
+      suppressSnapping
+          ? anchorAtPerimeterPoint(sourceRect, m_pressScene)
+          : snappedAnchorAtPerimeterPoint(*sourceNode, sourceRect, m_pressScene,
+                                          kPortSnapToleranceViewPixels / m_zoom,
+                                          &m_connectorGestureSourceSnapped);
+  if (suppressSnapping)
+    m_connectorGestureSourceSnapped = false;
   m_connectorGestureType = relationshipType;
-  m_connectorGestureTargetPoint = m_lastPointerScene;
   m_interaction = Interaction::CreateConnector;
   m_originalGeometry.clear();
   m_previewGeometry.clear();
   m_alignmentGuides.clear();
+  updateConnectorGesture(m_lastPointerScene, suppressSnapping);
   m_sceneDirty = true;
   emit canvasSelectionChanged();
   update();
   return true;
 }
 
-void DiagramCanvas::updateConnectorGesture(const QPointF &scenePoint) {
+void DiagramCanvas::updateConnectorGesture(const QPointF &scenePoint,
+                                           bool suppressSnapping) {
   m_connectorGestureTargetPoint = scenePoint;
+  m_connectorGestureTargetNode.clear();
+  m_connectorGestureTargetAnchor = {};
+  m_connectorGestureTargetSnapped = false;
+  if (const auto *targetNode = hitNode(scenePoint)) {
+    m_connectorGestureTargetNode = targetNode->id;
+    m_connectorGestureTargetAnchor =
+        suppressSnapping
+            ? anchorAtPerimeterPoint(nodeGeometry(*targetNode), scenePoint)
+            : snappedAnchorAtPerimeterPoint(
+                  *targetNode, nodeGeometry(*targetNode), scenePoint,
+                  kPortSnapToleranceViewPixels / m_zoom,
+                  &m_connectorGestureTargetSnapped);
+  }
   m_sceneDirty = true;
   update();
 }
 
-void DiagramCanvas::commitConnectorGesture(const QPointF &scenePoint) {
+void DiagramCanvas::commitConnectorGesture(const QPointF &scenePoint,
+                                           bool suppressSnapping) {
   if (!m_project || m_connectorGestureSourceNode.isEmpty()) {
     cancelConnectorGesture();
     return;
   }
-  const auto *targetNode = hitNode(scenePoint);
+  updateConnectorGesture(scenePoint, suppressSnapping);
+  const auto *d = diagram();
+  const auto *targetNode =
+      d ? findNode(*d, m_connectorGestureTargetNode) : nullptr;
   if (!targetNode) {
     cancelConnectorGesture();
     return;
   }
 
-  const ConnectorAnchor targetAnchor =
-      anchorAtPerimeterPoint(nodeGeometry(*targetNode), scenePoint);
   const QString connectorId = m_project->createRelationshipAtAnchors(
       m_diagramId, m_connectorGestureSourceNode, targetNode->id,
       m_connectorGestureType, toString(m_defaultConnectorRouting),
-      m_connectorGestureSourceAnchor, targetAnchor);
+      m_connectorGestureSourceAnchor, m_connectorGestureTargetAnchor);
   m_connectorGestureSourceNode.clear();
+  m_connectorGestureTargetNode.clear();
   m_connectorGestureType.clear();
+  m_connectorGestureSourceSnapped = false;
+  m_connectorGestureTargetSnapped = false;
   m_interaction = Interaction::None;
   m_sceneDirty = true;
   if (!connectorId.isEmpty())
@@ -1535,7 +1980,10 @@ void DiagramCanvas::commitConnectorGesture(const QPointF &scenePoint) {
 
 void DiagramCanvas::cancelConnectorGesture() {
   m_connectorGestureSourceNode.clear();
+  m_connectorGestureTargetNode.clear();
   m_connectorGestureType.clear();
+  m_connectorGestureSourceSnapped = false;
+  m_connectorGestureTargetSnapped = false;
   m_originalGeometry.clear();
   m_previewGeometry.clear();
   m_alignmentGuides.clear();
@@ -1590,18 +2038,92 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
       for (const auto &relationship : projectData.relationships)
         relationships.insert(relationship.id, &relationship);
 
+      QHash<QString, QString> containerOwnerByChild;
+      QHash<QString, const ContainerPresentation *> containersById;
+      containersById.reserve(d->containers.size());
+      for (const auto &container : d->containers)
+        containersById.insert(container.id, &container);
+      for (const auto &container : d->containers) {
+        for (const QString &childId : container.childPresentationIds)
+          containerOwnerByChild.insert(childId, container.id);
+      }
+      const ui::DiagramClipLayout clipLayout(*d, m_previewGeometry);
+      QSet<QString> detachedDragRoots;
+      if (m_interaction == Interaction::Move &&
+          !m_previewGeometry.isEmpty()) {
+        if (!m_selectedContainer.isEmpty()) {
+          detachedDragRoots.insert(m_selectedContainer);
+        } else {
+          for (const QString &nodeId : m_selectedNodeOrder) {
+            if (m_originalGeometry.contains(nodeId))
+              detachedDragRoots.insert(nodeId);
+          }
+        }
+      }
+      const auto containerDepth = [&](const QString &containerId) {
+        int depth = 0;
+        QSet<QString> visited;
+        QString current = containerId;
+        while (containerOwnerByChild.contains(current) &&
+               !visited.contains(current)) {
+          visited.insert(current);
+          current = containerOwnerByChild.value(current);
+          ++depth;
+        }
+        return depth;
+      };
+      for (const auto &container : d->containers) {
+        const ui::PresentationClip clip =
+            clipLayout.clipFor(container.id, detachedDragRoots);
+        snapshot.containers.append(
+            {containerGeometry(container),
+             presentation_layout::containerDisplayName(projectData, container),
+             presentation_layout::containerTitleWidth(projectData, container),
+             container.subjectKind == QStringLiteral("package"),
+             container.id == m_selectedContainer,
+             containerDepth(container.id), clip.rect, clip.active,
+             clipLayout.overflowEdges(container)});
+      }
+      std::stable_sort(
+          snapshot.containers.begin(), snapshot.containers.end(),
+          [](const RenderContainer &left, const RenderContainer &right) {
+            if (left.depth != right.depth)
+              return left.depth < right.depth;
+            return left.rect.width() * left.rect.height() >
+                   right.rect.width() * right.rect.height();
+          });
+
       QHash<QString, QRectF> nodeRects;
       nodeRects.reserve(d->nodes.size());
+      const auto containingPackageId = [&](const QString &presentationId) {
+        QString currentId = containerOwnerByChild.value(presentationId);
+        QSet<QString> visited;
+        while (!currentId.isEmpty() && !visited.contains(currentId)) {
+          visited.insert(currentId);
+          const auto *owner = containersById.value(currentId);
+          if (!owner)
+            break;
+          if (owner->subjectKind == QStringLiteral("package"))
+            return owner->subjectId;
+          currentId = containerOwnerByChild.value(currentId);
+        }
+        return QString{};
+      };
       for (const auto &node : d->nodes) {
         const QRectF rect = nodeGeometry(node);
         nodeRects.insert(node.elementId, rect);
         const auto element = elements.constFind(node.elementId);
         if (element == elements.cend())
           continue;
-        snapshot.nodes.append({rect, (*element)->type, (*element)->name,
-                               (*element)->attributes, (*element)->operations,
-                               (*element)->enumLiterals,
-                               m_selectedNodes.contains(node.id)});
+        const ui::PresentationClip clip =
+            clipLayout.clipFor(node.id, detachedDragRoots);
+        snapshot.nodes.append(
+            {rect, (*element)->type,
+             presentation_layout::elementDisplayNameInPackage(
+                 projectData, **element, containingPackageId(node.id)),
+             (*element)->attributes, (*element)->operations,
+             (*element)->enumLiterals, m_selectedNodes.contains(node.id),
+             clip.rect, clip.active});
       }
       for (const auto &connector : d->connectors) {
         const auto relationship =
@@ -1656,17 +2178,13 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
           const QRectF sourceRect = nodeGeometry(*sourceNode);
           QPointF targetPoint = m_connectorGestureTargetPoint;
           ConnectorSide targetSide = ConnectorSide::Automatic;
-          for (auto candidate = d->nodes.crbegin();
-               candidate != d->nodes.crend(); ++candidate) {
-            const QRectF candidateRect = nodeGeometry(*candidate);
-            if (!candidateRect.contains(targetPoint))
-              continue;
-            const ConnectorAnchor targetAnchor =
-                anchorAtPerimeterPoint(candidateRect, targetPoint);
-            targetSide = targetAnchor.side;
-            targetPoint = connectorAnchorPoint(candidateRect, targetAnchor,
-                                               sourceRect.center());
-            break;
+          const auto *targetNode = findNode(*d, m_connectorGestureTargetNode);
+          if (targetNode) {
+            const QRectF targetRect = nodeGeometry(*targetNode);
+            targetSide = m_connectorGestureTargetAnchor.side;
+            targetPoint =
+                connectorAnchorPoint(targetRect, m_connectorGestureTargetAnchor,
+                                     sourceRect.center());
           }
           const QPointF sourcePoint = connectorAnchorPoint(
               sourceRect, m_connectorGestureSourceAnchor, targetPoint);
@@ -1685,6 +2203,39 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
                                         -1,
                                         true});
           }
+
+          const ui::PresentationClip sourceClip =
+              clipLayout.clipFor(sourceNode->id);
+          appendPortSnapPoints(
+              snapshot, *sourceNode, sourceRect,
+              m_connectorGestureSourceSnapped
+                  ? std::optional<ConnectorAnchor>(
+                        m_connectorGestureSourceAnchor)
+                  : std::nullopt,
+              sourceClip.rect, sourceClip.active);
+          if (targetNode) {
+            const ui::PresentationClip targetClip =
+                clipLayout.clipFor(targetNode->id);
+            appendPortSnapPoints(
+                snapshot, *targetNode, nodeGeometry(*targetNode),
+                m_connectorGestureTargetSnapped
+                    ? std::optional<ConnectorAnchor>(
+                          m_connectorGestureTargetAnchor)
+                    : std::nullopt,
+                targetClip.rect, targetClip.active);
+          }
+        }
+      }
+      if (m_endpointDragActive && !m_endpointDragTargetNode.isEmpty()) {
+        if (const auto *targetNode = findNode(*d, m_endpointDragTargetNode)) {
+          const ui::PresentationClip targetClip =
+              clipLayout.clipFor(targetNode->id);
+          appendPortSnapPoints(
+              snapshot, *targetNode, nodeGeometry(*targetNode),
+              m_endpointDragSnapped
+                  ? std::optional<ConnectorAnchor>(m_endpointDragAnchor)
+                  : std::nullopt,
+              targetClip.rect, targetClip.active);
         }
       }
     }
@@ -1731,9 +2282,36 @@ DiagramCanvas::hitNode(const QPointF &scenePoint) const {
   if (!d)
     return nullptr;
   for (auto it = d->nodes.crbegin(); it != d->nodes.crend(); ++it)
-    if (nodeGeometry(*it).contains(scenePoint))
+    if (visibleNodeGeometry(*it).contains(scenePoint))
       return &*it;
   return nullptr;
+}
+
+const ContainerPresentation *
+DiagramCanvas::hitContainer(const QPointF &scenePoint) const {
+  return hitContainer(scenePoint, {});
+}
+
+const ContainerPresentation *DiagramCanvas::hitContainer(
+    const QPointF &scenePoint,
+    const QSet<QString> &excludedPresentationIds) const {
+  const auto *d = diagram();
+  if (!d)
+    return nullptr;
+  const ContainerPresentation *best = nullptr;
+  qreal bestArea = std::numeric_limits<qreal>::max();
+  for (const auto &container : d->containers) {
+    if (excludedPresentationIds.contains(container.id))
+      continue;
+    const QRectF geometry = visibleContainerGeometry(container);
+    const qreal area = geometry.width() * geometry.height();
+    if (!geometry.isEmpty() && geometry.contains(scenePoint) &&
+        area < bestArea) {
+      best = &container;
+      bestArea = area;
+    }
+  }
+  return best;
 }
 
 const ConnectorPresentation *
@@ -1789,6 +2367,36 @@ DiagramCanvas::TextHit DiagramCanvas::hitText(const QPointF &scenePoint) const {
                   element->operations.at(i), textLineRect(rect, line)};
     }
   }
+  if (const auto *container = hitContainer(scenePoint)) {
+    const QRectF rect = containerGeometry(*container);
+    const qreal headerHeight =
+        container->subjectKind == QStringLiteral("package")
+            ? 24.0
+            : kContainerHeaderHeight;
+    if (!QRectF(rect.left(), rect.top(), rect.width(), headerHeight)
+             .contains(scenePoint))
+      return {};
+    if (container->subjectKind == QStringLiteral("folder")) {
+      if (const auto *folder =
+              findBrowserFolder(m_project->data(), container->subjectId))
+        return {folder->id,
+                QStringLiteral("name"),
+                -1,
+                folder->name,
+                QRectF(rect.left() + 4, rect.top() + 3, rect.width() - 8,
+                       headerHeight - 6),
+                true};
+    } else if (const auto *package =
+                   findElement(m_project->data(), container->subjectId)) {
+      return {package->id,
+              QStringLiteral("name"),
+              -1,
+              package->name,
+              QRectF(rect.left() + 4, rect.top() + 3, rect.width() - 8,
+                     headerHeight - 6),
+              true};
+    }
+  }
   if (const auto *connector = hitConnector(scenePoint)) {
     if (const auto *relationship =
             findRelationship(m_project->data(), connector->relationshipId)) {
@@ -1811,6 +2419,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
   m_pressView = event->position();
   m_pressScene = toScene(m_pressView);
   m_lastPointerScene = m_pressScene;
+  m_pressModifiers = event->modifiers();
   if (event->button() == Qt::MiddleButton) {
     m_interaction = Interaction::Pan;
     m_originalPan = m_pan;
@@ -1835,6 +2444,18 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
                                 QStringLiteral("relationship"));
       target = QStringLiteral("connector");
       emit canvasSelectionChanged();
+    } else if (const auto *container = hitContainer(m_pressScene)) {
+      m_selectedNodes.clear();
+      m_selectedNodeOrder.clear();
+      m_selectedConnector.clear();
+      m_selectedBendPoint = -1;
+      m_selectedContainer = container->id;
+      if (m_project)
+        m_project->clearSelection();
+      target = QStringLiteral("container");
+      m_sceneDirty = true;
+      emit canvasSelectionChanged();
+      update();
     } else {
       clearCanvasSelection();
       if (m_project)
@@ -1883,6 +2504,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
     const ConnectorEndpoints endpoints = connectorEndpoints(*selected);
     m_endpointDragPoint = sourcePort ? endpoints.source : endpoints.target;
     m_endpointDragActive = true;
+    m_endpointDragSnapped = false;
     emit canvasSelectionChanged();
     event->accept();
     return;
@@ -1890,6 +2512,21 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
 
   const auto *node = hitNode(m_pressScene);
   const bool toggle = event->modifiers().testFlag(Qt::ControlModifier);
+  const auto beginLasso = [&] {
+    // Delay selection changes until the pointer crosses the drag threshold.
+    // This keeps a plain click equivalent to a background click and lets
+    // Ctrl/Shift-click on empty space preserve the existing selection.
+    m_interaction = Interaction::Lasso;
+    m_lassoOrigin = m_pressScene;
+    m_lassoRect = QRectF(m_pressScene, m_pressScene);
+    m_lassoBaseNodes = m_selectedNodes;
+    m_lassoBaseNodeOrder = m_selectedNodeOrder;
+    m_lassoBaseContainer = m_selectedContainer;
+    m_lassoBaseConnector = m_selectedConnector;
+    m_lassoBaseBendPoint = m_selectedBendPoint;
+    m_lassoModifiers = event->modifiers();
+    m_lassoActive = false;
+  };
   if (node) {
     selectNode(node->id, toggle);
     m_interactionNode = node->id;
@@ -1912,18 +2549,59 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
       m_project->selectObject(connector->relationshipId,
                               QStringLiteral("relationship"));
     }
+  } else if (const auto *container = hitContainer(m_pressScene)) {
+    const QRectF rect = containerGeometry(*container);
+    const QRectF resizeHandle(rect.right() - 14 / m_zoom,
+                              rect.bottom() - 14 / m_zoom, 14 / m_zoom,
+                              14 / m_zoom);
+    const qreal headerHeight =
+        container->subjectKind == QStringLiteral("package")
+            ? 24.0
+            : kContainerHeaderHeight;
+    const bool headerHit =
+        QRectF(rect.left(), rect.top(), rect.width(), headerHeight)
+            .contains(m_pressScene);
+    if (!headerHit && !resizeHandle.contains(m_pressScene)) {
+      // A container's body is diagram workspace: its child presentations are
+      // still ordinary lasso targets. Restrict direct container movement to
+      // the header so the frame does not consume interior drag gestures.
+      beginLasso();
+      event->accept();
+      return;
+    }
+
+    m_selectedNodes.clear();
+    m_selectedNodeOrder.clear();
+    m_selectedConnector.clear();
+    m_selectedBendPoint = -1;
+    m_selectedContainer = container->id;
+    m_interactionNode = container->id;
+    m_interaction = resizeHandle.contains(m_pressScene) ? Interaction::Resize
+                                                        : Interaction::Move;
+    m_originalGeometry.clear();
+    QSet<QString> visited;
+    const auto collectDescendants =
+        [&](const auto &self, const ContainerPresentation &current) -> void {
+      if (visited.contains(current.id))
+        return;
+      visited.insert(current.id);
+      m_originalGeometry.insert(current.id, containerGeometry(current));
+      for (const QString &childId : current.childPresentationIds) {
+        if (const auto *childNode = findNode(*diagram(), childId))
+          m_originalGeometry.insert(childNode->id, nodeGeometry(*childNode));
+        else if (const auto *childContainer =
+                     findContainer(*diagram(), childId))
+          self(self, *childContainer);
+      }
+    };
+    collectDescendants(collectDescendants, *container);
+    if (m_project)
+      m_project->clearSelection();
+    m_sceneDirty = true;
+    emit canvasSelectionChanged();
+    update();
   } else {
-    // Defer background-click clearing until release so the same gesture can
-    // become a lasso without briefly destroying the existing selection.
-    m_interaction = Interaction::Lasso;
-    m_lassoOrigin = m_pressScene;
-    m_lassoRect = QRectF(m_pressScene, m_pressScene);
-    m_lassoBaseNodes = m_selectedNodes;
-    m_lassoBaseNodeOrder = m_selectedNodeOrder;
-    m_lassoBaseConnector = m_selectedConnector;
-    m_lassoBaseBendPoint = m_selectedBendPoint;
-    m_lassoModifiers = event->modifiers();
-    m_lassoActive = false;
+    beginLasso();
   }
   event->accept();
 }
@@ -1938,7 +2616,8 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
   }
   if (m_interaction == Interaction::MoveSourcePort ||
       m_interaction == Interaction::MoveTargetPort) {
-    updateEndpointDrag(toScene(event->position()));
+    updateEndpointDrag(toScene(event->position()),
+                       event->modifiers().testFlag(Qt::AltModifier));
     return;
   }
   if (m_interaction == Interaction::MoveBendPoint) {
@@ -1946,7 +2625,8 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
     return;
   }
   if (m_interaction == Interaction::CreateConnector) {
-    updateConnectorGesture(m_lastPointerScene);
+    updateConnectorGesture(m_lastPointerScene,
+                           event->modifiers().testFlag(Qt::AltModifier));
     return;
   }
   if (m_interaction == Interaction::Lasso) {
@@ -1972,14 +2652,17 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
       QList<ui::DiagramNodeGeometry> moving;
       QList<ui::DiagramNodeGeometry> stationary;
       moving.reserve(m_originalGeometry.size());
-      stationary.reserve(d->nodes.size() - m_originalGeometry.size());
+      stationary.reserve(d->nodes.size() + d->containers.size());
+      for (auto original = m_originalGeometry.cbegin();
+           original != m_originalGeometry.cend(); ++original)
+        moving.append({original.key(), original.value()});
       for (const auto &node : d->nodes) {
-        const auto original = m_originalGeometry.constFind(node.id);
-        if (original != m_originalGeometry.cend())
-          moving.append({node.id, *original});
-        else
+        if (!m_originalGeometry.contains(node.id))
           stationary.append({node.id, node.geometry});
       }
+      for (const auto &container : d->containers)
+        if (!m_originalGeometry.contains(container.id))
+          stationary.append({container.id, container.geometry});
       const ui::DiagramSnapOptions options{
           m_snapToGridEnabled, m_alignmentGuidesEnabled,
           static_cast<qreal>(m_gridSpacing), kSnapToleranceViewPixels / m_zoom};
@@ -1998,9 +2681,16 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
   } else if (m_interaction == Interaction::Resize) {
     m_previewGeometry.clear();
     const QRectF original = m_originalGeometry.value(m_interactionNode);
+    const auto *currentDiagram = diagram();
+    const bool resizingContainer =
+        currentDiagram && findContainer(*currentDiagram, m_interactionNode);
+    const qreal minimumWidth =
+        resizingContainer ? kMinimumContainerWidth : kMinimumNodeWidth;
+    const qreal minimumHeight =
+        resizingContainer ? kMinimumContainerHeight : kMinimumNodeHeight;
     QRectF resized = original;
-    resized.setWidth(qMax(kMinimumNodeWidth, original.width() + delta.x()));
-    resized.setHeight(qMax(kMinimumNodeHeight, original.height() + delta.y()));
+    resized.setWidth(qMax(minimumWidth, original.width() + delta.x()));
+    resized.setHeight(qMax(minimumHeight, original.height() + delta.y()));
 
     ui::DiagramResizeSnapResult snapResult{resized, {}};
     const auto *d = diagram();
@@ -2008,16 +2698,20 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
     if (d && !suppressSnapping &&
         (m_snapToGridEnabled || m_alignmentGuidesEnabled)) {
       QList<ui::DiagramNodeGeometry> stationary;
-      stationary.reserve(qMax(0, d->nodes.size() - 1));
+      stationary.reserve(d->nodes.size() + d->containers.size());
       for (const auto &node : d->nodes)
-        if (node.id != m_interactionNode)
+        if (node.id != m_interactionNode &&
+            (!resizingContainer || !m_originalGeometry.contains(node.id)))
           stationary.append({node.id, node.geometry});
+      for (const auto &container : d->containers)
+        if (container.id != m_interactionNode &&
+            (!resizingContainer || !m_originalGeometry.contains(container.id)))
+          stationary.append({container.id, container.geometry});
       const ui::DiagramSnapOptions options{
           m_snapToGridEnabled, m_alignmentGuidesEnabled,
           static_cast<qreal>(m_gridSpacing), kSnapToleranceViewPixels / m_zoom};
       snapResult = ui::snapDiagramBottomRightResize(
-          resized, stationary, QSizeF(kMinimumNodeWidth, kMinimumNodeHeight),
-          options);
+          resized, stationary, QSizeF(minimumWidth, minimumHeight), options);
     }
     m_previewGeometry.insert(m_interactionNode, snapResult.geometry);
     m_alignmentGuides = std::move(snapResult.guides);
@@ -2032,7 +2726,8 @@ void DiagramCanvas::mouseReleaseEvent(QMouseEvent *event) {
   if (event->button() == Qt::LeftButton)
     m_leftButtonPressed = false;
   if (m_interaction == Interaction::CreateConnector) {
-    commitConnectorGesture(m_lastPointerScene);
+    commitConnectorGesture(m_lastPointerScene,
+                           event->modifiers().testFlag(Qt::AltModifier));
     event->accept();
     return;
   }
@@ -2058,9 +2753,11 @@ void DiagramCanvas::mouseReleaseEvent(QMouseEvent *event) {
       m_interaction == Interaction::Resize)
     commitGeometryPreview();
   else if (m_interaction == Interaction::MoveSourcePort ||
-           m_interaction == Interaction::MoveTargetPort)
+           m_interaction == Interaction::MoveTargetPort) {
+    updateEndpointDrag(m_lastPointerScene,
+                       event->modifiers().testFlag(Qt::AltModifier));
     commitEndpointDrag();
-  else if (m_interaction == Interaction::MoveBendPoint)
+  } else if (m_interaction == Interaction::MoveBendPoint)
     commitBendPointPreview();
   m_interaction = Interaction::None;
   m_originalGeometry.clear();
@@ -2068,6 +2765,7 @@ void DiagramCanvas::mouseReleaseEvent(QMouseEvent *event) {
   m_alignmentGuides.clear();
   m_endpointDragActive = false;
   m_endpointDragTargetNode.clear();
+  m_endpointDragSnapped = false;
   m_bendPointPreview.clear();
   m_bendPointPreviewActive = false;
   m_sceneDirty = true;
@@ -2123,7 +2821,71 @@ void DiagramCanvas::commitGeometryPreview() {
     map.insert(QStringLiteral("height"), it.value().height());
     values.append(map);
   }
-  m_project->updateNodeGeometries(m_diagramId, values);
+  const bool moving = m_interaction == Interaction::Move;
+  const QString description =
+      m_selectedContainer.isEmpty()
+          ? (moving ? QStringLiteral("Move diagram elements")
+                    : QStringLiteral("Resize diagram element"))
+          : (moving ? QStringLiteral("Move diagram container")
+                    : QStringLiteral("Resize diagram container"));
+  if (!moving) {
+    m_project->updatePresentationGeometries(m_diagramId, values, description);
+    return;
+  }
+
+  QStringList movedPresentationIds;
+  QSet<QString> excludedDropTargets;
+  if (!m_selectedContainer.isEmpty()) {
+    movedPresentationIds.append(m_selectedContainer);
+    // A moving container carries its complete subtree. None of those frames
+    // can be a legal drop target because reparenting to one would create a
+    // membership cycle.
+    for (auto geometry = m_originalGeometry.cbegin();
+         geometry != m_originalGeometry.cend(); ++geometry)
+      excludedDropTargets.insert(geometry.key());
+  } else {
+    for (const QString &nodeId : m_selectedNodeOrder)
+      if (m_originalGeometry.contains(nodeId))
+        movedPresentationIds.append(nodeId);
+  }
+
+  const auto *target = hitContainer(m_lastPointerScene, excludedDropTargets);
+  const QString targetId = target ? target->id : QString{};
+  const QString packageChange = m_project->presentationMovePackageChangeSummary(
+      m_diagramId, movedPresentationIds, targetId);
+  if (!packageChange.isEmpty() &&
+      m_packageReassignmentPolicy == QStringLiteral("disallow"))
+    return;
+  if (!packageChange.isEmpty() &&
+      m_packageReassignmentPolicy == QStringLiteral("ask")) {
+    m_pendingPackageMoveGeometries = values;
+    m_pendingPackageMovePresentationIds = movedPresentationIds;
+    m_pendingPackageMoveTargetContainerId = targetId;
+    m_pendingPackageMoveDescription = description;
+    emit packageReassignmentRequested(packageChange);
+    return;
+  }
+  m_project->movePresentationsToContainer(
+      m_diagramId, values, movedPresentationIds, targetId, description,
+      !packageChange.isEmpty());
+}
+
+void DiagramCanvas::confirmPendingPackageReassignment() {
+  if (!m_project || m_pendingPackageMoveGeometries.isEmpty())
+    return;
+  m_project->movePresentationsToContainer(
+      m_diagramId, m_pendingPackageMoveGeometries,
+      m_pendingPackageMovePresentationIds,
+      m_pendingPackageMoveTargetContainerId, m_pendingPackageMoveDescription,
+      true);
+  cancelPendingPackageReassignment();
+}
+
+void DiagramCanvas::cancelPendingPackageReassignment() {
+  m_pendingPackageMoveGeometries.clear();
+  m_pendingPackageMovePresentationIds.clear();
+  m_pendingPackageMoveTargetContainerId.clear();
+  m_pendingPackageMoveDescription.clear();
 }
 
 void DiagramCanvas::updateLassoSelection(const QPointF &scenePoint) {
@@ -2142,7 +2904,7 @@ void DiagramCanvas::updateLassoSelection(const QPointF &scenePoint) {
   }
 
   for (const auto &node : d->nodes) {
-    if (!m_lassoRect.intersects(nodeGeometry(node)))
+    if (!m_lassoRect.intersects(visibleNodeGeometry(node)))
       continue;
     if (toggle && nextNodes.contains(node.id)) {
       nextNodes.remove(node.id);
@@ -2153,11 +2915,12 @@ void DiagramCanvas::updateLassoSelection(const QPointF &scenePoint) {
     }
   }
 
-  const bool selectionChanged = nextNodes != m_selectedNodes ||
-                                nextOrder != m_selectedNodeOrder ||
-                                !m_selectedConnector.isEmpty();
+  const bool selectionChanged =
+      nextNodes != m_selectedNodes || nextOrder != m_selectedNodeOrder ||
+      !m_selectedContainer.isEmpty() || !m_selectedConnector.isEmpty();
   m_selectedNodes = std::move(nextNodes);
   m_selectedNodeOrder = std::move(nextOrder);
+  m_selectedContainer.clear();
   m_selectedConnector.clear();
   m_selectedBendPoint = -1;
   m_endpointDragActive = false;
@@ -2177,6 +2940,7 @@ void DiagramCanvas::finishLassoSelection() {
 void DiagramCanvas::cancelLassoSelection() {
   m_selectedNodes = m_lassoBaseNodes;
   m_selectedNodeOrder = m_lassoBaseNodeOrder;
+  m_selectedContainer = m_lassoBaseContainer;
   m_selectedConnector = m_lassoBaseConnector;
   m_selectedBendPoint = m_lassoBaseBendPoint;
   synchronizeProjectSelection();
@@ -2192,6 +2956,7 @@ void DiagramCanvas::resetLassoState() {
   m_lassoRect = {};
   m_lassoBaseNodes.clear();
   m_lassoBaseNodeOrder.clear();
+  m_lassoBaseContainer.clear();
   m_lassoBaseConnector.clear();
   m_lassoBaseBendPoint = -1;
   m_lassoModifiers = Qt::NoModifier;
@@ -2227,9 +2992,13 @@ void DiagramCanvas::synchronizeProjectSelection() {
 
 void DiagramCanvas::fitToContent() {
   const auto *d = diagram();
-  if (!d || d->nodes.isEmpty() || width() <= 0 || height() <= 0)
+  if (!d || (d->nodes.isEmpty() && d->containers.isEmpty()) || width() <= 0 ||
+      height() <= 0)
     return;
   QRectF content;
+  for (const auto &container : d->containers)
+    content = content.isNull() ? container.geometry
+                               : content.united(container.geometry);
   for (const auto &node : d->nodes)
     content = content.isNull() ? node.geometry : content.united(node.geometry);
   for (const auto &connector : d->connectors) {
@@ -2257,7 +3026,19 @@ void DiagramCanvas::addElementsAt(const QStringList &elementIds, qreal x,
   forceActiveFocus();
   const QPointF scenePoint = toScene({x, y});
   m_project->addElementsToDiagram(m_diagramId, elementIds, scenePoint.x(),
-                                  scenePoint.y());
+                                  scenePoint.y(), m_diagramItemSizingMode);
+}
+
+void DiagramCanvas::addTreeItemsAt(const QStringList &elementIds,
+                                   const QString &subjectsJson, qreal x,
+                                   qreal y) {
+  if (!m_project || m_diagramId.isEmpty())
+    return;
+  forceActiveFocus();
+  const QPointF scenePoint = toScene({x, y});
+  m_project->addTreeItemsToDiagram(m_diagramId, elementIds, subjectsJson,
+                                   scenePoint.x(), scenePoint.y(),
+                                   m_diagramItemSizingMode);
 }
 
 void DiagramCanvas::createElementAtContextPosition(const QString &type) {
@@ -2272,11 +3053,8 @@ void DiagramCanvas::createElementAt(const QString &type,
                                     const QPointF &sceneCenter) {
   if (!m_project)
     return;
-  constexpr qreal kNewNodeWidth = 220.0;
-  constexpr qreal kNewNodeHeight = 120.0;
-  const QString elementId = m_project->addElementAt(
-      type, m_diagramId, sceneCenter.x() - kNewNodeWidth / 2.0,
-      sceneCenter.y() - kNewNodeHeight / 2.0);
+  const QString elementId = m_project->addElementCenteredAt(
+      type, m_diagramId, sceneCenter.x(), sceneCenter.y());
   const auto *d = diagram();
   if (elementId.isEmpty() || !d)
     return;
@@ -2286,6 +3064,22 @@ void DiagramCanvas::createElementAt(const QString &type,
                                  });
   if (node != d->nodes.cend())
     selectNode(node->id, false);
+  else {
+    const auto container = std::find_if(
+        d->containers.cbegin(), d->containers.cend(),
+        [&](const ContainerPresentation &candidate) {
+          return candidate.subjectKind == QStringLiteral("package") &&
+                 candidate.subjectId == elementId;
+        });
+    if (container != d->containers.cend()) {
+      m_selectedNodes.clear();
+      m_selectedNodeOrder.clear();
+      m_selectedConnector.clear();
+      m_selectedContainer = container->id;
+      emit canvasSelectionChanged();
+      update();
+    }
+  }
 }
 
 void DiagramCanvas::createRelationship(const QString &type) {
@@ -2351,6 +3145,59 @@ void DiagramCanvas::setSelectedConnectorRouting(const QString &routing) {
   m_project->setConnectorRouting(m_diagramId, m_selectedConnector, routing);
 }
 
+void DiagramCanvas::setSelectedPortSnapPoints(int horizontalPointCount,
+                                              int verticalPointCount) {
+  if (!m_project || m_selectedNodes.size() != 1)
+    return;
+  m_project->setNodePortSnapPoints(m_diagramId, *m_selectedNodes.constBegin(),
+                                   horizontalPointCount, verticalPointCount);
+}
+
+void DiagramCanvas::fitSelectionToContent() {
+  const auto *d = diagram();
+  if (!m_project || !d)
+    return;
+
+  QVariantList geometries;
+  geometries.reserve(m_selectedNodeOrder.size() +
+                     (m_selectedContainer.isEmpty() ? 0 : 1));
+  const auto appendGeometry = [&](const QString &id, const QRectF &geometry) {
+    QVariantMap value;
+    value.insert(QStringLiteral("id"), id);
+    value.insert(QStringLiteral("x"), geometry.x());
+    value.insert(QStringLiteral("y"), geometry.y());
+    value.insert(QStringLiteral("width"), geometry.width());
+    value.insert(QStringLiteral("height"), geometry.height());
+    geometries.append(value);
+  };
+
+  for (const QString &nodeId : m_selectedNodeOrder) {
+    const auto *node = findNode(*d, nodeId);
+    const auto *element =
+        node ? findElement(m_project->data(), node->elementId) : nullptr;
+    if (!node || !element)
+      continue;
+    QRectF fitted = node->geometry;
+    fitted.setSize(presentation_layout::nodeContentSize(*element));
+    appendGeometry(nodeId, fitted);
+  }
+  if (!m_selectedContainer.isEmpty()) {
+    if (const auto *container = findContainer(*d, m_selectedContainer)) {
+      appendGeometry(container->id,
+                     presentation_layout::containerContentGeometry(
+                         m_project->data(), *d, *container));
+    }
+  }
+
+  if (geometries.isEmpty())
+    return;
+  const bool plural = geometries.size() > 1;
+  m_project->updatePresentationGeometries(
+      m_diagramId, geometries,
+      plural ? QStringLiteral("Fit diagram elements to content")
+             : QStringLiteral("Fit presentation to content"));
+}
+
 void DiagramCanvas::arrangeSelection(const QString &operation) {
   if (!m_project || m_selectedNodes.size() < 2)
     return;
@@ -2378,8 +3225,8 @@ void DiagramCanvas::arrangeSelection(const QString &operation) {
     geometry.insert(QStringLiteral("height"), node.geometry.height());
     geometries.append(geometry);
   }
-  m_project->updateNodeGeometries(m_diagramId, geometries,
-                                  ui::arrangementDescription(*parsedOperation));
+  m_project->updatePresentationGeometries(
+      m_diagramId, geometries, ui::arrangementDescription(*parsedOperation));
 }
 
 void DiagramCanvas::nudgeSelection(qreal deltaX, qreal deltaY) {
@@ -2405,16 +3252,21 @@ void DiagramCanvas::nudgeSelection(qreal deltaX, qreal deltaY) {
     value.insert(QStringLiteral("height"), geometry.height());
     geometries.append(value);
   }
-  m_project->updateNodeGeometries(
+  m_project->updatePresentationGeometries(
       m_diagramId, geometries,
       m_selectedNodes.size() == 1 ? QStringLiteral("Nudge diagram element")
                                   : QStringLiteral("Nudge diagram elements"));
 }
 
 void DiagramCanvas::removeSelectedPresentations() {
-  if (!m_project || m_selectedNodes.isEmpty())
+  if (!m_project)
     return;
-  m_project->removePresentations(m_diagramId, m_selectedNodes.values());
+  if (!m_selectedContainer.isEmpty())
+    m_project->removeContainerPresentation(m_diagramId, m_selectedContainer);
+  else if (!m_selectedNodes.isEmpty())
+    m_project->removePresentations(m_diagramId, m_selectedNodes.values());
+  else
+    return;
   clearCanvasSelection();
 }
 
@@ -2432,21 +3284,27 @@ void DiagramCanvas::deleteSelectedConnector() {
 
 void DiagramCanvas::clearCanvasSelection() {
   const bool hadSelection =
-      !m_selectedNodes.isEmpty() || !m_selectedConnector.isEmpty() ||
+      !m_selectedNodes.isEmpty() || !m_selectedContainer.isEmpty() ||
+      !m_selectedConnector.isEmpty() ||
       !m_connectorGestureSourceNode.isEmpty() || m_endpointDragActive;
   resetLassoState();
   if (!hadSelection)
     return;
   m_selectedNodes.clear();
   m_selectedNodeOrder.clear();
+  m_selectedContainer.clear();
   m_selectedConnector.clear();
   m_selectedBendPoint = -1;
   m_endpointDragTargetNode.clear();
   m_endpointDragActive = false;
+  m_endpointDragSnapped = false;
   m_bendPointPreview.clear();
   m_bendPointPreviewActive = false;
   m_connectorGestureSourceNode.clear();
+  m_connectorGestureTargetNode.clear();
   m_connectorGestureType.clear();
+  m_connectorGestureSourceSnapped = false;
+  m_connectorGestureTargetSnapped = false;
   if (m_interaction == Interaction::CreateConnector ||
       m_interaction == Interaction::MoveSourcePort ||
       m_interaction == Interaction::MoveTargetPort)
@@ -2457,6 +3315,7 @@ void DiagramCanvas::clearCanvasSelection() {
 }
 
 void DiagramCanvas::selectNode(const QString &nodeId, bool toggle) {
+  m_selectedContainer.clear();
   if (toggle) {
     if (m_selectedNodes.contains(nodeId)) {
       m_selectedNodes.remove(nodeId);
@@ -2482,6 +3341,7 @@ void DiagramCanvas::selectNode(const QString &nodeId, bool toggle) {
 
 void DiagramCanvas::selectConnector(const QString &connectorId,
                                     bool preserveNodes) {
+  m_selectedContainer.clear();
   m_selectedConnector = connectorId;
   m_selectedBendPoint = -1;
   m_endpointDragTargetNode.clear();
@@ -2533,6 +3393,11 @@ void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
     return;
   }
   if (event->key() == Qt::Key_Delete && !m_selectedNodes.isEmpty()) {
+    removeSelectedPresentations();
+    event->accept();
+    return;
+  }
+  if (event->key() == Qt::Key_Delete && !m_selectedContainer.isEmpty()) {
     removeSelectedPresentations();
     event->accept();
     return;

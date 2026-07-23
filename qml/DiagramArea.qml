@@ -6,6 +6,8 @@ Rectangle {
     id: root
     readonly property string diagramMimeType: "application/x-uuml-diagram-id"
     readonly property string elementsMimeType: "application/x-uuml-element-ids"
+    readonly property string diagramSubjectsMimeType:
+        "application/x-uuml-diagram-subjects"
     required property string hostId
     property int modelRevision: 0
     property var diagramIds: {
@@ -41,21 +43,27 @@ Rectangle {
         drop.acceptProposedAction()
     }
 
-    function acceptElementDrop(drop) {
-        if (drop.formats.indexOf(root.elementsMimeType) < 0)
+    function acceptTreeDrop(drop) {
+        const hasElements = drop.formats.indexOf(root.elementsMimeType) >= 0
+        const hasSubjects = drop.formats.indexOf(root.diagramSubjectsMimeType) >= 0
+        if (!hasElements && !hasSubjects)
             return
         let elementIds = []
-        try {
-            elementIds = JSON.parse(drop.getDataAsString(root.elementsMimeType))
-        } catch (error) {
-            return
+        if (hasElements) {
+            try {
+                elementIds = JSON.parse(drop.getDataAsString(root.elementsMimeType))
+            } catch (error) {
+                return
+            }
         }
+        const subjectsJson = hasSubjects
+                           ? drop.getDataAsString(root.diagramSubjectsMimeType) : "[]"
         const diagramIndex = root.diagramIds.indexOf(root.currentDiagramId)
         const view = diagramIndex >= 0 ? diagramViews.itemAt(diagramIndex) : null
-        if (!view || elementIds.length === 0)
+        if (!view)
             return
         const point = view.mapFromItem(root, drop.x, drop.y)
-        view.addElementsAt(elementIds, point.x, point.y)
+        view.addTreeItemsAt(elementIds, subjectsJson, point.x, point.y)
         workspaceController.activeDiagramId = root.currentDiagramId
         drop.acceptProposedAction()
     }
@@ -83,10 +91,12 @@ Rectangle {
         anchors.fill: parent
         // Native drags expose MIME formats to DropArea.keys. Using the same
         // value here and in Drag.mimeData keeps cross-window drops eligible.
-        keys: [root.diagramMimeType, root.elementsMimeType]
+        keys: [root.diagramMimeType, root.elementsMimeType,
+               root.diagramSubjectsMimeType]
         onDropped: function(drop) {
-            if (drop.formats.indexOf(root.elementsMimeType) >= 0)
-                root.acceptElementDrop(drop)
+            if (drop.formats.indexOf(root.elementsMimeType) >= 0
+                    || drop.formats.indexOf(root.diagramSubjectsMimeType) >= 0)
+                root.acceptTreeDrop(drop)
             else
                 root.acceptDiagramDrop(drop)
         }
