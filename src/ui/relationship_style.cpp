@@ -22,6 +22,10 @@ RelationshipVisualStyle relationshipVisualStyle(RelationshipType type) {
   case RelationshipType::Composition:
     return {RelationshipLineStyle::Solid, RelationshipDecoration::FilledDiamond,
             RelationshipDecoration::None};
+  case RelationshipType::Containment:
+    // UML nesting uses a circle-plus marker at the containing namespace/type.
+    return {RelationshipLineStyle::Solid, RelationshipDecoration::CirclePlus,
+            RelationshipDecoration::None};
   }
   return {};
 }

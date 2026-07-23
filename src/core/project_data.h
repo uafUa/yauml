@@ -1,5 +1,6 @@
 #pragma once
 
+#include <QHash>
 #include <QJsonObject>
 #include <QList>
 #include <QPointF>
@@ -16,7 +17,8 @@ enum class RelationshipType {
   Realization,
   Association,
   Aggregation,
-  Composition
+  Composition,
+  Containment
 };
 enum class ConnectorSide { Automatic, Top, Right, Bottom, Left };
 enum class ConnectorRouting { Straight, Orthogonal };
@@ -43,15 +45,36 @@ struct BrowserParent {
   bool operator==(const BrowserParent &) const = default;
 };
 
+// Named, project-owned diagram styles use generic roles that apply to both
+// classifier nodes and package/folder frames. Values are normalized serialized
+// QColor strings (#RRGGBB or #AARRGGBB).
+struct DiagramStyle {
+  QString id;
+  QString name;
+  QString fill;
+  QString headerFill;
+  QString border;
+  QString primaryText;
+  QString secondaryText;
+  QString divider;
+  QJsonObject extra;
+
+  bool operator==(const DiagramStyle &) const = default;
+};
+
 struct ModelElement {
   QString id;
   ElementType type = ElementType::Class;
   QString name;
   QString packageId;
+  // Stable semantic ownership for a type declared inside another class or
+  // struct. packageId continues to identify the enclosing UML package.
+  QString enclosingTypeId;
   QStringList attributes;
   QStringList operations;
   QStringList enumLiterals;
   BrowserParent browserParent;
+  QString styleId;
   QJsonObject extra;
 
   bool operator==(const ModelElement &) const = default;
@@ -61,6 +84,7 @@ struct BrowserFolder {
   QString id;
   QString name;
   BrowserParent parent;
+  QString styleId;
   QJsonObject extra;
 
   bool operator==(const BrowserFolder &) const = default;
@@ -85,6 +109,7 @@ struct NodePresentation {
   // left/right share the vertical value. Odd values keep a center snap point.
   int horizontalPortSnapPoints = 1;
   int verticalPortSnapPoints = 1;
+  QString styleId;
   QJsonObject extra;
 
   bool operator==(const NodePresentation &) const = default;
@@ -99,6 +124,7 @@ struct ContainerPresentation {
   QString subjectId;
   QRectF geometry;
   QStringList childPresentationIds;
+  QString styleId;
   QJsonObject extra;
 
   bool operator==(const ContainerPresentation &) const = default;
@@ -157,8 +183,12 @@ struct ProjectData {
   QString id;
   QString name;
   CppImportConfiguration cppImport;
+  QList<DiagramStyle> diagramStyles;
   QList<ModelElement> elements;
   QList<BrowserFolder> browserFolders;
+  // Legacy/synthetic namespace tree nodes do not have a stable ModelElement.
+  // Their qualified path is therefore the durable assignment key.
+  QHash<QString, QString> namespaceStyleIds;
   // Stable cross-type ordering for explicit project-browser items. Entries
   // use "element:<id>" and "folder:<id>"; missing entries retain their
   // natural creation order for backward-compatible project files.
@@ -178,6 +208,9 @@ createStarterProject(const QString &name = QStringLiteral("New Project"));
 
 ModelElement *findElement(ProjectData &project, const QString &id);
 const ModelElement *findElement(const ProjectData &project, const QString &id);
+DiagramStyle *findDiagramStyle(ProjectData &project, const QString &id);
+const DiagramStyle *findDiagramStyle(const ProjectData &project,
+                                     const QString &id);
 BrowserFolder *findBrowserFolder(ProjectData &project, const QString &id);
 const BrowserFolder *findBrowserFolder(const ProjectData &project,
                                        const QString &id);

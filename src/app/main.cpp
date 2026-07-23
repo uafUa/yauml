@@ -204,13 +204,21 @@ int main(int argc, char *argv[]) {
         QGuiApplication::platformName() != QStringLiteral("minimal");
     QTimer::singleShot(
         0, &application,
-        [&project, &workspace, &engine, supportsDetachedWindows] {
+        [&project, &workspace, &engine, &uiTheme, supportsDetachedWindows] {
           const QString firstDiagram = project.data().diagrams.first().id;
           project.addElement(QStringLiteral("class"), firstDiagram);
           const QString secondDiagram = project.addDiagram();
           project.addElement(QStringLiteral("enumeration"), secondDiagram);
           const QString smokeFolder = project.addBrowserFolder(
               QStringLiteral("model"), {}, QStringLiteral("Smoke Folder"));
+          project.saveDiagramStyle(
+              {}, QStringLiteral("Smoke style"),
+              {{QStringLiteral("fill"), uiTheme.classFill()},
+               {QStringLiteral("headerFill"), uiTheme.panelHeader()},
+               {QStringLiteral("border"), uiTheme.nodeBorder()},
+               {QStringLiteral("primaryText"), uiTheme.nodeTitleText()},
+               {QStringLiteral("secondaryText"), uiTheme.bodyText()},
+               {QStringLiteral("divider"), uiTheme.compartmentDivider()}});
           project.addTreeItemsToDiagram(
               firstDiagram, {},
               QStringLiteral(R"([{"kind":"folder","id":"%1"}])")
@@ -232,12 +240,18 @@ int main(int argc, char *argv[]) {
                                    ? rootObject->findChild<QObject *>(
                                          QStringLiteral("folderNameDialog"))
                                    : nullptr;
+          auto *styleDialog = rootObject
+                                  ? rootObject->findChild<QObject *>(
+                                        QStringLiteral("browserStyleDialog"))
+                                  : nullptr;
           auto *tabs = rootObject ? rootObject->findChild<QObject *>(
                                         QStringLiteral("preferencesTabs"))
                                   : nullptr;
           if (!folderDialog ||
               !QMetaObject::invokeMethod(folderDialog, "open") ||
               !QMetaObject::invokeMethod(folderDialog, "close") ||
+              !styleDialog || !QMetaObject::invokeMethod(styleDialog, "open") ||
+              !QMetaObject::invokeMethod(styleDialog, "close") ||
               !preferences || !tabs ||
               !QMetaObject::invokeMethod(preferences, "open")) {
             QCoreApplication::exit(1);

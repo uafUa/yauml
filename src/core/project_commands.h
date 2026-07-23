@@ -14,6 +14,12 @@ struct ContainerChildrenChange {
   QStringList after;
 };
 
+struct PresentationGeometryChange {
+  QString presentationId;
+  QRectF before;
+  QRectF after;
+};
+
 class CreateElementCommand final : public ProjectCommand {
 public:
   CreateElementCommand(ProjectController *controller,
@@ -99,7 +105,8 @@ public:
       ProjectController *controller, const ProjectData &project,
       const QStringList &elementIds, const QStringList &folderIds,
       BrowserParent target,
-      std::optional<QString> targetPackageId = std::nullopt);
+      std::optional<QString> targetPackageId = std::nullopt,
+      std::optional<QString> targetEnclosingTypeId = std::nullopt);
 
 private:
   struct ParentChange {
@@ -113,6 +120,11 @@ private:
     QString before;
     QString after;
   };
+  struct EnclosingTypeChange {
+    QString elementId;
+    QString before;
+    QString after;
+  };
 
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
@@ -120,6 +132,7 @@ private:
 
   QList<ParentChange> m_changes;
   QList<PackageChange> m_packageChanges;
+  QList<EnclosingTypeChange> m_enclosingTypeChanges;
 };
 
 class ReorderBrowserItemsCommand final : public ProjectCommand {
@@ -228,16 +241,19 @@ private:
   QList<PositionedConnector> m_connectors;
 };
 
-// A project-tree container drop can add folder/package frames, leaf
-// presentations, connectors, and membership changes as one compact undo
-// transaction.
+// Adds a cohesive presentation slice—frames, leaves, connectors, membership,
+// and any required enclosing-frame geometry—as one compact undo transaction.
+// It is shared by tree drops and diagram-side wrapping actions.
 class AddContainerPresentationsCommand final : public ProjectCommand {
 public:
   AddContainerPresentationsCommand(
       ProjectController *controller, const ProjectData &project,
       QString diagramId, QList<ContainerPresentation> containers,
       QList<NodePresentation> nodes, QList<ConnectorPresentation> connectors,
-      QList<ContainerChildrenChange> membershipChanges);
+      QList<ContainerChildrenChange> membershipChanges,
+      QList<PresentationGeometryChange> geometryChanges = {},
+      QString description =
+          QStringLiteral("Add project-tree items to diagram"));
 
 private:
   struct PositionedContainer {
@@ -261,6 +277,7 @@ private:
   QList<PositionedNode> m_nodes;
   QList<PositionedConnector> m_connectors;
   QList<ContainerChildrenChange> m_membershipChanges;
+  QList<PresentationGeometryChange> m_geometryChanges;
 };
 
 class RemovePresentationsCommand final : public ProjectCommand {
@@ -381,6 +398,11 @@ private:
     QString before;
     QString after;
   };
+  struct EnclosingTypeChange {
+    QString elementId;
+    QString before;
+    QString after;
+  };
 
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
@@ -392,12 +414,7 @@ private:
   QList<DiagramRecords> m_diagrams;
   QList<BrowserParentChange> m_browserParentChanges;
   QList<PackageChange> m_packageChanges;
-};
-
-struct PresentationGeometryChange {
-  QString presentationId;
-  QRectF before;
-  QRectF after;
+  QList<EnclosingTypeChange> m_enclosingTypeChanges;
 };
 
 struct ElementPackageChange {
@@ -614,6 +631,56 @@ private:
   QString m_diagramId;
   QString m_before;
   QString m_after;
+};
+
+struct StyleAssignmentChange {
+  QString kind;
+  QString diagramId;
+  QString subjectId;
+  QString before;
+  QString after;
+};
+
+class SaveDiagramStyleCommand final : public ProjectCommand {
+public:
+  SaveDiagramStyleCommand(ProjectController *controller,
+                          const ProjectData &project, DiagramStyle after);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  qsizetype m_index = -1;
+  std::optional<DiagramStyle> m_before;
+  DiagramStyle m_after;
+};
+
+class SetStyleAssignmentsCommand final : public ProjectCommand {
+public:
+  SetStyleAssignmentsCommand(ProjectController *controller,
+                             QList<StyleAssignmentChange> changes,
+                             const QString &description);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, bool forward);
+
+  QList<StyleAssignmentChange> m_changes;
+};
+
+class DeleteDiagramStyleCommand final : public ProjectCommand {
+public:
+  DeleteDiagramStyleCommand(ProjectController *controller,
+                            const ProjectData &project, QString styleId);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  qsizetype m_index = -1;
+  DiagramStyle m_style;
+  QList<StyleAssignmentChange> m_assignments;
 };
 
 } // namespace uuml

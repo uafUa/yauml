@@ -62,7 +62,8 @@ bool pathsMatch(const QString &left, const QString &right) {
 QStringList relationshipGestureTypes() {
   return {QStringLiteral("dependency"),     QStringLiteral("realization"),
           QStringLiteral("generalization"), QStringLiteral("association"),
-          QStringLiteral("aggregation"),    QStringLiteral("composition")};
+          QStringLiteral("aggregation"),    QStringLiteral("composition"),
+          QStringLiteral("containment")};
 }
 
 QVariantMap makeDefaultRelationshipGestureKeys() {
@@ -71,7 +72,8 @@ QVariantMap makeDefaultRelationshipGestureKeys() {
           {QStringLiteral("generalization"), QStringLiteral("H")},
           {QStringLiteral("association"), QStringLiteral("A")},
           {QStringLiteral("aggregation"), QStringLiteral("G")},
-          {QStringLiteral("composition"), QStringLiteral("C")}};
+          {QStringLiteral("composition"), QStringLiteral("C")},
+          {QStringLiteral("containment"), QStringLiteral("N")}};
 }
 
 bool normalizeRelationshipGestureKeys(const QVariantMap &candidate,

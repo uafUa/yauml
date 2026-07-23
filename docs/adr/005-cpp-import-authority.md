@@ -24,10 +24,11 @@ partial handwritten language parser.
   extensible metadata. It contains the language, Clang-derived identity, source
   location, and the last imported source-owned fields.
 - Source-owned fields in this slice are element type, name, attributes,
-  operations, and the package implied by a C++ namespace. C++ namespaces are
-  materialized as ordinary source-bound UML package elements rather than a
-  parallel semantic kind. Diagram placement and other presentation or user
-  metadata remain outside synchronization. A manually changed package is still
+  operations, the package implied by a C++ namespace, and the stable enclosing
+  type ID for a nested record. C++ namespaces are materialized as ordinary
+  source-bound UML package elements rather than a parallel semantic kind.
+  Diagram placement and other presentation or user metadata remain outside
+  synchronization. Manually changed package or nesting ownership remains
   user-authoritative under the same three-way rules below.
 - Plan each import using a three-way comparison:
 
@@ -59,6 +60,11 @@ relationship through the normal authority and undo rules rather than creating a
 duplicate. An existing unbound user relationship is never silently claimed as
 source-owned. Diagram connectors remain presentation data and are created by the
 normal placement workflow when both relationship endpoints appear together.
+
+A record declared inside another record also produces a source-bound
+containment relationship from the enclosing type to the nested type. Its stable
+identity uses both Clang symbol identities and it follows the same baseline,
+conflict, and missing-source rules as all other imported relationships.
 
 Record member and operation-signature types are also imported as semantic
 relationships. A by-value member or a member using a configured owning pointer

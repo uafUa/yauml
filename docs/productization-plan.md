@@ -111,22 +111,22 @@ history memory grow with total project size rather than the size of each edit.
   enhancement.
 - The structural relationship vocabulary for supported class and package
   diagrams is implemented: dependency, generalization/inheritance,
-  realization/implementation, navigable association, aggregation, and
-  composition. Each type has distinct persisted semantics, default text, line
-  style, endpoint decoration, creation actions, and undo/redo. Aggregation and
-  composition use the source as the whole end; the other directed types point
-  toward the target. Behavioral-diagram connectors remain outside the current
-  product direction.
+  realization/implementation, navigable association, aggregation, composition,
+  and containment/nesting. Each type has distinct persisted semantics, default
+  text, line style, endpoint decoration, creation actions, and undo/redo.
+  Aggregation, composition, and containment use the source as the whole/owner
+  end; the other directed types point toward the target. Behavioral-diagram
+  connectors remain outside the current product direction.
 - Edge-gesture connector creation is implemented. While the pointer button is
   held on a node edge, pressing the relationship hotkey enters a live
   drag-to-connect preview using the configured default routing. Defaults are
   `D` dependency, `I` implementation/realization, `H` inheritance/
-  generalization, `A` association, `G` aggregation, and `C` composition. The
-  initial press and final drop positions become exact persisted perimeter
-  attachments. Releasing over any node—including the originating node—commits
-  one relationship command; self-connections receive a persisted outside loop.
-  Escape or a drop on empty space discards the candidate without changing the
-  model or undo history.
+  generalization, `A` association, `G` aggregation, `C` composition, and `N`
+  containment. The initial press and final drop positions become exact
+  persisted perimeter attachments. Releasing over any node—including the
+  originating node—commits one relationship command; self-connections receive
+  a persisted outside loop. Escape or a drop on empty space discards the
+  candidate without changing the model or undo history.
 - Direct endpoint manipulation is implemented and replaces the modal
   **Reconnect source…** and **Reconnect target…** actions. A selected connector
   exposes fully visible draggable endpoint handles. Starting a drag
@@ -144,7 +144,7 @@ history memory grow with total project size rather than the size of each edit.
   their points as presentations resize. Counts are persisted and changed
   through one undoable presentation command.
 - The Connectors preferences page implements both the default connector shape
-  and editors for all six relationship gesture keys. Assignments are applied
+  and editors for all seven relationship gesture keys. Assignments are applied
   atomically, normalized to uppercase, restricted to one letter or digit, and
   rejected visibly when empty or duplicated. All values persist as application
   settings.
@@ -202,23 +202,43 @@ history memory grow with total project size rather than the size of each edit.
   Dragging a package from the tree creates nested package frames, content-sized
   leaf presentations, and eligible connectors as one undoable command. A
   diagram may show only a chosen subset; later source imports do not silently
-  add presentations.
-- The persisted **Package reassignment by drag and drop** preference provides
-  **Disallow**, **Ask** (default), and **Allow** policies. It governs both
-  project-tree and diagram-frame boundary drops. Approved moves change visual
-  ownership, browser placement, and semantic package assignment atomically;
-  cancellation changes nothing. Prompts are raised only when the presentation
-  actually crosses a container boundary and identify the affected elements.
-  Custom folders remain presentation-only.
+  add presentations. A package can also be added explicitly as an empty frame.
+  **Wrap in parent namespace** creates or reuses the immediate semantic parent
+  frame when an element is currently shown at diagram root, in an ancestor
+  namespace, or in another presentation container.
+- Diagram containment is always presentation-only. Moving presentations into,
+  between, or out of package frames never changes semantic package ownership.
+  An element may be dropped only at diagram root, in its immediate package, or
+  in an ancestor package; unrelated and descendant package frames reject the
+  drop because their visual containment would be semantically misleading.
+  Labels show the full qualified name at diagram root, a relative qualified
+  name in an ancestor package, and the short name in the immediate package.
+- The persisted **Project-tree containment changes by drag and drop**
+  preference provides **Disallow**, **Ask** (default), and **Allow** policies.
+  It governs package reassignment and moving a classifier under another class
+  or struct as a nested type in the project browser only. Approved moves change
+  browser placement, package assignment, and stable enclosing-type ownership
+  atomically; cancellation changes nothing.
 
-### 3.7 Project and presentation styling — deferred
+### 3.7 Project and presentation styling — implemented
 
 - The application palette is centralized behind semantic roles shared by QML
   controls and the native scene-graph renderer. All roles are editable through
   the persisted Colors preferences page, with staged apply/cancel behavior and
   render-thread-safe palette snapshots.
-- Project styles and presentation-local overrides are deliberately deferred
-  until concrete product use cases make the right inheritance model clearer.
+- Each project owns a registry of named diagram styles. A style has a stable
+  UUID, a unique editable name, and generic fill, header, border, primary-text,
+  secondary-text, and divider colors usable by classifier nodes and container
+  frames. Connector styling remains a separate future slice.
+- Styles can be assigned from project-tree and diagram context menus. The
+  effective style resolves in the order presentation override, semantic/browser
+  subject override, nearest styled project-browser ancestor, then the
+  application palette. Package elements store namespace styles; legacy
+  synthetic namespace rows retain assignments by qualified path.
+- Creating, editing, assigning, deleting, and clearing styles are undoable.
+  Deletion confirms its assignment count and clears references so affected
+  presentations resume inheritance. The registry and every assignment persist
+  in project JSON5 rather than application preferences.
 
 ## Phase 4: C++ import and synchronization — in progress
 
@@ -244,6 +264,11 @@ history memory grow with total project size rather than the size of each edit.
   namespaces. Package assignment participates in the same three-way baseline:
   a manual reassignment is retained, and a simultaneous source namespace change
   is logged as a conflict rather than overwriting the user model.
+- Nested C++ records reference their enclosing class or struct through a stable
+  semantic ID and produce a source-bound UML containment relationship from
+  owner to nested type. The relationship uses conventional circle-plus nesting
+  notation and appears on a diagram whenever both endpoint presentations are
+  present.
 - Member ownership and signature-use relationships are implemented.
   By-value members and configured owning pointer templates produce composition;
   configured shared pointer templates and raw pointer/reference members produce

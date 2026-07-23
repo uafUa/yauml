@@ -123,7 +123,7 @@ private slots:
   void connectorPortsSnapAndRemainFreelyPlaceable();
   void liveDragSnappingIsUndoableAndAltSuppressesIt();
   void folderContainerMovesDescendantsAndResizesIndependently();
-  void nestedPackageMoveWithinParentDoesNotPrompt();
+  void nestedPackageDiagramMovesRemainPresentational();
 };
 
 void DiagramCanvasTests::arrangementGeometryRulesAreDeterministic() {
@@ -237,6 +237,11 @@ void DiagramCanvasTests::relationshipStylesUseUmlDecorations() {
       ui::relationshipVisualStyle(RelationshipType::Composition);
   QVERIFY(composition.source == RelationshipDecoration::FilledDiamond);
   QVERIFY(composition.target == RelationshipDecoration::None);
+
+  const auto containment =
+      ui::relationshipVisualStyle(RelationshipType::Containment);
+  QVERIFY(containment.source == RelationshipDecoration::CirclePlus);
+  QVERIFY(containment.target == RelationshipDecoration::None);
 }
 
 void DiagramCanvasTests::snappingGeometryRulesAreDeterministic() {
@@ -1052,42 +1057,108 @@ void DiagramCanvasTests::
   QCOMPARE(controller.data(), beforeMove);
 }
 
-void DiagramCanvasTests::nestedPackageMoveWithinParentDoesNotPrompt() {
+void DiagramCanvasTests::nestedPackageDiagramMovesRemainPresentational() {
   ProjectController controller;
   const QString diagramId = controller.data().diagrams.first().id;
   const QString parentPackage =
       controller.addElement(QStringLiteral("package"));
   const QString childPackage = controller.addElement(QStringLiteral("package"));
-  const QString childJson = QString::fromUtf8(
-      QJsonDocument(QJsonArray{QJsonObject{
-                        {QStringLiteral("kind"), QStringLiteral("element")},
-                        {QStringLiteral("id"), childPackage}}})
-          .toJson(QJsonDocument::Compact));
+  const QString unrelatedPackage =
+      controller.addElement(QStringLiteral("package"));
+  const QString childType = controller.addElement(QStringLiteral("class"));
+  const auto browserItemJson = [](const QString &id) {
+    return QString::fromUtf8(
+        QJsonDocument(QJsonArray{QJsonObject{
+                          {QStringLiteral("kind"), QStringLiteral("element")},
+                          {QStringLiteral("id"), id}}})
+            .toJson(QJsonDocument::Compact));
+  };
   QVERIFY(controller.moveBrowserItemsWithPackageReassignment(
-      childJson, QStringLiteral("element"), parentPackage));
+      browserItemJson(childPackage), QStringLiteral("element"), parentPackage));
+  QVERIFY(controller.moveBrowserItemsWithPackageReassignment(
+      browserItemJson(childType), QStringLiteral("element"), childPackage));
   controller.selectObject(parentPackage, QStringLiteral("element"));
   controller.addSelectedToDiagram(diagramId);
+  QCOMPARE(controller.addEmptyPackageToDiagram(diagramId, unrelatedPackage), 1);
+
+  const auto unrelatedFrameBeforeMove =
+      std::find_if(controller.data().diagrams.first().containers.cbegin(),
+                   controller.data().diagrams.first().containers.cend(),
+                   [&](const ContainerPresentation &candidate) {
+                     return candidate.subjectId == unrelatedPackage;
+                   });
+  QVERIFY(unrelatedFrameBeforeMove !=
+          controller.data().diagrams.first().containers.cend());
+  const QVariantMap unrelatedGeometry{
+      {QStringLiteral("id"), unrelatedFrameBeforeMove->id},
+      {QStringLiteral("x"), 600.0},
+      {QStringLiteral("y"), 80.0},
+      {QStringLiteral("width"), 240.0},
+      {QStringLiteral("height"), 200.0}};
+  controller.updatePresentationGeometries(
+      diagramId, {unrelatedGeometry},
+      QStringLiteral("Position unrelated namespace test frame"));
 
   TestDiagramCanvas canvas;
   configureCanvas(canvas, controller);
-  QSignalSpy prompt(&canvas, &DiagramCanvas::packageReassignmentRequested);
   const Diagram before = controller.data().diagrams.first();
+  const auto parentFrame =
+      std::find_if(before.containers.cbegin(), before.containers.cend(),
+                   [&](const ContainerPresentation &candidate) {
+                     return candidate.subjectId == parentPackage;
+                   });
   const auto childFrame =
       std::find_if(before.containers.cbegin(), before.containers.cend(),
                    [&](const ContainerPresentation &candidate) {
                      return candidate.subjectId == childPackage;
                    });
+  const auto unrelatedFrame =
+      std::find_if(before.containers.cbegin(), before.containers.cend(),
+                   [&](const ContainerPresentation &candidate) {
+                     return candidate.subjectId == unrelatedPackage;
+                   });
+  const auto childNode =
+      std::find_if(before.nodes.cbegin(), before.nodes.cend(),
+                   [&](const NodePresentation &candidate) {
+                     return candidate.elementId == childType;
+                   });
+  QVERIFY(parentFrame != before.containers.cend());
   QVERIFY(childFrame != before.containers.cend());
+  QVERIFY(unrelatedFrame != before.containers.cend());
+  QVERIFY(childNode != before.nodes.cend());
+
+  // A namespace frame visually asserts semantic containment. Reject a drop
+  // into an unrelated namespace and restore the complete preview unchanged.
+  const ProjectData beforeRejectedDrop = controller.data();
+  const QPointF viewPan(30, 30);
+  canvas.drag(childNode->geometry.center() + viewPan,
+              unrelatedFrame->geometry.center() + viewPan);
+  QCOMPARE(controller.data(), beforeRejectedDrop);
+
   const QPointF start =
-      childFrame->geometry.topLeft() + QPointF(10, 10) + QPointF(30, 30);
+      childFrame->geometry.topLeft() + QPointF(10, 10) + viewPan;
   canvas.drag(start, start + QPointF(10, 8));
 
-  QCOMPARE(prompt.count(), 0);
   QCOMPARE(findElement(controller.data(), childPackage)->packageId,
            parentPackage);
   QCOMPARE(findContainer(controller.data().diagrams.first(), childFrame->id)
                ->geometry,
            childFrame->geometry.translated(10, 8));
+
+  const auto *movedChild =
+      findContainer(controller.data().diagrams.first(), childFrame->id);
+  QVERIFY(movedChild);
+  const QPointF detachedStart =
+      movedChild->geometry.topLeft() + QPointF(10, 10) + QPointF(30, 30);
+  canvas.drag(detachedStart, QPointF(800, 520));
+
+  QCOMPARE(findElement(controller.data(), childPackage)->packageId,
+           parentPackage);
+  const auto *currentParent =
+      findContainer(controller.data().diagrams.first(), parentFrame->id);
+  QVERIFY(currentParent);
+  QVERIFY(!currentParent->childPresentationIds.contains(childFrame->id));
+  QVERIFY(ProjectSerializer::validate(controller.data()).isEmpty());
 }
 
 QTEST_MAIN(DiagramCanvasTests)

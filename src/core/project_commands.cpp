@@ -49,6 +49,42 @@ BrowserParent *browserParentFor(ProjectData &project, const QString &kind,
   return nullptr;
 }
 
+QString *styleAssignmentFor(ProjectData &project, const QString &kind,
+                            const QString &diagramId,
+                            const QString &subjectId) {
+  if (kind == QStringLiteral("element")) {
+    if (auto *element = findElement(project, subjectId))
+      return &element->styleId;
+  } else if (kind == QStringLiteral("folder")) {
+    if (auto *folder = findBrowserFolder(project, subjectId))
+      return &folder->styleId;
+  } else if (kind == QStringLiteral("node")) {
+    if (auto *diagram = findDiagram(project, diagramId))
+      if (auto *node = findNode(*diagram, subjectId))
+        return &node->styleId;
+  } else if (kind == QStringLiteral("container")) {
+    if (auto *diagram = findDiagram(project, diagramId))
+      if (auto *container = findContainer(*diagram, subjectId))
+        return &container->styleId;
+  }
+  return nullptr;
+}
+
+void applyStyleAssignment(ProjectData &project,
+                          const StyleAssignmentChange &change,
+                          const QString &styleId) {
+  if (change.kind == QStringLiteral("namespace")) {
+    if (styleId.isEmpty())
+      project.namespaceStyleIds.remove(change.subjectId);
+    else
+      project.namespaceStyleIds.insert(change.subjectId, styleId);
+    return;
+  }
+  if (QString *assignment = styleAssignmentFor(
+          project, change.kind, change.diagramId, change.subjectId))
+    *assignment = styleId;
+}
+
 QString browserItemKey(const QString &kind, const QString &id) {
   return kind + u':' + id;
 }
@@ -268,12 +304,14 @@ void RenameBrowserFolderCommand::apply(ProjectData &project,
 MoveBrowserItemsCommand::MoveBrowserItemsCommand(
     ProjectController *controller, const ProjectData &project,
     const QStringList &elementIds, const QStringList &folderIds,
-    BrowserParent target, std::optional<QString> targetPackageId)
+    BrowserParent target, std::optional<QString> targetPackageId,
+    std::optional<QString> targetEnclosingTypeId)
     : ProjectCommand(controller,
                      elementIds.size() + folderIds.size() == 1
                          ? QStringLiteral("Move project-tree item")
                          : QStringLiteral("Move project-tree items")) {
   QSet<QString> seenElements;
+  QSet<QString> semanticSubtreeIds;
   for (const QString &elementId : elementIds) {
     if (seenElements.contains(elementId))
       continue;
@@ -285,6 +323,39 @@ MoveBrowserItemsCommand::MoveBrowserItemsCommand(
     if (element && targetPackageId && element->packageId != *targetPackageId)
       m_packageChanges.append(
           {elementId, element->packageId, *targetPackageId});
+    if (element && targetEnclosingTypeId) {
+      const QString desiredOwner = element->type == ElementType::Package
+                                       ? QString{}
+                                       : *targetEnclosingTypeId;
+      if (element->enclosingTypeId != desiredOwner)
+        m_enclosingTypeChanges.append(
+            {elementId, element->enclosingTypeId, desiredOwner});
+    }
+    if (element)
+      semanticSubtreeIds.insert(elementId);
+  }
+
+  // A nested subtree follows its moved root to the target package. Direct
+  // descendants retain their owner IDs, so only the roots change owner.
+  bool foundDescendant = true;
+  while (foundDescendant) {
+    foundDescendant = false;
+    for (const auto &element : project.elements) {
+      if (!semanticSubtreeIds.contains(element.id) &&
+          semanticSubtreeIds.contains(element.enclosingTypeId)) {
+        semanticSubtreeIds.insert(element.id);
+        foundDescendant = true;
+      }
+    }
+  }
+  if (targetPackageId) {
+    for (const auto &element : project.elements) {
+      if (semanticSubtreeIds.contains(element.id) &&
+          !seenElements.contains(element.id) &&
+          element.packageId != *targetPackageId)
+        m_packageChanges.append(
+            {element.id, element.packageId, *targetPackageId});
+    }
   }
   QSet<QString> seenFolders;
   for (const QString &folderId : folderIds) {
@@ -315,6 +386,9 @@ void MoveBrowserItemsCommand::apply(ProjectData &project, bool forward) {
   for (const auto &change : m_packageChanges)
     if (auto *element = findElement(project, change.elementId))
       element->packageId = forward ? change.after : change.before;
+  for (const auto &change : m_enclosingTypeChanges)
+    if (auto *element = findElement(project, change.elementId))
+      element->enclosingTypeId = forward ? change.after : change.before;
 }
 
 ReorderBrowserItemsCommand::ReorderBrowserItemsCommand(
@@ -519,11 +593,12 @@ AddContainerPresentationsCommand::AddContainerPresentationsCommand(
     ProjectController *controller, const ProjectData &project,
     QString diagramId, QList<ContainerPresentation> containers,
     QList<NodePresentation> nodes, QList<ConnectorPresentation> connectors,
-    QList<ContainerChildrenChange> membershipChanges)
-    : ProjectCommand(controller,
-                     QStringLiteral("Add project-tree items to diagram")),
+    QList<ContainerChildrenChange> membershipChanges,
+    QList<PresentationGeometryChange> geometryChanges, QString description)
+    : ProjectCommand(controller, description),
       m_diagramId(std::move(diagramId)),
-      m_membershipChanges(std::move(membershipChanges)) {
+      m_membershipChanges(std::move(membershipChanges)),
+      m_geometryChanges(std::move(geometryChanges)) {
   const auto *diagram = findDiagram(project, m_diagramId);
   Q_ASSERT(diagram);
   if (!diagram)
@@ -556,11 +631,23 @@ void AddContainerPresentationsCommand::execute(ProjectData &project) {
       insertAtRecordedPosition(diagram->connectors, connector.index,
                                connector.value);
     applyMembershipChanges(*diagram, m_membershipChanges, true);
+    for (const auto &change : m_geometryChanges) {
+      if (auto *node = findNode(*diagram, change.presentationId))
+        node->geometry = change.after;
+      else if (auto *container = findContainer(*diagram, change.presentationId))
+        container->geometry = change.after;
+    }
   }
 }
 
 void AddContainerPresentationsCommand::revert(ProjectData &project) {
   if (auto *diagram = findDiagram(project, m_diagramId)) {
+    for (const auto &change : m_geometryChanges) {
+      if (auto *node = findNode(*diagram, change.presentationId))
+        node->geometry = change.before;
+      else if (auto *container = findContainer(*diagram, change.presentationId))
+        container->geometry = change.before;
+    }
     applyMembershipChanges(*diagram, m_membershipChanges, false);
     for (auto connector = m_connectors.crbegin();
          connector != m_connectors.crend(); ++connector)
@@ -788,6 +875,9 @@ DeleteElementCommand::DeleteElementCommand(ProjectController *controller,
     if (element.id != elementId && element.packageId == elementId)
       m_packageChanges.append(
           {element.id, element.packageId, m_element.packageId});
+    if (element.id != elementId && element.enclosingTypeId == elementId)
+      m_enclosingTypeChanges.append(
+          {element.id, element.enclosingTypeId, m_element.enclosingTypeId});
   }
   for (const auto &folder : project.browserFolders) {
     if (folder.parent.kind == QStringLiteral("element") &&
@@ -807,6 +897,9 @@ void DeleteElementCommand::execute(ProjectData &project) {
   for (const auto &change : m_packageChanges)
     if (auto *element = findElement(project, change.elementId))
       element->packageId = change.after;
+  for (const auto &change : m_enclosingTypeChanges)
+    if (auto *element = findElement(project, change.elementId))
+      element->enclosingTypeId = change.after;
   for (const auto &records : m_diagrams) {
     if (auto *diagram = findDiagram(project, records.diagramId)) {
       for (auto item = records.connectors.crbegin();
@@ -836,6 +929,9 @@ void DeleteElementCommand::revert(ProjectData &project) {
   for (const auto &change : m_packageChanges)
     if (auto *element = findElement(project, change.elementId))
       element->packageId = change.before;
+  for (const auto &change : m_enclosingTypeChanges)
+    if (auto *element = findElement(project, change.elementId))
+      element->enclosingTypeId = change.before;
   if (m_browserOrderIndex >= 0)
     project.browserItemOrder.insert(
         std::clamp(m_browserOrderIndex, qsizetype{0},
@@ -1195,6 +1291,103 @@ void RenameDiagramCommand::revert(ProjectData &project) {
 void RenameDiagramCommand::apply(ProjectData &project, const QString &value) {
   if (auto *diagram = findDiagram(project, m_diagramId))
     diagram->name = value;
+}
+
+SaveDiagramStyleCommand::SaveDiagramStyleCommand(ProjectController *controller,
+                                                 const ProjectData &project,
+                                                 DiagramStyle after)
+    : ProjectCommand(controller, findDiagramStyle(project, after.id)
+                                     ? QStringLiteral("Edit diagram style")
+                                     : QStringLiteral("Create diagram style")),
+      m_index(indexOfId(project.diagramStyles, after.id)),
+      m_after(std::move(after)) {
+  if (m_index >= 0)
+    m_before = project.diagramStyles.at(m_index);
+  else
+    m_index = project.diagramStyles.size();
+}
+
+void SaveDiagramStyleCommand::execute(ProjectData &project) {
+  if (m_before) {
+    if (auto *style = findDiagramStyle(project, m_after.id))
+      *style = m_after;
+  } else {
+    insertAtRecordedPosition(project.diagramStyles, m_index, m_after);
+  }
+}
+
+void SaveDiagramStyleCommand::revert(ProjectData &project) {
+  if (m_before) {
+    if (auto *style = findDiagramStyle(project, m_before->id))
+      *style = *m_before;
+  } else {
+    removeRecordedValue(project.diagramStyles, m_index, m_after.id);
+  }
+}
+
+SetStyleAssignmentsCommand::SetStyleAssignmentsCommand(
+    ProjectController *controller, QList<StyleAssignmentChange> changes,
+    const QString &description)
+    : ProjectCommand(controller, description), m_changes(std::move(changes)) {}
+
+void SetStyleAssignmentsCommand::execute(ProjectData &project) {
+  apply(project, true);
+}
+
+void SetStyleAssignmentsCommand::revert(ProjectData &project) {
+  apply(project, false);
+}
+
+void SetStyleAssignmentsCommand::apply(ProjectData &project, bool forward) {
+  for (const auto &change : m_changes)
+    applyStyleAssignment(project, change,
+                         forward ? change.after : change.before);
+}
+
+DeleteDiagramStyleCommand::DeleteDiagramStyleCommand(
+    ProjectController *controller, const ProjectData &project, QString styleId)
+    : ProjectCommand(controller, QStringLiteral("Delete diagram style")),
+      m_index(indexOfId(project.diagramStyles, styleId)) {
+  if (m_index < 0)
+    return;
+  m_style = project.diagramStyles.at(m_index);
+  const auto record = [&](const QString &kind, const QString &diagramId,
+                          const QString &subjectId,
+                          const QString &assignedStyleId) {
+    if (assignedStyleId == styleId)
+      m_assignments.append({kind, diagramId, subjectId, styleId, QString{}});
+  };
+  for (const auto &element : project.elements)
+    record(QStringLiteral("element"), {}, element.id, element.styleId);
+  for (const auto &folder : project.browserFolders)
+    record(QStringLiteral("folder"), {}, folder.id, folder.styleId);
+  for (auto assignment = project.namespaceStyleIds.cbegin();
+       assignment != project.namespaceStyleIds.cend(); ++assignment)
+    record(QStringLiteral("namespace"), {}, assignment.key(),
+           assignment.value());
+  for (const auto &diagram : project.diagrams) {
+    for (const auto &node : diagram.nodes)
+      record(QStringLiteral("node"), diagram.id, node.id, node.styleId);
+    for (const auto &container : diagram.containers)
+      record(QStringLiteral("container"), diagram.id, container.id,
+             container.styleId);
+  }
+}
+
+void DeleteDiagramStyleCommand::execute(ProjectData &project) {
+  if (m_index < 0)
+    return;
+  for (const auto &assignment : m_assignments)
+    applyStyleAssignment(project, assignment, {});
+  removeRecordedValue(project.diagramStyles, m_index, m_style.id);
+}
+
+void DeleteDiagramStyleCommand::revert(ProjectData &project) {
+  if (m_index < 0)
+    return;
+  insertAtRecordedPosition(project.diagramStyles, m_index, m_style);
+  for (const auto &assignment : m_assignments)
+    applyStyleAssignment(project, assignment, assignment.before);
 }
 
 } // namespace uuml

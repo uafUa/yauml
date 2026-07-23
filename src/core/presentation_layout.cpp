@@ -57,9 +57,9 @@ QRectF presentationGeometry(const Diagram &diagram,
   return {};
 }
 
-QRectF childPresentationBounds(
-    const Diagram &diagram, const ContainerPresentation &container,
-    bool *hasContent) {
+QRectF childPresentationBounds(const Diagram &diagram,
+                               const ContainerPresentation &container,
+                               bool *hasContent) {
   QRectF bounds;
   *hasContent = false;
   for (const QString &childId : container.childPresentationIds) {
@@ -75,27 +75,39 @@ QRectF childPresentationBounds(
 QString fullyQualifiedElementName(const ProjectData &project,
                                   const ModelElement &element,
                                   QSet<QString> &visited) {
-  if (element.packageId.isEmpty() || visited.contains(element.id))
+  if (visited.contains(element.id))
     return element.name;
   visited.insert(element.id);
 
-  const auto *package = findElement(project, element.packageId);
-  if (!package)
+  const auto *semanticParent =
+      !element.enclosingTypeId.isEmpty()
+          ? findElement(project, element.enclosingTypeId)
+          : findElement(project, element.packageId);
+  if (!semanticParent)
     return element.name;
-  const QString packageName =
-      fullyQualifiedElementName(project, *package, visited);
-  if (packageName.isEmpty())
+  const QString parentName =
+      fullyQualifiedElementName(project, *semanticParent, visited);
+  if (parentName.isEmpty())
     return element.name;
 
-  const QStringList packageParts =
-      packageName.split(QStringLiteral("::"), Qt::SkipEmptyParts);
+  // Enclosing-type ownership is authoritative. Only the classifier's local
+  // name follows a manual nesting move; qualifiers retained in imported
+  // source names describe the previous owner and must not be duplicated.
+  if (!element.enclosingTypeId.isEmpty()) {
+    const QString localName = element.name.section(QStringLiteral("::"), -1);
+    return localName.isEmpty() ? element.name
+                               : parentName + QStringLiteral("::") + localName;
+  }
+
+  const QStringList parentParts =
+      parentName.split(QStringLiteral("::"), Qt::SkipEmptyParts);
   const QStringList elementParts =
       element.name.split(QStringLiteral("::"), Qt::SkipEmptyParts);
-  int overlap = std::min(packageParts.size(), elementParts.size());
+  int overlap = std::min(parentParts.size(), elementParts.size());
   while (overlap > 0) {
     bool matches = true;
     for (int index = 0; index < overlap; ++index) {
-      if (packageParts.at(packageParts.size() - overlap + index) !=
+      if (parentParts.at(parentParts.size() - overlap + index) !=
           elementParts.at(index)) {
         matches = false;
         break;
@@ -106,7 +118,7 @@ QString fullyQualifiedElementName(const ProjectData &project,
     --overlap;
   }
 
-  QStringList qualifiedParts = packageParts;
+  QStringList qualifiedParts = parentParts;
   qualifiedParts.append(elementParts.mid(overlap));
   return qualifiedParts.join(QStringLiteral("::"));
 }
@@ -119,13 +131,12 @@ QSizeF nodeContentSize(const ModelElement &element) {
   for (const QString &line : lines)
     widestLine = std::max(widestLine, applicationTextWidth(line, false));
 
-  const qreal width =
-      std::max(kMinimumNodeWidth,
-               std::ceil(widestLine + 2.0 * kNodeTextPadding + 8.0));
-  const qreal height = std::max(
-      kMinimumNodeHeight,
-      std::ceil(kNodeHeaderHeight + lines.size() * kNodeLineHeight +
-                kNodeBottomPadding));
+  const qreal width = std::max(
+      kMinimumNodeWidth, std::ceil(widestLine + 2.0 * kNodeTextPadding + 8.0));
+  const qreal height =
+      std::max(kMinimumNodeHeight,
+               std::ceil(kNodeHeaderHeight + lines.size() * kNodeLineHeight +
+                         kNodeBottomPadding));
   return {width, height};
 }
 
@@ -147,7 +158,7 @@ QString elementDisplayNameInPackage(const ProjectData &project,
                                     const ModelElement &element,
                                     const QString &packageElementId) {
   if (packageElementId.isEmpty())
-    return element.name;
+    return fullyQualifiedElementName(project, element);
   const auto *package = findElement(project, packageElementId);
   if (!package)
     return element.name;
@@ -156,7 +167,7 @@ QString elementDisplayNameInPackage(const ProjectData &project,
   const QString qualifiedName = fullyQualifiedElementName(project, element);
   const QString prefix = packageName + QStringLiteral("::");
   return qualifiedName.startsWith(prefix) ? qualifiedName.mid(prefix.size())
-                                          : element.name;
+                                          : qualifiedName;
 }
 
 QString containerDisplayName(const ProjectData &project,
@@ -174,9 +185,9 @@ QString containerDisplayName(const ProjectData &project,
 
 qreal containerTitleWidth(const ProjectData &project,
                           const ContainerPresentation &container) {
-  return std::ceil(applicationTextWidth(
-                       containerDisplayName(project, container), true) +
-                   2.0 * kNodeTextPadding + 8.0);
+  return std::ceil(
+      applicationTextWidth(containerDisplayName(project, container), true) +
+      2.0 * kNodeTextPadding + 8.0);
 }
 
 QRectF containerContentGeometry(const ProjectData &project,
@@ -192,11 +203,9 @@ QRectF containerContentGeometry(const ProjectData &project,
     return {container.geometry.topLeft(),
             QSizeF(minimumWidth, kMinimumContainerHeight)};
 
-  QRectF fitted =
-      contentBounds.adjusted(-kContainerHorizontalPadding,
-                             -kContainerTopPadding,
-                             kContainerHorizontalPadding,
-                             kContainerBottomPadding);
+  QRectF fitted = contentBounds.adjusted(
+      -kContainerHorizontalPadding, -kContainerTopPadding,
+      kContainerHorizontalPadding, kContainerBottomPadding);
   if (fitted.width() < minimumWidth)
     fitted.setWidth(minimumWidth);
   if (fitted.height() < kMinimumContainerHeight)

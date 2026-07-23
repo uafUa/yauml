@@ -56,9 +56,10 @@ class DiagramCanvas : public QQuickItem {
                  selectedHorizontalPortSnapPoints NOTIFY canvasSelectionChanged)
   Q_PROPERTY(int selectedVerticalPortSnapPoints READ
                  selectedVerticalPortSnapPoints NOTIFY canvasSelectionChanged)
-  Q_PROPERTY(
-      QString packageReassignmentPolicy READ packageReassignmentPolicy WRITE
-          setPackageReassignmentPolicy NOTIFY packageReassignmentPolicyChanged)
+  Q_PROPERTY(bool canWrapSelectionInPackage READ canWrapSelectionInPackage
+                 NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(QString selectedStyleId READ selectedStyleId NOTIFY
+                 canvasSelectionChanged)
   Q_PROPERTY(
       QVariantMap relationshipGestureKeys READ relationshipGestureKeys WRITE
           setRelationshipGestureKeys NOTIFY relationshipGestureKeysChanged)
@@ -92,8 +93,8 @@ public:
   QString selectedConnectorRouting() const;
   int selectedHorizontalPortSnapPoints() const;
   int selectedVerticalPortSnapPoints() const;
-  QString packageReassignmentPolicy() const;
-  void setPackageReassignmentPolicy(const QString &policy);
+  bool canWrapSelectionInPackage() const;
+  QString selectedStyleId() const;
   QVariantMap relationshipGestureKeys() const;
   void setRelationshipGestureKeys(const QVariantMap &keys);
 
@@ -114,8 +115,8 @@ public:
   Q_INVOKABLE void setSelectedPortSnapPoints(int horizontalPointCount,
                                              int verticalPointCount);
   Q_INVOKABLE void fitSelectionToContent();
-  Q_INVOKABLE void confirmPendingPackageReassignment();
-  Q_INVOKABLE void cancelPendingPackageReassignment();
+  Q_INVOKABLE void wrapSelectionInPackage();
+  Q_INVOKABLE void assignStyleToSelection(const QString &styleId);
   Q_INVOKABLE void arrangeSelection(const QString &operation);
   Q_INVOKABLE void nudgeSelection(qreal deltaX, qreal deltaY);
   Q_INVOKABLE void removeSelectedPresentations();
@@ -134,13 +135,11 @@ signals:
   void gridSpacingChanged();
   void diagramItemSizingModeChanged();
   void defaultConnectorRoutingChanged();
-  void packageReassignmentPolicyChanged();
   void relationshipGestureKeysChanged();
   void contextMenuRequested(const QString &target, qreal x, qreal y);
   void editRequested(const QString &objectId, const QString &field, int index,
                      const QString &text, qreal x, qreal y, qreal width,
                      qreal height, qreal fontPixelSize, bool fontBold);
-  void packageReassignmentRequested(const QString &message);
 
 protected:
   QSGNode *updatePaintNode(QSGNode *oldNode,
@@ -187,13 +186,11 @@ private:
   const Diagram *diagram() const;
   QRectF nodeGeometry(const NodePresentation &node) const;
   QRectF containerGeometry(const ContainerPresentation &container) const;
-  QRectF containerChildViewport(
-      const ContainerPresentation &container) const;
+  QRectF containerChildViewport(const ContainerPresentation &container) const;
   QRectF presentationClipRect(const QString &presentationId,
                               bool *hasClip) const;
   QRectF visibleNodeGeometry(const NodePresentation &node) const;
-  QRectF
-  visibleContainerGeometry(const ContainerPresentation &container) const;
+  QRectF visibleContainerGeometry(const ContainerPresentation &container) const;
   QPointF toScene(const QPointF &point) const;
   QPointF toView(const QPointF &point) const;
   QRectF toView(const QRectF &rect) const;
@@ -296,12 +293,7 @@ private:
   int m_gridSpacing;
   QString m_diagramItemSizingMode = QStringLiteral("content");
   ConnectorRouting m_defaultConnectorRouting;
-  QString m_packageReassignmentPolicy = QStringLiteral("ask");
   QVariantMap m_relationshipGestureKeys;
-  QVariantList m_pendingPackageMoveGeometries;
-  QStringList m_pendingPackageMovePresentationIds;
-  QString m_pendingPackageMoveTargetContainerId;
-  QString m_pendingPackageMoveDescription;
   QVector<QLineF> m_alignmentGuides;
   quint64 m_themeRevision = 0;
 };

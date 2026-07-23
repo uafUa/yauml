@@ -37,8 +37,8 @@ QString fullyQualifiedElementName(const ProjectData &project,
                                   const ModelElement &element);
 
 // A type shown inside a package frame does not need to repeat that frame's
-// namespace prefix. The empty package id preserves the element's stored name
-// for presentations at diagram root.
+// namespace prefix. Diagram root and unrelated package frames use the full
+// semantic name so presentation-only movement never obscures its real owner.
 QString elementDisplayNameInPackage(const ProjectData &project,
                                     const ModelElement &element,
                                     const QString &packageElementId);

@@ -48,6 +48,8 @@ QString toString(RelationshipType type) {
     return QStringLiteral("aggregation");
   case RelationshipType::Composition:
     return QStringLiteral("composition");
+  case RelationshipType::Containment:
+    return QStringLiteral("containment");
   }
   return QStringLiteral("dependency");
 }
@@ -67,6 +69,8 @@ RelationshipType relationshipTypeFromString(const QString &value, bool *ok) {
     return RelationshipType::Aggregation;
   if (value == QStringLiteral("composition"))
     return RelationshipType::Composition;
+  if (value == QStringLiteral("containment"))
+    return RelationshipType::Containment;
   if (ok)
     *ok = false;
   return RelationshipType::Dependency;
@@ -165,6 +169,15 @@ ModelElement *findElement(ProjectData &project, const QString &id) {
 
 const ModelElement *findElement(const ProjectData &project, const QString &id) {
   return findById(project.elements, id);
+}
+
+DiagramStyle *findDiagramStyle(ProjectData &project, const QString &id) {
+  return findById(project.diagramStyles, id);
+}
+
+const DiagramStyle *findDiagramStyle(const ProjectData &project,
+                                     const QString &id) {
+  return findById(project.diagramStyles, id);
 }
 
 BrowserFolder *findBrowserFolder(ProjectData &project, const QString &id) {

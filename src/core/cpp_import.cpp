@@ -123,6 +123,7 @@ QJsonObject elementSnapshot(const ModelElement &element) {
   snapshot.insert(QStringLiteral("operations"),
                   QJsonArray::fromStringList(element.operations));
   snapshot.insert(QStringLiteral("packageId"), element.packageId);
+  snapshot.insert(QStringLiteral("enclosingTypeId"), element.enclosingTypeId);
   return snapshot;
 }
 
@@ -145,6 +146,8 @@ ModelElement elementFromSnapshot(const QJsonObject &snapshot) {
   element.attributes = stringList(snapshot.value(QStringLiteral("attributes")));
   element.operations = stringList(snapshot.value(QStringLiteral("operations")));
   element.packageId = snapshot.value(QStringLiteral("packageId")).toString();
+  element.enclosingTypeId =
+      snapshot.value(QStringLiteral("enclosingTypeId")).toString();
   return element;
 }
 
@@ -153,7 +156,8 @@ bool sourceOwnedStateEquals(const ModelElement &left,
   return left.type == right.type && left.name == right.name &&
          left.attributes == right.attributes &&
          left.operations == right.operations &&
-         left.packageId == right.packageId;
+         left.packageId == right.packageId &&
+         left.enclosingTypeId == right.enclosingTypeId;
 }
 
 QJsonObject relationshipSnapshot(const Relationship &relationship) {
@@ -210,6 +214,7 @@ QJsonObject sourceBinding(const Relationship &relationship) {
 
 ModelElement sourceElement(const CppSourceSymbol &symbol,
                            const QString &desiredId, const QString &packageId,
+                           const QString &enclosingTypeId,
                            const ModelElement *existing = nullptr) {
   ModelElement element = existing ? *existing : ModelElement{};
   if (!existing)
@@ -217,6 +222,7 @@ ModelElement sourceElement(const CppSourceSymbol &symbol,
   element.type = symbol.elementType;
   element.name = symbol.qualifiedName;
   element.packageId = packageId;
+  element.enclosingTypeId = enclosingTypeId;
   element.attributes = symbol.attributes;
   element.operations = symbol.operations;
   element.enumLiterals.clear();
@@ -247,6 +253,8 @@ Relationship sourceRelationship(const CppSourceRelationship &source,
     relationship.name = QStringLiteral("implements");
   else if (source.relationshipType == RelationshipType::Generalization)
     relationship.name = QStringLiteral("inherits");
+  else if (source.relationshipType == RelationshipType::Containment)
+    relationship.name = QStringLiteral("contains");
   else
     relationship.name.clear();
   relationship.sourceId = sourceElementId;
@@ -345,6 +353,7 @@ CppImportPreview planImport(const CppImportPreview &discovery,
 
   QHash<QString, QString> plannedElementIdBySymbol;
   QHash<QString, QString> packageIdByNamespacePath;
+  QHash<QString, QString> typeIdByQualifiedName;
   for (const auto &symbol : plannedSymbols) {
     QString id;
     if (const auto *bound = byBinding.value(symbol.symbolId, nullptr)) {
@@ -352,9 +361,12 @@ CppImportPreview planImport(const CppImportPreview &discovery,
         id = bound->id;
     } else if (const auto *sameName =
                    byName.value(symbol.qualifiedName, nullptr)) {
+      // The same-name declaration remains an explicit conflict and is never
+      // rebound automatically. Reusing its ID only for dependency planning
+      // keeps child package/enclosing references valid if the user chooses to
+      // apply otherwise-independent descendants.
       if (sourceBinding(*sameName).isEmpty() &&
-          symbol.elementType == ElementType::Package &&
-          sameName->type == ElementType::Package)
+          sameName->type == symbol.elementType)
         id = sameName->id;
       else
         id = newId();
@@ -365,7 +377,27 @@ CppImportPreview planImport(const CppImportPreview &discovery,
       plannedElementIdBySymbol.insert(symbol.symbolId, id);
     if (symbol.elementType == ElementType::Package && !id.isEmpty())
       packageIdByNamespacePath.insert(symbol.qualifiedName, id);
+    else if (!id.isEmpty() &&
+             !typeIdByQualifiedName.contains(symbol.qualifiedName))
+      typeIdByQualifiedName.insert(symbol.qualifiedName, id);
   }
+  const auto enclosingTypeIdFor = [&](const CppSourceSymbol &symbol) {
+    if (symbol.elementType == ElementType::Package)
+      return QString{};
+    const auto parentOf = [](const QString &qualifiedName) {
+      const qsizetype separator =
+          qualifiedName.lastIndexOf(QStringLiteral("::"));
+      return separator >= 0 ? qualifiedName.left(separator) : QString{};
+    };
+    QString parentName = parentOf(symbol.qualifiedName);
+    while (!parentName.isEmpty() && parentName != symbol.namespacePath) {
+      const QString ownerId = typeIdByQualifiedName.value(parentName);
+      if (!ownerId.isEmpty())
+        return ownerId;
+      parentName = parentOf(parentName);
+    }
+    return QString{};
+  };
 
   QSet<QString> discoveredIds;
   for (const auto &symbol : plannedSymbols) {
@@ -401,7 +433,8 @@ CppImportPreview planImport(const CppImportPreview &discovery,
         item.action = CppImportAction::Create;
         item.desiredElement = sourceElement(
             symbol, plannedElementIdBySymbol.value(symbol.symbolId),
-            packageIdByNamespacePath.value(symbol.namespacePath));
+            packageIdByNamespacePath.value(symbol.namespacePath),
+            enclosingTypeIdFor(symbol));
         item.message = symbol.elementType == ElementType::Package
                            ? QStringLiteral("New C++ namespace package")
                            : QStringLiteral("New C++ type");
@@ -411,9 +444,10 @@ CppImportPreview planImport(const CppImportPreview &discovery,
     }
 
     item.existingElementId = existing->id;
-    item.desiredElement = sourceElement(
-        symbol, existing->id,
-        packageIdByNamespacePath.value(symbol.namespacePath), existing);
+    item.desiredElement =
+        sourceElement(symbol, existing->id,
+                      packageIdByNamespacePath.value(symbol.namespacePath),
+                      enclosingTypeIdFor(symbol), existing);
     const QJsonObject binding = sourceBinding(*existing);
     const QJsonObject lastObject =
         binding.value(QStringLiteral("lastImported")).toObject();
@@ -506,6 +540,7 @@ CppImportPreview planImport(const CppImportPreview &discovery,
     const QJsonObject binding = sourceBinding(relationship);
     const QString kind = binding.value(QStringLiteral("kind")).toString();
     if (kind != QStringLiteral("inheritance") &&
+        kind != QStringLiteral("containment") &&
         kind != QStringLiteral("member") && kind != QStringLiteral("signature"))
       continue;
     const QString symbolId =
@@ -644,6 +679,7 @@ CppImportPreview planImport(const CppImportPreview &discovery,
     const QJsonObject binding = sourceBinding(relationship);
     const QString kind = binding.value(QStringLiteral("kind")).toString();
     if (kind != QStringLiteral("inheritance") &&
+        kind != QStringLiteral("containment") &&
         kind != QStringLiteral("member") && kind != QStringLiteral("signature"))
       continue;
     const QString symbolId =
@@ -1527,6 +1563,42 @@ CppImportPreview discover(const QString &searchPath,
     }
   }
 
+  QHash<QString, const CppSourceSymbol *> symbolsByQualifiedName;
+  for (const auto &symbol : preview.symbols)
+    symbolsByQualifiedName.insert(symbol.qualifiedName, &symbol);
+  const auto parentQualifiedName = [](const QString &name) {
+    const qsizetype separator = name.lastIndexOf(QStringLiteral("::"));
+    return separator >= 0 ? name.left(separator) : QString{};
+  };
+  for (const auto &nested : preview.symbols) {
+    QString ownerName = parentQualifiedName(nested.qualifiedName);
+    const CppSourceSymbol *owner = nullptr;
+    while (!ownerName.isEmpty() && ownerName != nested.namespacePath) {
+      owner = symbolsByQualifiedName.value(ownerName, nullptr);
+      if (owner)
+        break;
+      ownerName = parentQualifiedName(ownerName);
+    }
+    if (!owner)
+      continue;
+
+    CppSourceRelationship containment;
+    containment.sourceSymbolId = owner->symbolId;
+    containment.targetSymbolId = nested.symbolId;
+    containment.symbolId =
+        QStringLiteral("cpp:containment:%1->%2")
+            .arg(containment.sourceSymbolId, containment.targetSymbolId);
+    containment.sourceName = owner->qualifiedName;
+    containment.targetName = nested.qualifiedName;
+    containment.evidenceKind = QStringLiteral("containment");
+    containment.relationshipType = RelationshipType::Containment;
+    containment.classificationReason =
+        QStringLiteral("Type is declared inside another C++ type");
+    containment.filePath = nested.filePath;
+    containment.line = nested.line;
+    preview.relationships.append(std::move(containment));
+  }
+
   auto normalizedTypeSet = [](const QStringList &types) {
     QSet<QString> normalized;
     for (const QString &type : types) {
@@ -1566,8 +1638,9 @@ CppImportPreview discover(const QString &searchPath,
   QHash<QString, InferredRelationship> signatureRelationships;
   QSet<QString> inheritedPairs;
   for (const auto &relationship : std::as_const(preview.relationships)) {
-    inheritedPairs.insert(
-        pairKey(relationship.sourceSymbolId, relationship.targetSymbolId));
+    if (relationship.evidenceKind == QStringLiteral("inheritance"))
+      inheritedPairs.insert(
+          pairKey(relationship.sourceSymbolId, relationship.targetSymbolId));
   }
 
   for (const auto &use : std::as_const(typeUses)) {

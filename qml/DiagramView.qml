@@ -26,8 +26,6 @@ Item {
         gridSpacing: applicationSettings.gridSpacing
         diagramItemSizingMode: applicationSettings.diagramItemSizingMode
         defaultConnectorRouting: applicationSettings.defaultConnectorRouting
-        packageReassignmentPolicy:
-            applicationSettings.packageReassignmentPolicy
         relationshipGestureKeys: applicationSettings.relationshipGestureKeys
 
         onContextMenuRequested: function(target, menuX, menuY) {
@@ -65,35 +63,11 @@ Item {
             editor.selectAll()
         }
 
-        onPackageReassignmentRequested: function(message) {
-            packageMoveConfirmation.message = message
-            packageMoveConfirmation.open()
-        }
     }
 
     Connections {
         target: uiTheme
         function onPaletteChanged() { canvas.refreshTheme() }
-    }
-
-    Dialog {
-        id: packageMoveConfirmation
-        parent: Overlay.overlay
-        anchors.centerIn: parent
-        width: Math.min(460, parent.width - 40)
-        modal: true
-        focus: true
-        title: qsTr("Change UML package?")
-        standardButtons: Dialog.Yes | Dialog.No
-        property string message: ""
-        onAccepted: canvas.confirmPendingPackageReassignment()
-        onRejected: canvas.cancelPendingPackageReassignment()
-
-        contentItem: Label {
-            text: packageMoveConfirmation.message
-            wrapMode: Text.Wrap
-            padding: 16
-        }
     }
 
     Dialog {
@@ -145,6 +119,13 @@ Item {
         }
     }
 
+    ProjectStyleDialog {
+        id: presentationStyleDialog
+        onStyleChosen: function(styleId) {
+            canvas.assignStyleToSelection(styleId)
+        }
+    }
+
     Label {
         anchors.right: parent.right
         anchors.top: parent.top
@@ -188,8 +169,20 @@ Item {
             MenuItem { text: qsTr("Navigable association"); onTriggered: canvas.createRelationship("association") }
             MenuItem { text: qsTr("Aggregation"); onTriggered: canvas.createRelationship("aggregation") }
             MenuItem { text: qsTr("Composition"); onTriggered: canvas.createRelationship("composition") }
+            MenuSeparator {}
+            MenuItem { text: qsTr("Containment (nesting)"); onTriggered: canvas.createRelationship("containment") }
         }
         MenuSeparator {}
+        MenuItem {
+            visible: canvas.canWrapSelectionInPackage
+            height: visible ? implicitHeight : 0
+            text: qsTr("Wrap in parent namespace")
+            onTriggered: canvas.wrapSelectionInPackage()
+        }
+        MenuSeparator {
+            visible: canvas.canWrapSelectionInPackage
+            height: visible ? implicitHeight : 0
+        }
         Menu {
             title: qsTr("Arrange")
             enabled: canvas.selectedNodeCount >= 2
@@ -225,6 +218,14 @@ Item {
                     canvas.selectedVerticalPortSnapPoints
                 portSnapPointsDialog.open()
             }
+        }
+        StyleAssignmentMenu {
+            assignedStyleId: canvas.selectedStyleId
+            onStyleChosen: function(styleId) {
+                canvas.assignStyleToSelection(styleId)
+            }
+            onManageRequested: presentationStyleDialog.openFor(
+                                   canvas.selectedStyleId)
         }
         MenuSeparator {}
         MenuItem {
@@ -273,6 +274,14 @@ Item {
         id: containerMenu
         title: qsTr("Folder frame")
         MenuItem { action: fitSelectionAction }
+        StyleAssignmentMenu {
+            assignedStyleId: canvas.selectedStyleId
+            onStyleChosen: function(styleId) {
+                canvas.assignStyleToSelection(styleId)
+            }
+            onManageRequested: presentationStyleDialog.openFor(
+                                   canvas.selectedStyleId)
+        }
         MenuSeparator {}
         MenuItem {
             text: qsTr("Remove frame from diagram")
@@ -378,6 +387,7 @@ Item {
     Shortcut { sequences: ["Ctrl+Alt+A"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("association") }
     Shortcut { sequences: ["Ctrl+Alt+Shift+G"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("aggregation") }
     Shortcut { sequences: ["Ctrl+Alt+C"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("composition") }
+    Shortcut { sequences: ["Ctrl+Alt+N"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("containment") }
     Shortcut {
         sequences: ["Delete"]
         context: Qt.WindowShortcut

@@ -70,6 +70,8 @@ add_library(uuml_core STATIC
     src/core/project_data.h
     src/core/project_serializer.cpp
     src/core/project_serializer.h
+    src/core/project_style.cpp
+    src/core/project_style.h
     src/core/project_tree_model.cpp
     src/core/project_tree_model.h
     src/core/workspace_controller.cpp
@@ -176,6 +178,8 @@ qt_add_qml_module(uuml
         qml/DiagramView.qml
         qml/DiagramWindow.qml
         qml/Main.qml
+        qml/ProjectStyleDialog.qml
+        qml/StyleAssignmentMenu.qml
 )
 
 target_link_libraries(uuml PRIVATE

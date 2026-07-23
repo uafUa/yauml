@@ -316,26 +316,26 @@ ApplicationWindow {
                             return false
                         const itemsJson = drop.getDataAsString(
                                             browserItemsMimeType)
-                        const packageChange =
-                                projectController.browserMovePackageChangeSummary(
+                        const semanticChange =
+                                projectController.browserMoveSemanticChangeSummary(
                                     itemsJson, targetKind, targetId)
-                        if (packageChange.length > 0
+                        if (semanticChange.length > 0
                                 && applicationSettings.packageReassignmentPolicy
                                    === "disallow")
                             return false
-                        if (packageChange.length > 0
+                        if (semanticChange.length > 0
                                 && applicationSettings.packageReassignmentPolicy
                                    === "ask") {
                             packageMoveConfirmation.itemsJson = itemsJson
                             packageMoveConfirmation.targetKind = targetKind
                             packageMoveConfirmation.targetId = targetId
-                            packageMoveConfirmation.message = packageChange
+                            packageMoveConfirmation.message = semanticChange
                             packageMoveConfirmation.open()
                             drop.acceptProposedAction()
                             return true
                         }
-                        const changed = packageChange.length > 0
-                                ? projectController.moveBrowserItemsWithPackageReassignment(
+                        const changed = semanticChange.length > 0
+                                ? projectController.moveBrowserItemsWithSemanticReassignment(
                                       itemsJson, targetKind, targetId)
                                 : projectController.moveBrowserItems(
                                       itemsJson, targetKind, targetId)
@@ -606,7 +606,12 @@ ApplicationWindow {
                                 }
                                 treeContextMenu.targetId = treeDelegate.objectId
                                 treeContextMenu.targetKind = treeDelegate.kind
+                                treeContextMenu.targetType = treeDelegate.objectType
                                 treeContextMenu.targetName = treeDelegate.text
+                                treeContextMenu.targetStyleId =
+                                        projectController.explicitStyleIdForBrowserSubject(
+                                            treeDelegate.kind,
+                                            treeDelegate.objectId)
                                 treeContextMenu.selectedItemsJson =
                                         projectTree.selectedBrowserItemsJson()
                                 treeContextMenu.selectedItemCount =
@@ -781,7 +786,9 @@ ApplicationWindow {
         id: treeContextMenu
         property string targetId: ""
         property string targetKind: ""
+        property string targetType: ""
         property string targetName: ""
+        property string targetStyleId: ""
         property string selectedItemsJson: "[]"
         property int selectedItemCount: 0
 
@@ -805,11 +812,35 @@ ApplicationWindow {
             height: visible ? implicitHeight : 0
         }
         MenuItem {
+            visible: treeContextMenu.targetKind === "element"
+                     && treeContextMenu.targetType === "package"
+            height: visible ? implicitHeight : 0
+            text: qsTr("Add empty namespace to active diagram")
+            enabled: workspaceController.activeDiagramId.length > 0
+            onTriggered: projectController.addEmptyPackageToDiagram(
+                             workspaceController.activeDiagramId,
+                             treeContextMenu.targetId)
+        }
+        MenuItem {
             visible: treeContextMenu.targetKind === "folder"
             height: visible ? implicitHeight : 0
             text: qsTr("Rename folder…")
             onTriggered: root.renameFolder(treeContextMenu.targetId,
                                            treeContextMenu.targetName)
+        }
+        StyleAssignmentMenu {
+            visible: treeContextMenu.targetKind === "namespace"
+                     || treeContextMenu.targetKind === "folder"
+                     || treeContextMenu.targetKind === "element"
+            assignedStyleId: treeContextMenu.targetStyleId
+            onStyleChosen: function(styleId) {
+                projectController.assignStyleToBrowserSubject(
+                            treeContextMenu.targetKind,
+                            treeContextMenu.targetId,
+                            styleId)
+            }
+            onManageRequested: browserStyleDialog.openFor(
+                                   treeContextMenu.targetStyleId)
         }
         MenuItem {
             visible: treeContextMenu.selectedItemCount > 0
@@ -852,6 +883,17 @@ ApplicationWindow {
             onTriggered: projectController.reorderBrowserItem(
                              treeContextMenu.targetKind,
                              treeContextMenu.targetId, 1)
+        }
+    }
+
+    ProjectStyleDialog {
+        id: browserStyleDialog
+        objectName: "browserStyleDialog"
+        onStyleChosen: function(styleId) {
+            projectController.assignStyleToBrowserSubject(
+                        treeContextMenu.targetKind,
+                        treeContextMenu.targetId,
+                        styleId)
         }
     }
 
@@ -913,14 +955,14 @@ ApplicationWindow {
         width: Math.min(460, parent.width - 40)
         modal: true
         focus: true
-        title: qsTr("Change UML package?")
+        title: qsTr("Change semantic containment?")
         standardButtons: Dialog.Yes | Dialog.No
         property string itemsJson: ""
         property string targetKind: ""
         property string targetId: ""
         property string message: ""
 
-        onAccepted: projectController.moveBrowserItemsWithPackageReassignment(
+        onAccepted: projectController.moveBrowserItemsWithSemanticReassignment(
                         itemsJson, targetKind, targetId)
 
         contentItem: Label {
@@ -944,7 +986,8 @@ ApplicationWindow {
         property bool connectorGestureKeysValid: {
             const values = [dependencyGestureKey.text, realizationGestureKey.text,
                             generalizationGestureKey.text, associationGestureKey.text,
-                            aggregationGestureKey.text, compositionGestureKey.text]
+                            aggregationGestureKey.text, compositionGestureKey.text,
+                            containmentGestureKey.text]
             const assigned = {}
             for (let index = 0; index < values.length; ++index) {
                 const key = values[index].trim().toUpperCase()
@@ -989,6 +1032,7 @@ ApplicationWindow {
             associationGestureKey.text = gestureKeys.association
             aggregationGestureKey.text = gestureKeys.aggregation
             compositionGestureKey.text = gestureKeys.composition
+            containmentGestureKey.text = gestureKeys.containment
             cppInterfacePattern.text = applicationSettings.cppInterfacePattern
             cppOwningPointerTypes.text =
                     applicationSettings.cppOwningPointerTypes.join("\n")
@@ -1014,7 +1058,8 @@ ApplicationWindow {
                 generalization: generalizationGestureKey.text,
                 association: associationGestureKey.text,
                 aggregation: aggregationGestureKey.text,
-                composition: compositionGestureKey.text
+                composition: compositionGestureKey.text,
+                containment: containmentGestureKey.text
             })
             applicationSettings.defaultDistributionGap = distributionGap.value
             applicationSettings.snapToGridEnabled = snapToGrid.checked
@@ -1142,7 +1187,7 @@ ApplicationWindow {
                         RowLayout {
                             Layout.fillWidth: true
                             Label {
-                                text: qsTr("Package reassignment by drag and drop")
+                                text: qsTr("Project-tree containment changes by drag and drop")
                             }
                             Item { Layout.fillWidth: true }
                             ComboBox {
@@ -1154,7 +1199,7 @@ ApplicationWindow {
                             Layout.fillWidth: true
                             wrapMode: Text.Wrap
                             color: uiTheme.mutedText
-                            text: qsTr("Controls whether moving model elements between UML packages also changes their semantic package. Custom folders are unaffected.")
+                            text: qsTr("Controls whether dragging in the project tree changes a type's UML package or enclosing type. Diagram dragging is always presentation-only.")
                         }
                         Label {
                             text: qsTr("C++ import")
@@ -1309,6 +1354,15 @@ ApplicationWindow {
                             Label { text: qsTr("Composition") }
                             TextField {
                                 id: compositionGestureKey
+                                Layout.preferredWidth: 64
+                                maximumLength: 1
+                                selectByMouse: true
+                                validator: RegularExpressionValidator { regularExpression: /^[A-Za-z0-9]$/ }
+                                onTextEdited: text = text.toUpperCase()
+                            }
+                            Label { text: qsTr("Containment / nesting") }
+                            TextField {
+                                id: containmentGestureKey
                                 Layout.preferredWidth: 64
                                 maximumLength: 1
                                 selectByMouse: true

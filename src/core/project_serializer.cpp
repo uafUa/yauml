@@ -3,6 +3,7 @@
 #include "core/connector_port_layout.h"
 #include "core/json5.h"
 
+#include <QColor>
 #include <QDir>
 #include <QFile>
 #include <QHash>
@@ -193,6 +194,19 @@ BrowserParent readBrowserParent(const QJsonValue &value) {
           object.value(QStringLiteral("id")).toString()};
 }
 
+QJsonObject diagramStyleToJson(const DiagramStyle &style) {
+  QJsonObject object = style.extra;
+  object.insert(QStringLiteral("id"), style.id);
+  object.insert(QStringLiteral("name"), style.name);
+  object.insert(QStringLiteral("fill"), style.fill);
+  object.insert(QStringLiteral("headerFill"), style.headerFill);
+  object.insert(QStringLiteral("border"), style.border);
+  object.insert(QStringLiteral("primaryText"), style.primaryText);
+  object.insert(QStringLiteral("secondaryText"), style.secondaryText);
+  object.insert(QStringLiteral("divider"), style.divider);
+  return object;
+}
+
 QJsonObject elementToJson(const ModelElement &element) {
   QJsonObject object = element.extra;
   object.insert(QStringLiteral("id"), element.id);
@@ -202,6 +216,10 @@ QJsonObject elementToJson(const ModelElement &element) {
     object.insert(QStringLiteral("packageId"), element.packageId);
   else
     object.remove(QStringLiteral("packageId"));
+  if (!element.enclosingTypeId.isEmpty())
+    object.insert(QStringLiteral("enclosingTypeId"), element.enclosingTypeId);
+  else
+    object.remove(QStringLiteral("enclosingTypeId"));
   object.insert(QStringLiteral("attributes"), stringArray(element.attributes));
   object.insert(QStringLiteral("operations"), stringArray(element.operations));
   object.insert(QStringLiteral("enumLiterals"),
@@ -211,6 +229,10 @@ QJsonObject elementToJson(const ModelElement &element) {
                   browserParentToJson(element.browserParent));
   else
     object.remove(QStringLiteral("browserParent"));
+  if (!element.styleId.isEmpty())
+    object.insert(QStringLiteral("styleId"), element.styleId);
+  else
+    object.remove(QStringLiteral("styleId"));
   return object;
 }
 
@@ -219,6 +241,10 @@ QJsonObject browserFolderToJson(const BrowserFolder &folder) {
   object.insert(QStringLiteral("id"), folder.id);
   object.insert(QStringLiteral("name"), folder.name);
   object.insert(QStringLiteral("parent"), browserParentToJson(folder.parent));
+  if (!folder.styleId.isEmpty())
+    object.insert(QStringLiteral("styleId"), folder.styleId);
+  else
+    object.remove(QStringLiteral("styleId"));
   return object;
 }
 
@@ -252,6 +278,10 @@ QJsonObject nodeToJson(const NodePresentation &node) {
                   node.verticalPortSnapPoints);
   else
     object.remove(QStringLiteral("verticalPortSnapPoints"));
+  if (!node.styleId.isEmpty())
+    object.insert(QStringLiteral("styleId"), node.styleId);
+  else
+    object.remove(QStringLiteral("styleId"));
   return object;
 }
 
@@ -268,6 +298,10 @@ QJsonObject containerToJson(const ContainerPresentation &container) {
   object.insert(QStringLiteral("geometry"), geometry);
   object.insert(QStringLiteral("childPresentationIds"),
                 stringArray(container.childPresentationIds));
+  if (!container.styleId.isEmpty())
+    object.insert(QStringLiteral("styleId"), container.styleId);
+  else
+    object.remove(QStringLiteral("styleId"));
   return object;
 }
 
@@ -324,6 +358,9 @@ QByteArray manifestBytes(const ProjectData &project) {
 
 QByteArray modelBytes(const ProjectData &project) {
   QJsonObject object = project.modelExtra;
+  QJsonArray styles;
+  for (const auto &style : project.diagramStyles)
+    styles.append(diagramStyleToJson(style));
   QJsonArray elements;
   for (const auto &element : project.elements)
     elements.append(elementToJson(element));
@@ -333,6 +370,20 @@ QByteArray modelBytes(const ProjectData &project) {
   QJsonArray relationships;
   for (const auto &relationship : project.relationships)
     relationships.append(relationshipToJson(relationship));
+  if (!styles.isEmpty())
+    object.insert(QStringLiteral("styles"), styles);
+  else
+    object.remove(QStringLiteral("styles"));
+  if (!project.namespaceStyleIds.isEmpty()) {
+    QJsonObject namespaceStyles;
+    QStringList paths = project.namespaceStyleIds.keys();
+    std::sort(paths.begin(), paths.end());
+    for (const QString &path : paths)
+      namespaceStyles.insert(path, project.namespaceStyleIds.value(path));
+    object.insert(QStringLiteral("namespaceStyles"), namespaceStyles);
+  } else {
+    object.remove(QStringLiteral("namespaceStyles"));
+  }
   object.insert(QStringLiteral("elements"), elements);
   if (!browserFolders.isEmpty())
     object.insert(QStringLiteral("browserFolders"), browserFolders);
@@ -535,8 +586,33 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
 
   const QJsonObject model = modelResult.document.object();
   project.modelExtra = withoutKeys(
-      model, {QStringLiteral("elements"), QStringLiteral("browserFolders"),
+      model, {QStringLiteral("styles"), QStringLiteral("namespaceStyles"),
+              QStringLiteral("elements"), QStringLiteral("browserFolders"),
               QStringLiteral("browserOrder"), QStringLiteral("relationships")});
+  for (const auto &value : model.value(QStringLiteral("styles")).toArray()) {
+    const QJsonObject object = value.toObject();
+    DiagramStyle style;
+    style.id = object.value(QStringLiteral("id")).toString();
+    style.name = object.value(QStringLiteral("name")).toString();
+    style.fill = object.value(QStringLiteral("fill")).toString();
+    style.headerFill = object.value(QStringLiteral("headerFill")).toString();
+    style.border = object.value(QStringLiteral("border")).toString();
+    style.primaryText = object.value(QStringLiteral("primaryText")).toString();
+    style.secondaryText =
+        object.value(QStringLiteral("secondaryText")).toString();
+    style.divider = object.value(QStringLiteral("divider")).toString();
+    style.extra = withoutKeys(
+        object, {QStringLiteral("id"), QStringLiteral("name"),
+                 QStringLiteral("fill"), QStringLiteral("headerFill"),
+                 QStringLiteral("border"), QStringLiteral("primaryText"),
+                 QStringLiteral("secondaryText"), QStringLiteral("divider")});
+    project.diagramStyles.append(std::move(style));
+  }
+  const QJsonObject namespaceStyles =
+      model.value(QStringLiteral("namespaceStyles")).toObject();
+  for (auto style = namespaceStyles.begin(); style != namespaceStyles.end();
+       ++style)
+    project.namespaceStyleIds.insert(style.key(), style.value().toString());
   for (const auto &value : model.value(QStringLiteral("elements")).toArray()) {
     const QJsonObject object = value.toObject();
     ModelElement element;
@@ -550,6 +626,8 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
                                        element.id));
     element.name = object.value(QStringLiteral("name")).toString();
     element.packageId = object.value(QStringLiteral("packageId")).toString();
+    element.enclosingTypeId =
+        object.value(QStringLiteral("enclosingTypeId")).toString();
     element.attributes =
         readStringArray(object.value(QStringLiteral("attributes")));
     element.operations =
@@ -558,12 +636,14 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
         readStringArray(object.value(QStringLiteral("enumLiterals")));
     element.browserParent =
         readBrowserParent(object.value(QStringLiteral("browserParent")));
+    element.styleId = object.value(QStringLiteral("styleId")).toString();
     element.extra = withoutKeys(
         object,
         {QStringLiteral("id"), QStringLiteral("type"), QStringLiteral("name"),
-         QStringLiteral("packageId"), QStringLiteral("attributes"),
-         QStringLiteral("operations"), QStringLiteral("enumLiterals"),
-         QStringLiteral("browserParent")});
+         QStringLiteral("packageId"), QStringLiteral("enclosingTypeId"),
+         QStringLiteral("attributes"), QStringLiteral("operations"),
+         QStringLiteral("enumLiterals"), QStringLiteral("browserParent"),
+         QStringLiteral("styleId")});
     project.elements.append(element);
   }
 
@@ -574,9 +654,10 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
     folder.id = object.value(QStringLiteral("id")).toString();
     folder.name = object.value(QStringLiteral("name")).toString();
     folder.parent = readBrowserParent(object.value(QStringLiteral("parent")));
-    folder.extra =
-        withoutKeys(object, {QStringLiteral("id"), QStringLiteral("name"),
-                             QStringLiteral("parent")});
+    folder.styleId = object.value(QStringLiteral("styleId")).toString();
+    folder.extra = withoutKeys(
+        object, {QStringLiteral("id"), QStringLiteral("name"),
+                 QStringLiteral("parent"), QStringLiteral("styleId")});
     project.browserFolders.append(folder);
   }
   project.browserItemOrder =
@@ -642,11 +723,13 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
             QStringLiteral("Container childPresentationIds must be an array"),
             container.id));
       container.childPresentationIds = readStringArray(childIdsValue);
-      container.extra =
-          withoutKeys(containerObject,
-                      {QStringLiteral("id"), QStringLiteral("subjectKind"),
-                       QStringLiteral("subjectId"), QStringLiteral("geometry"),
-                       QStringLiteral("childPresentationIds")});
+      container.styleId =
+          containerObject.value(QStringLiteral("styleId")).toString();
+      container.extra = withoutKeys(
+          containerObject,
+          {QStringLiteral("id"), QStringLiteral("subjectKind"),
+           QStringLiteral("subjectId"), QStringLiteral("geometry"),
+           QStringLiteral("childPresentationIds"), QStringLiteral("styleId")});
       diagram.containers.append(std::move(container));
     }
     for (const auto &nodeValue :
@@ -667,11 +750,13 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
       node.verticalPortSnapPoints = readPortSnapPointCount(
           nodeObject, QStringLiteral("verticalPortSnapPoints"), node.id,
           outcome.diagnostics);
+      node.styleId = nodeObject.value(QStringLiteral("styleId")).toString();
       node.extra = withoutKeys(
           nodeObject, {QStringLiteral("id"), QStringLiteral("elementId"),
                        QStringLiteral("geometry"),
                        QStringLiteral("horizontalPortSnapPoints"),
-                       QStringLiteral("verticalPortSnapPoints")});
+                       QStringLiteral("verticalPortSnapPoints"),
+                       QStringLiteral("styleId")});
       diagram.nodes.append(node);
     }
     for (const auto &connectorValue :
@@ -849,6 +934,45 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
 
   QSet<QString> elementIds;
   QSet<QString> packageIds;
+  QSet<QString> styleIds;
+  QSet<QString> styleNames;
+  for (const auto &style : project.diagramStyles) {
+    checkId(style.id, QStringLiteral("diagram style"));
+    styleIds.insert(style.id);
+    const QString normalizedName = style.name.trimmed().toCaseFolded();
+    if (normalizedName.isEmpty()) {
+      diagnostics.append(error(QStringLiteral("validation"),
+                               QStringLiteral("A diagram style has no name"),
+                               style.id));
+    } else if (styleNames.contains(normalizedName)) {
+      diagnostics.append(error(
+          QStringLiteral("validation"),
+          QStringLiteral("Diagram style names must be unique"), style.id));
+    } else {
+      styleNames.insert(normalizedName);
+    }
+    const QList<QPair<QString, QString>> colors = {
+        {QStringLiteral("fill"), style.fill},
+        {QStringLiteral("headerFill"), style.headerFill},
+        {QStringLiteral("border"), style.border},
+        {QStringLiteral("primaryText"), style.primaryText},
+        {QStringLiteral("secondaryText"), style.secondaryText},
+        {QStringLiteral("divider"), style.divider}};
+    for (const auto &[role, value] : colors)
+      if (!QColor(value).isValid())
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("Diagram style %1 color is invalid").arg(role),
+                  style.id));
+  }
+  const auto validateStyleReference = [&](const QString &styleId,
+                                          const QString &subjectId) {
+    if (!styleId.isEmpty() && !styleIds.contains(styleId))
+      diagnostics.append(error(
+          QStringLiteral("validation"),
+          QStringLiteral("Diagram style reference %1 is invalid").arg(styleId),
+          subjectId));
+  };
   for (const auto &element : project.elements)
     if (element.type == ElementType::Package)
       packageIds.insert(element.id);
@@ -864,6 +988,44 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
                                QStringLiteral("Package reference %1 is invalid")
                                    .arg(element.packageId),
                                element.id));
+    validateStyleReference(element.styleId, element.id);
+    if (!element.enclosingTypeId.isEmpty()) {
+      const auto *owner = findElement(project, element.enclosingTypeId);
+      if (!owner || owner->id == element.id ||
+          (owner->type != ElementType::Class &&
+           owner->type != ElementType::Struct) ||
+          element.type == ElementType::Package) {
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("Enclosing type reference %1 is invalid")
+                      .arg(element.enclosingTypeId),
+                  element.id));
+      } else if (element.packageId != owner->packageId) {
+        diagnostics.append(error(
+            QStringLiteral("validation"),
+            QStringLiteral("A nested type must share its owner's package"),
+            element.id));
+      }
+    }
+  }
+
+  for (const auto &element : project.elements) {
+    QSet<QString> path{element.id};
+    QString current = element.enclosingTypeId;
+    while (!current.isEmpty()) {
+      if (path.contains(current)) {
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("Nested type ownership contains a cycle"),
+                  element.id));
+        break;
+      }
+      path.insert(current);
+      const auto *owner = findElement(project, current);
+      if (!owner)
+        break;
+      current = owner->enclosingTypeId;
+    }
   }
 
   QSet<QString> folderIds;
@@ -875,6 +1037,16 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
                                QStringLiteral("A browser folder has an empty "
                                               "name"),
                                folder.id));
+    validateStyleReference(folder.styleId, folder.id);
+  }
+
+  for (auto assignment = project.namespaceStyleIds.cbegin();
+       assignment != project.namespaceStyleIds.cend(); ++assignment) {
+    if (assignment.key().trimmed().isEmpty())
+      diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral("A namespace style assignment has no path")));
+    validateStyleReference(assignment.value(), assignment.key());
   }
 
   const auto validateBrowserParent = [&](const BrowserParent &parent,
@@ -976,6 +1148,8 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
     QString parent;
     if (!element.browserParent.kind.isEmpty()) {
       parent = parentKey(element.browserParent);
+    } else if (!element.enclosingTypeId.isEmpty()) {
+      parent = QStringLiteral("element:") + element.enclosingTypeId;
     } else {
       const QStringList parts =
           element.name.split(QStringLiteral("::"), Qt::SkipEmptyParts);
@@ -1078,6 +1252,7 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
                   QStringLiteral("Container presentation has invalid geometry"),
                   container.id));
       }
+      validateStyleReference(container.styleId, container.id);
     }
     QSet<QString> presentedElements;
     for (const auto &node : diagram.nodes) {
@@ -1107,6 +1282,7 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
                            "numbers between 1 and %1")
                 .arg(connector_ports::kMaximumSnapPointCount),
             node.id));
+      validateStyleReference(node.styleId, node.id);
     }
 
     QHash<QString, QString> ownerByChild;

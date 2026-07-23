@@ -196,6 +196,11 @@ void ProjectTreeModel::rebuildTree() {
   };
 
   const auto semanticParentNode = [&](const ModelElement &element) {
+    if (!element.enclosingTypeId.isEmpty()) {
+      if (TreeNode *owner =
+              m_elementNodes.value(element.enclosingTypeId, nullptr))
+        return owner;
+    }
     TreeNode *parent = m_modelRoot;
     const QStringList parts =
         element.name.split(QStringLiteral("::"), Qt::SkipEmptyParts);
@@ -399,8 +404,7 @@ QString ProjectTreeModel::browserItemsJsonForIndexes(
     object.insert(QStringLiteral("name"), node->label);
     items.append(object);
   }
-  return QString::fromUtf8(
-      QJsonDocument(items).toJson(QJsonDocument::Compact));
+  return QString::fromUtf8(QJsonDocument(items).toJson(QJsonDocument::Compact));
 }
 
 void ProjectTreeModel::selectFromPointer(QItemSelectionModel *selectionModel,

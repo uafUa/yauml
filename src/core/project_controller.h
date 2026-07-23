@@ -38,6 +38,7 @@ class ProjectController final : public QObject {
   Q_PROPERTY(QString undoText READ undoText NOTIFY undoStateChanged)
   Q_PROPERTY(QString redoText READ redoText NOTIFY undoStateChanged)
   Q_PROPERTY(bool dirty READ dirty NOTIFY dirtyChanged)
+  Q_PROPERTY(QVariantList diagramStyles READ diagramStyles NOTIFY stateChanged)
 
 public:
   explicit ProjectController(QObject *parent = nullptr);
@@ -62,6 +63,7 @@ public:
   QString undoText() const;
   QString redoText() const;
   bool dirty() const;
+  QVariantList diagramStyles() const;
 
   Q_INVOKABLE void
   newProject(const QString &name = QStringLiteral("New Project"));
@@ -71,6 +73,23 @@ public:
                                bool overwriteExisting = false);
   Q_INVOKABLE void undo();
   Q_INVOKABLE void redo();
+  Q_INVOKABLE QVariantMap diagramStyle(const QString &styleId) const;
+  Q_INVOKABLE QString saveDiagramStyle(const QString &styleId,
+                                       const QString &name,
+                                       const QVariantMap &colors);
+  Q_INVOKABLE bool deleteDiagramStyle(const QString &styleId);
+  Q_INVOKABLE int diagramStyleAssignmentCount(const QString &styleId) const;
+  Q_INVOKABLE QString explicitStyleIdForBrowserSubject(
+      const QString &kind, const QString &subjectId) const;
+  Q_INVOKABLE void assignStyleToBrowserSubject(const QString &kind,
+                                               const QString &subjectId,
+                                               const QString &styleId);
+  Q_INVOKABLE QString explicitStyleIdForPresentation(
+      const QString &diagramId, const QString &presentationId) const;
+  Q_INVOKABLE void
+  assignStyleToPresentations(const QString &diagramId,
+                             const QStringList &presentationIds,
+                             const QString &styleId);
 
   // Applies a previously discovered C++ plan as one compact undo command.
   // Callers re-plan immediately before invoking this method so user edits made
@@ -91,24 +110,32 @@ public:
                                        const QString &name);
   Q_INVOKABLE void deleteBrowserFolder(const QString &folderId);
   Q_INVOKABLE void deleteBrowserItems(const QString &itemsJson);
-  Q_INVOKABLE bool canReorderBrowserItem(const QString &kind,
-                                         const QString &id,
+  Q_INVOKABLE bool canReorderBrowserItem(const QString &kind, const QString &id,
                                          int direction) const;
   Q_INVOKABLE bool reorderBrowserItem(const QString &kind, const QString &id,
                                       int direction);
-  Q_INVOKABLE bool canReorderBrowserItemsAround(
-      const QString &itemsJson, const QString &targetKind,
-      const QString &targetId) const;
-  Q_INVOKABLE bool reorderBrowserItemsAround(
-      const QString &itemsJson, const QString &targetKind,
-      const QString &targetId, bool before);
+  Q_INVOKABLE bool canReorderBrowserItemsAround(const QString &itemsJson,
+                                                const QString &targetKind,
+                                                const QString &targetId) const;
+  Q_INVOKABLE bool reorderBrowserItemsAround(const QString &itemsJson,
+                                             const QString &targetKind,
+                                             const QString &targetId,
+                                             bool before);
   Q_INVOKABLE bool moveBrowserItems(const QString &itemsJson,
                                     const QString &targetKind,
                                     const QString &targetId);
-  Q_INVOKABLE QString
-  browserMovePackageChangeSummary(const QString &itemsJson,
-                                  const QString &targetKind,
-                                  const QString &targetId) const;
+  Q_INVOKABLE QString browserMoveSemanticChangeSummary(
+      const QString &itemsJson, const QString &targetKind,
+      const QString &targetId) const;
+  Q_INVOKABLE bool
+  moveBrowserItemsWithSemanticReassignment(const QString &itemsJson,
+                                           const QString &targetKind,
+                                           const QString &targetId);
+  // Compatibility aliases for integrations written before nested-type
+  // reassignment joined the same policy and confirmation workflow.
+  Q_INVOKABLE QString browserMovePackageChangeSummary(
+      const QString &itemsJson, const QString &targetKind,
+      const QString &targetId) const;
   Q_INVOKABLE bool
   moveBrowserItemsWithPackageReassignment(const QString &itemsJson,
                                           const QString &targetKind,
@@ -116,17 +143,20 @@ public:
   Q_INVOKABLE void
   addSelectedToDiagram(const QString &diagramId,
                        const QString &sizingMode = QStringLiteral("content"));
-  Q_INVOKABLE int addElementsToDiagram(const QString &diagramId,
-                                       const QStringList &elementIds, qreal x,
-                                       qreal y,
-                                       const QString &sizingMode =
-                                           QStringLiteral("content"));
-  Q_INVOKABLE int addTreeItemsToDiagram(const QString &diagramId,
-                                        const QStringList &elementIds,
-                                        const QString &subjectsJson, qreal x,
-                                        qreal y,
-                                        const QString &sizingMode =
-                                            QStringLiteral("content"));
+  Q_INVOKABLE int
+  addElementsToDiagram(const QString &diagramId, const QStringList &elementIds,
+                       qreal x, qreal y,
+                       const QString &sizingMode = QStringLiteral("content"));
+  Q_INVOKABLE int
+  addTreeItemsToDiagram(const QString &diagramId, const QStringList &elementIds,
+                        const QString &subjectsJson, qreal x, qreal y,
+                        const QString &sizingMode = QStringLiteral("content"));
+  Q_INVOKABLE int addEmptyPackageToDiagram(const QString &diagramId,
+                                           const QString &packageId);
+  bool canWrapPresentationInPackage(const QString &diagramId,
+                                    const QString &presentationId) const;
+  bool wrapPresentationInPackage(const QString &diagramId,
+                                 const QString &presentationId);
   Q_INVOKABLE void removePresentations(const QString &diagramId,
                                        const QStringList &nodeIds);
   Q_INVOKABLE void removeContainerPresentation(const QString &diagramId,
@@ -155,15 +185,14 @@ public:
   // Commits a completed diagram drag as one command. An empty target ID moves
   // the presentations to the diagram root; resize and arrangement operations
   // use updatePresentationGeometries() and therefore leave membership intact.
+  bool canMovePresentationsToContainer(const QString &diagramId,
+                                       const QStringList &movedPresentationIds,
+                                       const QString &targetContainerId) const;
   void movePresentationsToContainer(const QString &diagramId,
                                     const QVariantList &geometries,
                                     const QStringList &movedPresentationIds,
                                     const QString &targetContainerId,
-                                    const QString &description,
-                                    bool reassignPackage = false);
-  QString presentationMovePackageChangeSummary(
-      const QString &diagramId, const QStringList &movedPresentationIds,
-      const QString &targetContainerId) const;
+                                    const QString &description);
   Q_INVOKABLE QString createRelationship(const QString &diagramId,
                                          const QString &sourceNodeId,
                                          const QString &targetNodeId,
@@ -223,10 +252,8 @@ signals:
   void dirtyChanged();
 
 private:
-  bool moveBrowserItemsImpl(const QString &itemsJson,
-                            const QString &targetKind,
-                            const QString &targetId,
-                            bool reassignPackage);
+  bool moveBrowserItemsImpl(const QString &itemsJson, const QString &targetKind,
+                            const QString &targetId, bool reassignPackage);
   friend class ProjectCommand;
   void pushCommand(std::unique_ptr<ProjectCommand> command);
   void applyCommand(ProjectCommand &command, bool execute);
@@ -246,8 +273,7 @@ private:
                             const QVariantList &geometries,
                             const QStringList &movedPresentationIds,
                             const std::optional<QString> &targetContainerId,
-                            const QString &description,
-                            bool reassignPackage = false);
+                            const QString &description);
   QString createRelationshipImpl(const QString &diagramId,
                                  const QString &sourceNodeId,
                                  const QString &targetNodeId,

@@ -10,7 +10,8 @@ enum class RelationshipDecoration {
   OpenArrow,
   HollowTriangle,
   HollowDiamond,
-  FilledDiamond
+  FilledDiamond,
+  CirclePlus
 };
 
 struct RelationshipVisualStyle {

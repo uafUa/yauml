@@ -61,9 +61,10 @@ Unless explicitly included in [`mvp-scope.md`](mvp-scope.md), they are post-MVP.
 - Attributes, operations, parameters, visibility, and common modifiers.
 - Enumeration literals.
 - Generalization/inheritance and interface realization/implementation.
-- Dependency, association with navigability, aggregation, and composition. This
-  is the complete initial relationship vocabulary for the supported structural
-  diagrams; behavioral-diagram connectors remain outside the product scope.
+- Dependency, association with navigability, aggregation, composition, and
+  containment/nesting. This is the complete initial relationship vocabulary
+  for the supported structural diagrams; behavioral-diagram connectors remain
+  outside the product scope.
 - Source locations and source identities attached to generated elements.
 - User-created and source-generated elements in the same project.
 - Validation diagnostics for broken references and unsupported constructs.
@@ -82,9 +83,9 @@ Unless explicitly included in [`mvp-scope.md`](mvp-scope.md), they are post-MVP.
 - Create a typed connector by holding the pointer on a node edge, pressing its
   relationship hotkey, and dragging to any node, including the originating
   node. Default keys are `D` dependency, `I` implementation, `H` inheritance,
-  `A` association, `G` aggregation, and `C` composition; all are editable
-  application preferences. The initial pointer position becomes its persisted
-  perimeter attachment only when the gesture commits.
+  `A` association, `G` aggregation, `C` composition, and `N` containment; all
+  are editable application preferences. The initial pointer position becomes
+  its persisted perimeter attachment only when the gesture commits.
 - Reconnect either end directly by dragging its endpoint handle to another node;
   do not rely on modal source/target reconnection actions.
 - Straighten, make horizontal, and make vertical actions.
@@ -491,29 +492,23 @@ the same.
 
 ## 14. Styling
 
-Use a CSS-inspired selector language, but define it as a product schema rather
-than depending on browser CSS behavior.
+The implemented first slice uses an explicit project-owned registry of named
+styles. Each record has a stable UUID, a unique user-facing name, and generic
+diagram-element color roles. Assignments may be stored on a presentation,
+semantic type/package, custom browser folder, or legacy synthetic namespace.
 
-Candidate selectors:
+Resolution is deterministic and follows the visible project-browser hierarchy:
+presentation override, subject override, closest styled ancestor, then the
+application default for that element kind. Package elements represent C++
+namespaces and therefore carry namespace style assignments; synthetic namespace
+paths remain supported for backward-compatible imported models. Resolution is
+performed while building the immutable render snapshot, keeping project-model
+lookups off the scene-graph render thread.
 
-```css
-class {
-  background-color: #ffffff;
-}
-
-class[owner.qualifiedName="hps::adapters::boundary::grpc"] {
-  background-color: #f5f0dc;
-}
-
-class[external=true] {
-  border-style: dashed;
-  opacity: 0.8;
-}
-```
-
-Resolution order should be deterministic: built-in defaults, project stylesheet,
-diagram stylesheet, then presentation-local overrides. Cache resolved styles and
-invalidate them by dependency rather than recomputing the full diagram.
+A CSS-inspired selector language may later supplement explicit assignments for
+large rule-driven models. It should be introduced only as a product schema, not
+as browser CSS behavior, and must compose predictably with the established
+explicit override order.
 
 ## 15. Threading and responsiveness
 
