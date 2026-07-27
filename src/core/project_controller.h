@@ -41,12 +41,16 @@ class ProjectController final : public QObject {
                  setSelectedTargetRole NOTIFY selectionChanged)
   Q_PROPERTY(QString selectedTargetMultiplicity READ selectedTargetMultiplicity
                  WRITE setSelectedTargetMultiplicity NOTIFY selectionChanged)
+  Q_PROPERTY(QString selectedStereotypes READ selectedStereotypes NOTIFY
+                 selectionChanged)
   Q_PROPERTY(bool canUndo READ canUndo NOTIFY undoStateChanged)
   Q_PROPERTY(bool canRedo READ canRedo NOTIFY undoStateChanged)
   Q_PROPERTY(QString undoText READ undoText NOTIFY undoStateChanged)
   Q_PROPERTY(QString redoText READ redoText NOTIFY undoStateChanged)
   Q_PROPERTY(bool dirty READ dirty NOTIFY dirtyChanged)
   Q_PROPERTY(QVariantList diagramStyles READ diagramStyles NOTIFY stateChanged)
+  Q_PROPERTY(
+      QVariantList stereotypeCatalog READ stereotypeCatalog NOTIFY stateChanged)
 
 public:
   explicit ProjectController(QObject *parent = nullptr);
@@ -70,12 +74,14 @@ public:
   QString selectedSourceMultiplicity() const;
   QString selectedTargetRole() const;
   QString selectedTargetMultiplicity() const;
+  QString selectedStereotypes() const;
   bool canUndo() const;
   bool canRedo() const;
   QString undoText() const;
   QString redoText() const;
   bool dirty() const;
   QVariantList diagramStyles() const;
+  QVariantList stereotypeCatalog() const;
 
   Q_INVOKABLE void
   newProject(const QString &name = QStringLiteral("New Project"));
@@ -102,6 +108,20 @@ public:
   assignStyleToPresentations(const QString &diagramId,
                              const QStringList &presentationIds,
                              const QString &styleId);
+  Q_INVOKABLE QVariantMap
+  stereotypeDefinition(const QString &stereotypeId) const;
+  Q_INVOKABLE QString saveProjectStereotype(const QString &stereotypeId,
+                                            const QString &name,
+                                            const QStringList &applicableTo);
+  Q_INVOKABLE bool deleteProjectStereotype(const QString &stereotypeId);
+  Q_INVOKABLE int stereotypeAssignmentCount(const QString &stereotypeId) const;
+  Q_INVOKABLE QVariantList
+  applicableStereotypes(const QString &kind, const QString &subjectId) const;
+  Q_INVOKABLE QStringList
+  stereotypeIdsForObject(const QString &kind, const QString &subjectId) const;
+  Q_INVOKABLE void assignStereotypes(const QString &kind,
+                                     const QString &subjectId,
+                                     const QStringList &stereotypeIds);
 
   // Applies a previously discovered C++ plan as one compact undo command.
   // Callers re-plan immediately before invoking this method so user edits made
@@ -245,6 +265,19 @@ public:
                                             int index);
   Q_INVOKABLE void clearConnectorBendPoints(const QString &diagramId,
                                             const QString &connectorId);
+  Q_INVOKABLE void setConnectorAnnotationPlacement(const QString &diagramId,
+                                                   const QString &connectorId,
+                                                   const QString &annotationKey,
+                                                   qreal routePosition,
+                                                   qreal tangentOffset,
+                                                   qreal normalOffset);
+  Q_INVOKABLE void
+  resetConnectorAnnotationPlacement(const QString &diagramId,
+                                    const QString &connectorId,
+                                    const QString &annotationKey);
+  Q_INVOKABLE void
+  resetConnectorAnnotationPlacements(const QString &diagramId,
+                                     const QString &connectorId);
   Q_INVOKABLE void editText(const QString &objectId, const QString &field,
                             int index, const QString &value);
 

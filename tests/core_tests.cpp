@@ -6,6 +6,7 @@
 #include "core/project_controller.h"
 #include "core/project_serializer.h"
 #include "core/project_style.h"
+#include "core/stereotype_catalog.h"
 #include "core/workspace_controller.h"
 #include "ui/text_occlusion.h"
 #include "ui/triangle_batch.h"
@@ -115,6 +116,8 @@ private slots:
   void reconnectRelationshipCommandUndoRedo();
   void textCommandsUndoRedo();
   void relationshipEndMetadataPersistsAndIsUndoable();
+  void connectorAnnotationPlacementsPersistAndAreUndoable();
+  void stereotypeCatalogAssignmentsPersistAndAreUndoable();
   void relationshipAndDiagramDeletionUndoRedo();
   void relationshipTypesAndPresentationRemoval();
   void connectorAnchorUndoRedo();
@@ -250,6 +253,15 @@ void CoreTests::deterministicRoundTrip() {
   element.name = QStringLiteral("Service");
   element.attributes = {QStringLiteral("+ port: int")};
   element.extra.insert(QStringLiteral("futureField"), 42);
+  StereotypeDefinition stereotype;
+  stereotype.id = newId();
+  stereotype.name = QStringLiteral("audited");
+  stereotype.applicableTo = {QStringLiteral("class"),
+                             QStringLiteral("relationship")};
+  stereotype.extra.insert(QStringLiteral("futureCatalogField"),
+                          QStringLiteral("retained"));
+  project.stereotypeDefinitions.append(stereotype);
+  element.stereotypeIds = {QStringLiteral("uml.interface"), stereotype.id};
   project.elements.append(element);
   project.modelExtra.insert(QStringLiteral("futureRoot"),
                             QStringLiteral("retained"));
@@ -274,6 +286,7 @@ void CoreTests::deterministicRoundTrip() {
   relationship.sourceEnd.extra.insert(QStringLiteral("futureEndField"), true);
   relationship.targetEnd.role = QStringLiteral("items");
   relationship.targetEnd.multiplicity = QStringLiteral("0..*");
+  relationship.stereotypeIds = {QStringLiteral("uml.trace"), stereotype.id};
   project.relationships.append(relationship);
   ConnectorPresentation connector;
   connector.id = newId();
@@ -290,6 +303,12 @@ void CoreTests::deterministicRoundTrip() {
   bendPoint.extra.insert(QStringLiteral("futureBendField"),
                          QStringLiteral("retained"));
   connector.bendPoints.append(bendPoint);
+  ConnectorAnnotationPlacement namePlacement;
+  namePlacement.routePosition = 0.4;
+  namePlacement.tangentOffset = 8.0;
+  namePlacement.normalOffset = -14.0;
+  namePlacement.extra.insert(QStringLiteral("futurePlacementField"), true);
+  connector.annotationPlacements.insert(QStringLiteral("name"), namePlacement);
   project.diagrams[0].connectors.append(connector);
 
   const auto firstSave = ProjectSerializer::save(temporary.path(), project);
@@ -2410,6 +2429,155 @@ void CoreTests::relationshipEndMetadataPersistsAndIsUndoable() {
   QCOMPARE(loadedRelationship->sourceEnd, relationship()->sourceEnd);
   QCOMPARE(loadedRelationship->targetEnd, relationship()->targetEnd);
   QVERIFY(ProjectSerializer::validate(loaded.project).isEmpty());
+}
+
+void CoreTests::connectorAnnotationPlacementsPersistAndAreUndoable() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  controller.addElement(QStringLiteral("class"), diagramId);
+  controller.addElement(QStringLiteral("class"), diagramId);
+  const auto nodes = controller.data().diagrams.first().nodes;
+  const QString connectorId = controller.createRelationship(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("association"));
+  QVERIFY(!connectorId.isEmpty());
+
+  const auto connector = [&]() {
+    return findConnector(controller.data().diagrams.first(), connectorId);
+  };
+  controller.setConnectorAnnotationPlacement(
+      diagramId, connectorId, QStringLiteral("name"), 0.35, 12.0, -18.0);
+  QVERIFY(connector()->annotationPlacements.contains(QStringLiteral("name")));
+  const ConnectorAnnotationPlacement expected =
+      connector()->annotationPlacements.value(QStringLiteral("name"));
+  QCOMPARE(expected.routePosition, 0.35);
+  QCOMPARE(expected.tangentOffset, 12.0);
+  QCOMPARE(expected.normalOffset, -18.0);
+  QCOMPARE(controller.undoText(), QStringLiteral("Move connector annotation"));
+
+  controller.undo();
+  QVERIFY(connector()->annotationPlacements.isEmpty());
+  controller.redo();
+  QCOMPARE(connector()->annotationPlacements.value(QStringLiteral("name")),
+           expected);
+
+  controller.resetConnectorAnnotationPlacement(diagramId, connectorId,
+                                               QStringLiteral("name"));
+  QVERIFY(connector()->annotationPlacements.isEmpty());
+  controller.undo();
+  QCOMPARE(connector()->annotationPlacements.value(QStringLiteral("name")),
+           expected);
+
+  controller.setConnectorAnnotationPlacement(
+      diagramId, connectorId, QStringLiteral("sourceRole"), 0.2, 0.0, 24.0);
+  QCOMPARE(connector()->annotationPlacements.size(), 2);
+  controller.resetConnectorAnnotationPlacements(diagramId, connectorId);
+  QVERIFY(connector()->annotationPlacements.isEmpty());
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Reset connector annotation positions"));
+  controller.undo();
+  QCOMPARE(connector()->annotationPlacements.size(), 2);
+
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(temporary.path(), controller.data()).ok);
+  const LoadOutcome loaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(loaded.ok);
+  const auto *loadedConnector =
+      findConnector(loaded.project.diagrams.first(), connectorId);
+  QVERIFY(loadedConnector);
+  // sourceRole has no semantic text, so its otherwise stale placement is not
+  // serialized. The visible relationship name retains its manual position.
+  QCOMPARE(loadedConnector->annotationPlacements.size(), 1);
+  QCOMPARE(loadedConnector->annotationPlacements.value(QStringLiteral("name")),
+           expected);
+}
+
+void CoreTests::stereotypeCatalogAssignmentsPersistAndAreUndoable() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString sourceElement =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const QString targetElement =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const auto nodes = controller.data().diagrams.first().nodes;
+  const QString connectorId = controller.createRelationship(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("dependency"));
+  const auto *connector =
+      findConnector(controller.data().diagrams.first(), connectorId);
+  QVERIFY(connector);
+  const QString relationshipId = connector->relationshipId;
+
+  const QString customId = controller.saveProjectStereotype(
+      {}, QStringLiteral("audited"),
+      {QStringLiteral("class"), QStringLiteral("relationship")});
+  QVERIFY(!customId.isEmpty());
+  QCOMPARE(controller.stereotypeCatalog().size(),
+           stereotype_catalog::commonDefinitions().size() + 1);
+  QVERIFY(!controller.deleteProjectStereotype(QStringLiteral("uml.interface")));
+
+  controller.assignStereotypes(QStringLiteral("element"), sourceElement,
+                               {QStringLiteral("uml.interface"), customId});
+  QCOMPARE(findElement(controller.data(), sourceElement)->stereotypeIds,
+           QStringList({QStringLiteral("uml.interface"), customId}));
+  QCOMPARE(controller.undoText(), QStringLiteral("Assign stereotypes"));
+  controller.undo();
+  QVERIFY(
+      findElement(controller.data(), sourceElement)->stereotypeIds.isEmpty());
+  controller.redo();
+
+  controller.assignStereotypes(QStringLiteral("relationship"), relationshipId,
+                               {QStringLiteral("uml.trace"), customId});
+  QCOMPARE(findRelationship(controller.data(), relationshipId)->stereotypeIds,
+           QStringList({QStringLiteral("uml.trace"), customId}));
+  controller.selectObject(sourceElement, QStringLiteral("element"));
+  QCOMPARE(controller.selectedStereotypes(),
+           QStringLiteral("«interface, audited»"));
+  QVERIFY(presentation_layout::nodeContentSize(
+              controller.data(), *findElement(controller.data(), sourceElement))
+              .height() > presentation_layout::nodeContentSize(
+                              *findElement(controller.data(), sourceElement))
+                              .height());
+
+  // An edit cannot silently make existing assignments invalid.
+  QVERIFY(controller
+              .saveProjectStereotype(customId, QStringLiteral("audited"),
+                                     {QStringLiteral("package")})
+              .isEmpty());
+  QCOMPARE(
+      findStereotypeDefinition(controller.data(), customId)->applicableTo,
+      QStringList({QStringLiteral("class"), QStringLiteral("relationship")}));
+
+  QCOMPARE(controller.stereotypeAssignmentCount(customId), 2);
+  QVERIFY(controller.deleteProjectStereotype(customId));
+  QVERIFY(!findStereotypeDefinition(controller.data(), customId));
+  QVERIFY(!findElement(controller.data(), sourceElement)
+               ->stereotypeIds.contains(customId));
+  QVERIFY(!findRelationship(controller.data(), relationshipId)
+               ->stereotypeIds.contains(customId));
+  controller.undo();
+  QVERIFY(findStereotypeDefinition(controller.data(), customId));
+  QVERIFY(findElement(controller.data(), sourceElement)
+              ->stereotypeIds.contains(customId));
+  QVERIFY(findRelationship(controller.data(), relationshipId)
+              ->stereotypeIds.contains(customId));
+
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(temporary.path(), controller.data()).ok);
+  const LoadOutcome loaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(loaded.ok);
+  QCOMPARE(loaded.project, controller.data());
+  QVERIFY(ProjectSerializer::validate(loaded.project).isEmpty());
+
+  ProjectData invalid = loaded.project;
+  findElement(invalid, targetElement)
+      ->stereotypeIds.append(QStringLiteral("uml.trace"));
+  const auto diagnostics = ProjectSerializer::validate(invalid);
+  QVERIFY(std::any_of(diagnostics.cbegin(), diagnostics.cend(),
+                      [](const Diagnostic &diagnostic) {
+                        return diagnostic.message.contains(
+                            QStringLiteral("does not apply to class"));
+                      }));
 }
 
 void CoreTests::relationshipAndDiagramDeletionUndoRedo() {

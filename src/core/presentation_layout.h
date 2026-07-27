@@ -27,7 +27,11 @@ inline constexpr qreal kMinimumContainerWidth = 240.0;
 inline constexpr qreal kMinimumContainerHeight = 100.0;
 
 QSizeF nodeContentSize(const ModelElement &element);
+QSizeF nodeContentSize(const ProjectData &project, const ModelElement &element);
 QSizeF nodePlacementSize(const ModelElement &element,
+                         const QString &sizingMode);
+QSizeF nodePlacementSize(const ProjectData &project,
+                         const ModelElement &element,
                          const QString &sizingMode);
 
 // Returns the semantic qualified name while tolerating both storage forms

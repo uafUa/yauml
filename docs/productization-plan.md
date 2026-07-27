@@ -1,9 +1,10 @@
 # uuml Productization Plan
 
-Status: command foundation and the Phase 3 core are implemented; contextual
-toolbox expansion and relationship annotations are in progress. Phase 4 source
-import and relationship inference are implemented, with synchronization
-hardening in progress. Phase 5 release and persistence hardening is underway
+Status: command foundation, the Phase 3 core, relationship annotations, and
+stereotypes are implemented; contextual toolbox expansion remains in progress.
+Phase 4 source import and relationship inference are implemented, with
+synchronization hardening in progress. Phase 5 release and persistence
+hardening is underway
 
 The product owner accepted the MVP on 2026-07-21. This plan turns the broader
 architecture roadmap into bounded, testable delivery tranches. MVP audit notes
@@ -277,7 +278,7 @@ toolboxes implemented, expansion planned
   slice includes multi-window focus, zoom, clipping, accessibility, and command
   undo/redo tests.
 
-### 3.9 Relationship ends, movable annotations, and stereotypes — in progress
+### 3.9 Relationship ends, movable annotations, and stereotypes — implemented
 
 - Explicit semantic source and target relationship-end records are implemented
   and persisted with unknown-field retention. Each end
@@ -290,7 +291,7 @@ toolboxes implemented, expansion planned
   placement for straight, orthogonal, and manually bent connectors. They are
   editable in the selected-relationship property panel and in place on the
   diagram. Edits—including clearing optional values—use field-sized undo
-  commands. The future relationship stereotype joins these annotations.
+  commands. Relationship stereotypes use the same annotation system.
 - Treat the relationship name, stereotype, both roles, and both
   multiplicities as connector annotations. Their text is semantic model data,
   while their position is a per-diagram `ConnectorPresentation` concern.
@@ -322,13 +323,11 @@ toolboxes implemented, expansion planned
   retain only the before/after placement. Source synchronization keeps manual
   roles, multiplicities, and stereotype assignments user-authoritative unless
   a later import rule explicitly owns one of those fields.
-- The first two slices—semantic endpoint data/persistence and automatic
-  rendering/property editing—are implemented. Next deliver drag/reset
-  annotation placement, then the common/project stereotype catalog and
-  assignments. Cover JSON5
-  round trips with unknown-field retention, multiple presentations of one
-  relationship, straight and orthogonal routes, self-connections, undo/redo,
-  and headless validation.
+- The complete slice is implemented: semantic endpoint data, automatic
+  rendering and property editing, route-relative drag/reset placement, and the
+  common/project stereotype catalog with assignment workflows. Persistence,
+  command undo/redo, validation, canvas interaction, and application smoke
+  tests protect the delivered behavior.
 
 ## Phase 4: C++ import and synchronization — in progress
 

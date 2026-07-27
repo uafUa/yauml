@@ -5,6 +5,7 @@
 #include "core/presentation_layout.h"
 #include "core/project_controller.h"
 #include "core/project_style.h"
+#include "core/stereotype_catalog.h"
 #include "ui/connector_routing.h"
 #include "ui/diagram_arrangement.h"
 #include "ui/diagram_clipping.h"
@@ -66,6 +67,7 @@ struct RenderNode {
   QRectF rect;
   ElementType type = ElementType::Class;
   QString name;
+  QString stereotype;
   QStringList attributes;
   QStringList operations;
   QStringList enumLiterals;
@@ -78,6 +80,7 @@ struct RenderNode {
 struct RenderContainer {
   QRectF rect;
   QString name;
+  QString stereotype;
   qreal titleWidth = 0.0;
   bool package = false;
   RenderElementStyle style;
@@ -92,8 +95,10 @@ struct RenderConnector {
   QVector<QPointF> points;
   QVector<int> bendPointRouteIndices;
   QString name;
+  QString stereotype;
   RelationshipEnd sourceEnd;
   RelationshipEnd targetEnd;
+  QHash<QString, ConnectorAnnotationPlacement> annotationPlacements;
   RelationshipType type = RelationshipType::Dependency;
   bool selected = false;
   int selectedBendPoint = -1;
@@ -116,6 +121,10 @@ struct SceneSnapshot {
   QRectF lassoRect;
   bool lassoVisible = false;
 };
+
+qreal nodeHeaderHeight(const RenderNode &node) {
+  return kHeaderHeight + (node.stereotype.isEmpty() ? 0.0 : kLineHeight);
+}
 
 struct RenderText {
   QRectF target;
@@ -148,33 +157,6 @@ qreal distanceToSegment(const QPointF &point, const QPointF &start,
   const qreal t = std::clamp(
       QPointF::dotProduct(point - start, delta) / lengthSquared, 0.0, 1.0);
   return QLineF(point, start + delta * t).length();
-}
-
-QPointF polylineMiddle(const QVector<QPointF> &points) {
-  if (points.isEmpty())
-    return {};
-  if (points.size() == 1)
-    return points.first();
-
-  qreal totalLength = 0.0;
-  for (qsizetype index = 1; index < points.size(); ++index)
-    totalLength += QLineF(points.at(index - 1), points.at(index)).length();
-  if (qFuzzyIsNull(totalLength))
-    return points.first();
-
-  const qreal middleDistance = totalLength / 2.0;
-  qreal traversed = 0.0;
-  for (qsizetype index = 1; index < points.size(); ++index) {
-    const QPointF start = points.at(index - 1);
-    const QPointF end = points.at(index);
-    const qreal segmentLength = QLineF(start, end).length();
-    if (traversed + segmentLength >= middleDistance && segmentLength > 0.0) {
-      const qreal fraction = (middleDistance - traversed) / segmentLength;
-      return start + (end - start) * fraction;
-    }
-    traversed += segmentLength;
-  }
-  return points.last();
 }
 
 struct PolylineSample {
@@ -212,6 +194,52 @@ std::optional<PolylineSample> samplePolyline(const QVector<QPointF> &points,
   return std::nullopt;
 }
 
+struct PolylineProjection {
+  QPointF position;
+  QPointF tangent;
+  qreal normalizedDistance = 0.0;
+};
+
+std::optional<PolylineProjection>
+projectOntoPolyline(const QVector<QPointF> &points, const QPointF &point) {
+  qreal totalLength = 0.0;
+  for (qsizetype index = 1; index < points.size(); ++index)
+    totalLength += QLineF(points.at(index - 1), points.at(index)).length();
+  if (points.size() < 2 || qFuzzyIsNull(totalLength))
+    return std::nullopt;
+
+  qreal bestDistance = std::numeric_limits<qreal>::max();
+  qreal bestRouteDistance = 0.0;
+  QPointF bestPosition;
+  QPointF bestTangent;
+  qreal traversed = 0.0;
+  for (qsizetype index = 1; index < points.size(); ++index) {
+    const QPointF start = points.at(index - 1);
+    const QPointF end = points.at(index);
+    const QPointF delta = end - start;
+    const qreal segmentLength = QLineF(start, end).length();
+    if (segmentLength <= 0.001)
+      continue;
+    const qreal fraction =
+        std::clamp(QPointF::dotProduct(point - start, delta) /
+                       (segmentLength * segmentLength),
+                   0.0, 1.0);
+    const QPointF projected = start + delta * fraction;
+    const qreal distance = QLineF(point, projected).length();
+    if (distance < bestDistance) {
+      bestDistance = distance;
+      bestPosition = projected;
+      bestTangent = delta / segmentLength;
+      bestRouteDistance = traversed + segmentLength * fraction;
+    }
+    traversed += segmentLength;
+  }
+  if (bestDistance == std::numeric_limits<qreal>::max())
+    return std::nullopt;
+  return PolylineProjection{bestPosition, bestTangent,
+                            bestRouteDistance / totalLength};
+}
+
 qreal polylineLength(const QVector<QPointF> &points) {
   qreal result = 0.0;
   for (qsizetype index = 1; index < points.size(); ++index)
@@ -228,49 +256,92 @@ QRectF annotationTextRect(const QPointF &center, const QString &text,
 
 struct ConnectorAnnotationLayout {
   QRectF name;
+  QRectF stereotype;
   QRectF sourceRole;
   QRectF sourceMultiplicity;
   QRectF targetRole;
   QRectF targetMultiplicity;
 };
 
-// Automatic endpoint labels are route-relative, not screen-relative. This
-// makes them follow straight, orthogonal, and manually bent connectors while
-// keeping the semantic data independent from a particular diagram. A later
-// slice can replace an individual rectangle with a persisted manual override.
-ConnectorAnnotationLayout
-connectorAnnotationLayout(const QVector<QPointF> &points, const QString &name,
-                          const RelationshipEnd &sourceEnd,
-                          const RelationshipEnd &targetEnd, const QFont &font) {
+QRectF routeRelativeAnnotationRect(
+    const QVector<QPointF> &points, const QString &text, const QFont &font,
+    qreal defaultRoutePosition, qreal defaultTangentOffset,
+    qreal defaultNormalOffset,
+    const std::optional<ConnectorAnnotationPlacement> &manualPlacement,
+    qreal height = 20.0) {
+  const qreal length = polylineLength(points);
+  if (text.isEmpty() || qFuzzyIsNull(length))
+    return {};
+  const qreal routePosition =
+      manualPlacement ? manualPlacement->routePosition : defaultRoutePosition;
+  const auto sample = samplePolyline(points, routePosition * length);
+  if (!sample)
+    return {};
+  const QPointF normal(-sample->tangent.y(), sample->tangent.x());
+  const qreal tangentOffset =
+      manualPlacement ? manualPlacement->tangentOffset : defaultTangentOffset;
+  const qreal normalOffset =
+      manualPlacement ? manualPlacement->normalOffset : defaultNormalOffset;
+  return annotationTextRect(sample->position + sample->tangent * tangentOffset +
+                                normal * normalOffset,
+                            text, font, height);
+}
+
+std::optional<ConnectorAnnotationPlacement> manualAnnotationPlacement(
+    const QHash<QString, ConnectorAnnotationPlacement> &placements,
+    const QString &key) {
+  const auto placement = placements.constFind(key);
+  return placement == placements.cend()
+             ? std::nullopt
+             : std::optional<ConnectorAnnotationPlacement>(*placement);
+}
+
+// Automatic and manual labels share one route-relative representation. The
+// defaults keep endpoint metadata separated while manual overrides survive
+// straight/orthogonal changes and arbitrary bend-point edits.
+ConnectorAnnotationLayout connectorAnnotationLayout(
+    const QVector<QPointF> &points, const QString &name,
+    const QString &stereotype, const RelationshipEnd &sourceEnd,
+    const RelationshipEnd &targetEnd,
+    const QHash<QString, ConnectorAnnotationPlacement> &annotationPlacements,
+    const QFont &font) {
   ConnectorAnnotationLayout layout;
   if (points.size() < 2)
     return layout;
 
-  if (!name.isEmpty())
-    layout.name = annotationTextRect(polylineMiddle(points), name, font, 24.0);
-
   const qreal length = polylineLength(points);
   if (qFuzzyIsNull(length))
     return layout;
-  const qreal endpointInset = std::min(38.0, length * 0.25);
+  layout.name = routeRelativeAnnotationRect(
+      points, name, font, 0.5, 0.0, stereotype.isEmpty() ? 0.0 : 11.0,
+      manualAnnotationPlacement(annotationPlacements, QStringLiteral("name")),
+      24.0);
+  layout.stereotype = routeRelativeAnnotationRect(
+      points, stereotype, font, 0.5, 0.0, name.isEmpty() ? 0.0 : -13.0,
+      manualAnnotationPlacement(annotationPlacements,
+                                QStringLiteral("stereotype")));
+
+  const qreal endpointRoutePosition = std::min(38.0, length * 0.25) / length;
   constexpr qreal kNormalOffset = 14.0;
-  const auto source = samplePolyline(points, endpointInset);
-  const auto target = samplePolyline(points, length - endpointInset);
-  const auto layoutEnd = [&](const std::optional<PolylineSample> &sample,
-                             const RelationshipEnd &end, QRectF &role,
-                             QRectF &multiplicity) {
-    if (!sample)
-      return;
-    const QPointF normal(-sample->tangent.y(), sample->tangent.x());
-    if (!end.role.isEmpty())
-      role = annotationTextRect(sample->position + normal * kNormalOffset,
-                                end.role, font);
-    if (!end.multiplicity.isEmpty())
-      multiplicity = annotationTextRect(
-          sample->position - normal * kNormalOffset, end.multiplicity, font);
-  };
-  layoutEnd(source, sourceEnd, layout.sourceRole, layout.sourceMultiplicity);
-  layoutEnd(target, targetEnd, layout.targetRole, layout.targetMultiplicity);
+  layout.sourceRole = routeRelativeAnnotationRect(
+      points, sourceEnd.role, font, endpointRoutePosition, 0.0, kNormalOffset,
+      manualAnnotationPlacement(annotationPlacements,
+                                QStringLiteral("sourceRole")));
+  layout.sourceMultiplicity = routeRelativeAnnotationRect(
+      points, sourceEnd.multiplicity, font, endpointRoutePosition, 0.0,
+      -kNormalOffset,
+      manualAnnotationPlacement(annotationPlacements,
+                                QStringLiteral("sourceMultiplicity")));
+  layout.targetRole = routeRelativeAnnotationRect(
+      points, targetEnd.role, font, 1.0 - endpointRoutePosition, 0.0,
+      kNormalOffset,
+      manualAnnotationPlacement(annotationPlacements,
+                                QStringLiteral("targetRole")));
+  layout.targetMultiplicity = routeRelativeAnnotationRect(
+      points, targetEnd.multiplicity, font, 1.0 - endpointRoutePosition, 0.0,
+      -kNormalOffset,
+      manualAnnotationPlacement(annotationPlacements,
+                                QStringLiteral("targetMultiplicity")));
   return layout;
 }
 
@@ -1250,23 +1321,24 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
                                                   : palette.nodeBorder;
     const QColor divider =
         node.style.customized ? node.style.divider : palette.compartmentLine;
+    const qreal headerHeight = nodeHeaderHeight(node);
     appendClippedRect(vertices, node.rect, fill, node.clipRect, node.hasClip);
     appendClippedRect(
         vertices,
-        {node.rect.left(), node.rect.top(), node.rect.width(), kHeaderHeight},
+        {node.rect.left(), node.rect.top(), node.rect.width(), headerHeight},
         headerFill, node.clipRect, node.hasClip);
     appendClippedBorder(vertices, node.rect, (node.selected ? 3.0 : 1.2) / zoom,
                         border, node.clipRect, node.hasClip);
     if (detail > 0) {
       appendClippedAxisLine(
-          vertices, QPointF(node.rect.left(), node.rect.top() + kHeaderHeight),
-          QPointF(node.rect.right(), node.rect.top() + kHeaderHeight),
+          vertices, QPointF(node.rect.left(), node.rect.top() + headerHeight),
+          QPointF(node.rect.right(), node.rect.top() + headerHeight),
           1.0 / zoom, divider, node.clipRect, node.hasClip);
     }
     if (detail == 2 && node.type != ElementType::Enumeration &&
         !node.attributes.isEmpty() && !node.operations.isEmpty()) {
-      const qreal y = node.rect.top() + kHeaderHeight +
-                      node.attributes.size() * kLineHeight;
+      const qreal y =
+          node.rect.top() + headerHeight + node.attributes.size() * kLineHeight;
       if (y <= node.rect.bottom())
         appendClippedAxisLine(vertices, QPointF(node.rect.left(), y),
                               QPointF(node.rect.right(), y), 1.0 / zoom,
@@ -1387,6 +1459,10 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
   const QFont base = QGuiApplication::font();
   QFont header = base;
   header.setBold(true);
+  QFont stereotypeFont = base;
+  if (stereotypeFont.pointSizeF() > 0.0)
+    stereotypeFont.setPointSizeF(
+        std::max(7.0, stereotypeFont.pointSizeF() - 2.0));
   const auto appendVisibleText =
       [&](const QRectF &target, const QRectF &ownClip, const QString &text,
           const QFont &font, const QColor &color, Qt::Alignment alignment,
@@ -1417,12 +1493,19 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
             ? std::clamp(container.titleWidth, 90.0, container.rect.width()) -
                   2.0 * kPadding
             : container.rect.width() - 2 * kPadding;
+    const bool splitPackageTitle =
+        container.package && !container.stereotype.isEmpty();
     const qreal titleHeight = container.package ? 24.0 : kContainerHeaderHeight;
     QRectF clip = container.rect.adjusted(kPadding, 0, -kPadding, 0);
     if (container.hasClip)
       clip = clip.intersected(container.clipRect);
-    const QRectF target(container.rect.left() + kPadding, container.rect.top(),
-                        titleWidth, titleHeight);
+    const QRectF stereotypeTarget(container.rect.left() + kPadding,
+                                  container.rect.top(), titleWidth,
+                                  splitPackageTitle ? 11.0 : 0.0);
+    const QRectF target(container.rect.left() + kPadding,
+                        container.rect.top() + (splitPackageTitle ? 10.0 : 0.0),
+                        titleWidth,
+                        splitPackageTitle ? titleHeight - 10.0 : titleHeight);
     QList<QRectF> occluders = allNodeRects;
     for (qsizetype later = containerIndex + 1;
          later < snapshot.containers.size(); ++later) {
@@ -1437,6 +1520,9 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
     const QColor titleColor = container.style.customized
                                   ? container.style.primaryText
                                   : palette.containerTitleText;
+    if (splitPackageTitle)
+      appendVisibleText(stereotypeTarget, clip, container.stereotype,
+                        stereotypeFont, titleColor, Qt::AlignCenter, occluders);
     appendVisibleText(target, clip, container.name, header, titleColor,
                       Qt::AlignVCenter | Qt::AlignLeft, occluders);
   }
@@ -1445,8 +1531,9 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
     if (detail != 2 || connector.points.size() < 2)
       continue;
     const ConnectorAnnotationLayout layout = connectorAnnotationLayout(
-        connector.points, connector.name, connector.sourceEnd,
-        connector.targetEnd, base);
+        connector.points, connector.name, connector.stereotype,
+        connector.sourceEnd, connector.targetEnd,
+        connector.annotationPlacements, base);
     const auto appendAnnotation = [&](const QRectF &target,
                                       const QString &text) {
       if (!target.isEmpty() &&
@@ -1455,6 +1542,7 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
                           Qt::AlignCenter, allNodeRects);
     };
     appendAnnotation(layout.name, connector.name);
+    appendAnnotation(layout.stereotype, connector.stereotype);
     appendAnnotation(layout.sourceRole, connector.sourceEnd.role);
     appendAnnotation(layout.sourceMultiplicity,
                      connector.sourceEnd.multiplicity);
@@ -1481,12 +1569,22 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
     QRectF nodeTextClip = node.rect.adjusted(kPadding, 0, -kPadding, 0);
     if (node.hasClip)
       nodeTextClip = nodeTextClip.intersected(node.clipRect);
-    const QRectF headerTarget(node.rect.left() + kPadding, node.rect.top(),
-                              node.rect.width() - 2 * kPadding, kHeaderHeight);
+    const qreal headerHeight = nodeHeaderHeight(node);
+    const QRectF stereotypeTarget(node.rect.left() + kPadding, node.rect.top(),
+                                  node.rect.width() - 2 * kPadding,
+                                  node.stereotype.isEmpty() ? 0.0
+                                                            : kLineHeight);
+    const QRectF headerTarget(
+        node.rect.left() + kPadding,
+        node.rect.top() + (node.stereotype.isEmpty() ? 0.0 : kLineHeight),
+        node.rect.width() - 2 * kPadding, kHeaderHeight);
     const QColor primaryText =
         node.style.customized ? node.style.primaryText : palette.nodeTitleText;
     const QColor secondaryText =
         node.style.customized ? node.style.secondaryText : palette.bodyText;
+    if (!node.stereotype.isEmpty())
+      appendVisibleText(stereotypeTarget, nodeTextClip, node.stereotype, base,
+                        secondaryText, Qt::AlignCenter, laterNodeRects);
     appendVisibleText(headerTarget, nodeTextClip, node.name, header,
                       primaryText, Qt::AlignCenter, laterNodeRects);
     if (detail != 2)
@@ -1495,7 +1593,7 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
     const auto addLines = [&](const QStringList &values, int &lineNumber) {
       for (const auto &text : values) {
         const QRectF target(node.rect.left() + kPadding,
-                            node.rect.top() + kHeaderHeight +
+                            node.rect.top() + headerHeight +
                                 lineNumber * kLineHeight,
                             node.rect.width() - 2 * kPadding, kLineHeight);
         appendVisibleText(target, nodeTextClip, text, base, secondaryText,
@@ -1594,6 +1692,13 @@ bool DiagramCanvas::selectedConnectorHasBendPoints() const {
   const auto *d = diagram();
   const auto *connector = d ? findConnector(*d, m_selectedConnector) : nullptr;
   return connector && !connector->bendPoints.isEmpty();
+}
+
+bool DiagramCanvas::contextAnnotationHasManualPosition() const {
+  const auto *d = diagram();
+  const auto *connector = d ? findConnector(*d, m_selectedConnector) : nullptr;
+  return connector && !m_contextAnnotationKey.isEmpty() &&
+         connector->annotationPlacements.contains(m_contextAnnotationKey);
 }
 
 QString DiagramCanvas::selectedConnectorRouting() const {
@@ -1870,9 +1975,10 @@ QRectF DiagramCanvas::toView(const QRectF &rect) const {
   return {toView(rect.topLeft()), rect.size() * m_zoom};
 }
 
-QRectF DiagramCanvas::textLineRect(const QRectF &nodeRect, int line) const {
+QRectF DiagramCanvas::textLineRect(const QRectF &nodeRect, int line,
+                                   qreal headerHeight) const {
   return {nodeRect.left() + kPadding,
-          nodeRect.top() + kHeaderHeight + line * kLineHeight,
+          nodeRect.top() + headerHeight + line * kLineHeight,
           nodeRect.width() - 2 * kPadding, kLineHeight};
 }
 
@@ -2121,6 +2227,55 @@ void DiagramCanvas::commitBendPointPreview() {
   m_project->moveConnectorBendPoint(m_diagramId, m_selectedConnector,
                                     m_selectedBendPoint, position.x(),
                                     position.y());
+}
+
+void DiagramCanvas::updateAnnotationPreview(const QPointF &scenePoint) {
+  const auto *d = diagram();
+  const auto *connector =
+      d ? findConnector(*d, m_annotationDragConnector) : nullptr;
+  if (!connector || m_annotationDragKey.isEmpty())
+    return;
+  const QPointF desiredCenter = scenePoint + m_annotationDragOffset;
+  const ui::ConnectorRoute route = connectorRoute(*connector);
+  const auto projection = projectOntoPolyline(route.points, desiredCenter);
+  if (!projection)
+    return;
+  const QPointF normal(-projection->tangent.y(), projection->tangent.x());
+  const QPointF offset = desiredCenter - projection->position;
+  m_annotationPreview.routePosition = projection->normalizedDistance;
+  m_annotationPreview.tangentOffset =
+      QPointF::dotProduct(offset, projection->tangent);
+  m_annotationPreview.normalOffset = QPointF::dotProduct(offset, normal);
+  m_annotationPreviewActive = true;
+  m_annotationDragMoved =
+      m_annotationDragMoved ||
+      QLineF(m_pressScene, scenePoint).length() >= 3.0 / m_zoom;
+  m_sceneDirty = true;
+  m_textDirty = true;
+  update();
+}
+
+void DiagramCanvas::commitAnnotationPreview() {
+  if (m_project && m_annotationPreviewActive && m_annotationDragMoved &&
+      !m_annotationDragConnector.isEmpty() && !m_annotationDragKey.isEmpty()) {
+    m_project->setConnectorAnnotationPlacement(
+        m_diagramId, m_annotationDragConnector, m_annotationDragKey,
+        m_annotationPreview.routePosition, m_annotationPreview.tangentOffset,
+        m_annotationPreview.normalOffset);
+  }
+  cancelAnnotationPreview();
+}
+
+void DiagramCanvas::cancelAnnotationPreview() {
+  m_annotationPreviewActive = false;
+  m_annotationDragMoved = false;
+  m_annotationDragConnector.clear();
+  m_annotationDragKey.clear();
+  if (m_interaction == Interaction::MoveAnnotation)
+    m_interaction = Interaction::None;
+  m_sceneDirty = true;
+  m_textDirty = true;
+  update();
 }
 
 QString
@@ -2513,9 +2668,17 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
       for (const auto &container : d->containers) {
         const ui::PresentationClip clip =
             clipLayout.clipFor(container.id, detachedDragRoots);
+        const auto *containerElement =
+            container.subjectKind == QStringLiteral("package")
+                ? findElement(projectData, container.subjectId)
+                : nullptr;
         snapshot.containers.append(
             {containerGeometry(container),
              presentation_layout::containerDisplayName(projectData, container),
+             containerElement
+                 ? stereotype_catalog::displayText(
+                       projectData, containerElement->stereotypeIds)
+                 : QString{},
              presentation_layout::containerTitleWidth(projectData, container),
              container.subjectKind == QStringLiteral("package"),
              renderElementStyle(project_style::effectiveStyleForContainer(
@@ -2560,6 +2723,8 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
             {rect, (*element)->type,
              presentation_layout::elementDisplayNameInPackage(
                  projectData, **element, containingPackageId(node.id)),
+             stereotype_catalog::displayText(projectData,
+                                             (*element)->stereotypeIds),
              (*element)->attributes, (*element)->operations,
              (*element)->enumLiterals,
              renderElementStyle(
@@ -2603,10 +2768,17 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
               sourcePoint, bendPoints, targetPoint, connector.routing,
               connector.sourceAnchor.side, connector.targetAnchor.side);
         }
+        auto annotationPlacements = connector.annotationPlacements;
+        if (m_annotationPreviewActive &&
+            connector.id == m_annotationDragConnector)
+          annotationPlacements.insert(m_annotationDragKey, m_annotationPreview);
         snapshot.connectors.append(
             {route.points, route.bendPointRouteIndices, (*relationship)->name,
+             stereotype_catalog::displayText(projectData,
+                                             (*relationship)->stereotypeIds),
              (*relationship)->sourceEnd, (*relationship)->targetEnd,
-             (*relationship)->type, connector.id == m_selectedConnector,
+             std::move(annotationPlacements), (*relationship)->type,
+             connector.id == m_selectedConnector,
              connector.id == m_selectedConnector ? m_selectedBendPoint : -1});
       }
       if (m_interaction == Interaction::CreateConnector &&
@@ -2639,6 +2811,8 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
                 m_connectorGestureSourceAnchor.side, targetSide);
             snapshot.connectors.append({route.points,
                                         route.bendPointRouteIndices,
+                                        {},
+                                        {},
                                         {},
                                         {},
                                         {},
@@ -2777,6 +2951,46 @@ DiagramCanvas::hitConnector(const QPointF &scenePoint) const {
   return nullptr;
 }
 
+DiagramCanvas::AnnotationHit
+DiagramCanvas::hitConnectorAnnotation(const QPointF &scenePoint) const {
+  const auto *d = diagram();
+  if (!d || !m_project)
+    return {};
+  // Connector text is clipped behind nodes by the renderer. Keep hit testing
+  // consistent so an invisible annotation never steals a node interaction.
+  if (hitNode(scenePoint))
+    return {};
+  const QFont font = QGuiApplication::font();
+  for (auto connector = d->connectors.crbegin();
+       connector != d->connectors.crend(); ++connector) {
+    const auto *relationship =
+        findRelationship(m_project->data(), connector->relationshipId);
+    if (!relationship)
+      continue;
+    QHash<QString, ConnectorAnnotationPlacement> placements =
+        connector->annotationPlacements;
+    if (m_annotationPreviewActive && connector->id == m_annotationDragConnector)
+      placements.insert(m_annotationDragKey, m_annotationPreview);
+    const ui::ConnectorRoute route = connectorRoute(*connector);
+    const ConnectorAnnotationLayout layout = connectorAnnotationLayout(
+        route.points, relationship->name,
+        stereotype_catalog::displayText(m_project->data(),
+                                        relationship->stereotypeIds),
+        relationship->sourceEnd, relationship->targetEnd, placements, font);
+    const QList<QPair<QString, QRectF>> targets = {
+        {QStringLiteral("name"), layout.name},
+        {QStringLiteral("stereotype"), layout.stereotype},
+        {QStringLiteral("sourceRole"), layout.sourceRole},
+        {QStringLiteral("sourceMultiplicity"), layout.sourceMultiplicity},
+        {QStringLiteral("targetRole"), layout.targetRole},
+        {QStringLiteral("targetMultiplicity"), layout.targetMultiplicity}};
+    for (const auto &[key, rect] : targets)
+      if (!rect.isEmpty() && rect.contains(scenePoint))
+        return {connector->id, relationship->id, key, rect};
+  }
+  return {};
+}
+
 DiagramCanvas::TextHit DiagramCanvas::hitText(const QPointF &scenePoint) const {
   const auto *d = diagram();
   if (!d || !m_project)
@@ -2786,30 +3000,51 @@ DiagramCanvas::TextHit DiagramCanvas::hitText(const QPointF &scenePoint) const {
     if (!element)
       return {};
     const QRectF rect = nodeGeometry(*node);
-    if (QRectF(rect.left(), rect.top(), rect.width(), kHeaderHeight)
+    const QString stereotype = stereotype_catalog::displayText(
+        m_project->data(), element->stereotypeIds);
+    const qreal headerHeight =
+        kHeaderHeight + (stereotype.isEmpty() ? 0.0 : kLineHeight);
+    if (!stereotype.isEmpty() &&
+        QRectF(rect.left(), rect.top(), rect.width(), kLineHeight)
             .contains(scenePoint))
       return {element->id,
-              QStringLiteral("name"),
+              QStringLiteral("stereotypes"),
               -1,
-              element->name,
-              QRectF(rect.left() + 4, rect.top() + 3, rect.width() - 8,
-                     kHeaderHeight - 6),
-              true};
+              stereotype,
+              QRectF(rect.left() + 4, rect.top() + 2, rect.width() - 8,
+                     kLineHeight - 4),
+              false};
+    if (QRectF(rect.left(),
+               rect.top() + (stereotype.isEmpty() ? 0.0 : kLineHeight),
+               rect.width(), kHeaderHeight)
+            .contains(scenePoint))
+      return {
+          element->id,
+          QStringLiteral("name"),
+          -1,
+          element->name,
+          QRectF(rect.left() + 4,
+                 rect.top() + (stereotype.isEmpty() ? 0.0 : kLineHeight) + 3,
+                 rect.width() - 8, kHeaderHeight - 6),
+          true};
     int line = 0;
     if (element->type == ElementType::Enumeration) {
       for (int i = 0; i < element->enumLiterals.size(); ++i, ++line)
-        if (textLineRect(rect, line).contains(scenePoint))
+        if (textLineRect(rect, line, headerHeight).contains(scenePoint))
           return {element->id, QStringLiteral("literal"), i,
-                  element->enumLiterals.at(i), textLineRect(rect, line)};
+                  element->enumLiterals.at(i),
+                  textLineRect(rect, line, headerHeight)};
     } else {
       for (int i = 0; i < element->attributes.size(); ++i, ++line)
-        if (textLineRect(rect, line).contains(scenePoint))
+        if (textLineRect(rect, line, headerHeight).contains(scenePoint))
           return {element->id, QStringLiteral("attribute"), i,
-                  element->attributes.at(i), textLineRect(rect, line)};
+                  element->attributes.at(i),
+                  textLineRect(rect, line, headerHeight)};
       for (int i = 0; i < element->operations.size(); ++i, ++line)
-        if (textLineRect(rect, line).contains(scenePoint))
+        if (textLineRect(rect, line, headerHeight).contains(scenePoint))
           return {element->id, QStringLiteral("operation"), i,
-                  element->operations.at(i), textLineRect(rect, line)};
+                  element->operations.at(i),
+                  textLineRect(rect, line, headerHeight)};
     }
   }
   if (const auto *container = hitContainer(scenePoint)) {
@@ -2833,13 +3068,27 @@ DiagramCanvas::TextHit DiagramCanvas::hitText(const QPointF &scenePoint) const {
                 true};
     } else if (const auto *package =
                    findElement(m_project->data(), container->subjectId)) {
-      return {package->id,
-              QStringLiteral("name"),
-              -1,
-              package->name,
-              QRectF(rect.left() + 4, rect.top() + 3, rect.width() - 8,
-                     headerHeight - 6),
-              true};
+      const QString stereotype = stereotype_catalog::displayText(
+          m_project->data(), package->stereotypeIds);
+      if (!stereotype.isEmpty() &&
+          QRectF(rect.left(), rect.top(), rect.width(), 11.0)
+              .contains(scenePoint))
+        return {package->id,
+                QStringLiteral("stereotypes"),
+                -1,
+                stereotype,
+                QRectF(rect.left() + 4, rect.top() + 1, rect.width() - 8, 10.0),
+                false};
+      return {
+          package->id,
+          QStringLiteral("name"),
+          -1,
+          package->name,
+          QRectF(rect.left() + 4,
+                 rect.top() + (stereotype.isEmpty() ? 3.0 : 10.0),
+                 rect.width() - 8,
+                 stereotype.isEmpty() ? headerHeight - 6 : headerHeight - 10),
+          true};
     }
   }
   const QFont font = QGuiApplication::font();
@@ -2851,11 +3100,19 @@ DiagramCanvas::TextHit DiagramCanvas::hitText(const QPointF &scenePoint) const {
       continue;
     const ui::ConnectorRoute route = connectorRoute(*connector);
     const ConnectorAnnotationLayout layout = connectorAnnotationLayout(
-        route.points, relationship->name, relationship->sourceEnd,
-        relationship->targetEnd, font);
+        route.points, relationship->name,
+        stereotype_catalog::displayText(m_project->data(),
+                                        relationship->stereotypeIds),
+        relationship->sourceEnd, relationship->targetEnd,
+        connector->annotationPlacements, font);
     if (layout.name.contains(scenePoint))
       return {relationship->id, QStringLiteral("name"), -1, relationship->name,
               layout.name};
+    if (layout.stereotype.contains(scenePoint))
+      return {relationship->id, QStringLiteral("stereotypes"), -1,
+              stereotype_catalog::displayText(m_project->data(),
+                                              relationship->stereotypeIds),
+              layout.stereotype};
     if (layout.sourceRole.contains(scenePoint))
       return {relationship->id, QStringLiteral("sourceRole"), -1,
               relationship->sourceEnd.role, layout.sourceRole};
@@ -2891,12 +3148,28 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
   if (event->button() == Qt::RightButton) {
     m_contextScenePoint = m_pressScene;
     m_contextSegment = -1;
+    m_contextAnnotationKey.clear();
     QString target = QStringLiteral("canvas");
     if (const auto *node = hitNode(m_pressScene)) {
       selectNode(node->id, false);
       if (m_project)
         m_project->selectObject(node->elementId, QStringLiteral("element"));
       target = QStringLiteral("element");
+    } else if (const AnnotationHit annotation =
+                   hitConnectorAnnotation(m_pressScene);
+               !annotation.connectorId.isEmpty()) {
+      const auto *connector = findConnector(*diagram(), annotation.connectorId);
+      selectConnector(annotation.connectorId, false);
+      m_contextAnnotationKey = annotation.key;
+      m_selectedBendPoint =
+          connector ? hitBendPoint(*connector, m_pressScene) : -1;
+      m_contextSegment =
+          connector ? nearestConnectorSegment(*connector, m_pressScene) : -1;
+      if (m_project)
+        m_project->selectObject(annotation.relationshipId,
+                                QStringLiteral("relationship"));
+      target = QStringLiteral("connector");
+      emit canvasSelectionChanged();
     } else if (const auto *connector = hitConnector(m_pressScene)) {
       selectConnector(connector->id, false);
       m_selectedBendPoint = hitBendPoint(*connector, m_pressScene);
@@ -2970,6 +3243,48 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
     emit canvasSelectionChanged();
     event->accept();
     return;
+  }
+
+  if (const AnnotationHit annotation = hitConnectorAnnotation(m_pressScene);
+      !annotation.connectorId.isEmpty()) {
+    const auto *currentDiagram = diagram();
+    const auto *connector =
+        currentDiagram ? findConnector(*currentDiagram, annotation.connectorId)
+                       : nullptr;
+    if (connector) {
+      selectConnector(annotation.connectorId, false);
+      if (m_project)
+        m_project->selectObject(annotation.relationshipId,
+                                QStringLiteral("relationship"));
+      m_contextAnnotationKey = annotation.key;
+      m_annotationDragConnector = annotation.connectorId;
+      m_annotationDragKey = annotation.key;
+      m_annotationDragOffset = annotation.sceneRect.center() - m_pressScene;
+      // Start from a clean placement so extension data from a previously
+      // dragged annotation cannot leak into this one.
+      m_annotationPreview = {};
+      m_annotationPreviewActive = true;
+      m_annotationDragMoved = false;
+      const ui::ConnectorRoute route = connectorRoute(*connector);
+      if (const auto projection = projectOntoPolyline(
+              route.points, annotation.sceneRect.center())) {
+        const QPointF normal(-projection->tangent.y(), projection->tangent.x());
+        const QPointF offset =
+            annotation.sceneRect.center() - projection->position;
+        m_annotationPreview.routePosition = projection->normalizedDistance;
+        m_annotationPreview.tangentOffset =
+            QPointF::dotProduct(offset, projection->tangent);
+        m_annotationPreview.normalOffset = QPointF::dotProduct(offset, normal);
+        const auto existing =
+            connector->annotationPlacements.constFind(annotation.key);
+        if (existing != connector->annotationPlacements.cend())
+          m_annotationPreview.extra = existing->extra;
+      }
+      m_interaction = Interaction::MoveAnnotation;
+      emit canvasSelectionChanged();
+      event->accept();
+      return;
+    }
   }
 
   const auto *node = hitNode(m_pressScene);
@@ -3084,6 +3399,10 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
   }
   if (m_interaction == Interaction::MoveBendPoint) {
     updateBendPointPreview(toScene(event->position()));
+    return;
+  }
+  if (m_interaction == Interaction::MoveAnnotation) {
+    updateAnnotationPreview(toScene(event->position()));
     return;
   }
   if (m_interaction == Interaction::CreateConnector) {
@@ -3221,6 +3540,8 @@ void DiagramCanvas::mouseReleaseEvent(QMouseEvent *event) {
     commitEndpointDrag();
   } else if (m_interaction == Interaction::MoveBendPoint)
     commitBendPointPreview();
+  else if (m_interaction == Interaction::MoveAnnotation)
+    commitAnnotationPreview();
   m_interaction = Interaction::None;
   m_originalGeometry.clear();
   m_previewGeometry.clear();
@@ -3230,6 +3551,10 @@ void DiagramCanvas::mouseReleaseEvent(QMouseEvent *event) {
   m_endpointDragSnapped = false;
   m_bendPointPreview.clear();
   m_bendPointPreviewActive = false;
+  m_annotationPreviewActive = false;
+  m_annotationDragConnector.clear();
+  m_annotationDragKey.clear();
+  m_annotationDragMoved = false;
   m_sceneDirty = true;
   // Preview geometry also drives the text atlas. Rebuild it after clearing the
   // preview so labels and frames return to the same committed position.
@@ -3241,6 +3566,14 @@ void DiagramCanvas::mouseDoubleClickEvent(QMouseEvent *event) {
   const QPointF scenePoint = toScene(event->position());
   const TextHit hit = hitText(scenePoint);
   if (!hit.objectId.isEmpty()) {
+    if (hit.field == QStringLiteral("stereotypes")) {
+      const QString kind = findRelationship(m_project->data(), hit.objectId)
+                               ? QStringLiteral("relationship")
+                               : QStringLiteral("element");
+      emit stereotypeEditRequested(hit.objectId, kind);
+      event->accept();
+      return;
+    }
     const QRectF view = toView(hit.sceneRect);
     // The editor is a QML overlay in view coordinates, while canvas text is
     // defined in scene coordinates and enlarged by the canvas transform.
@@ -3592,6 +3925,29 @@ void DiagramCanvas::clearSelectedConnectorBendPoints() {
   update();
 }
 
+void DiagramCanvas::resetContextAnnotationPosition() {
+  if (!m_project || m_selectedConnector.isEmpty() ||
+      m_contextAnnotationKey.isEmpty())
+    return;
+  m_project->resetConnectorAnnotationPlacement(m_diagramId, m_selectedConnector,
+                                               m_contextAnnotationKey);
+  m_sceneDirty = true;
+  m_textDirty = true;
+  emit canvasSelectionChanged();
+  update();
+}
+
+void DiagramCanvas::resetSelectedConnectorAnnotationPositions() {
+  if (!m_project || m_selectedConnector.isEmpty())
+    return;
+  m_project->resetConnectorAnnotationPlacements(m_diagramId,
+                                                m_selectedConnector);
+  m_sceneDirty = true;
+  m_textDirty = true;
+  emit canvasSelectionChanged();
+  update();
+}
+
 void DiagramCanvas::setSelectedConnectorRouting(const QString &routing) {
   if (!m_project || m_selectedConnector.isEmpty())
     return;
@@ -3631,7 +3987,8 @@ void DiagramCanvas::fitSelectionToContent() {
     if (!node || !element)
       continue;
     QRectF fitted = node->geometry;
-    fitted.setSize(presentation_layout::nodeContentSize(*element));
+    fitted.setSize(
+        presentation_layout::nodeContentSize(m_project->data(), *element));
     appendGeometry(nodeId, fitted);
   }
   if (!m_selectedContainer.isEmpty()) {
@@ -3771,6 +4128,11 @@ void DiagramCanvas::clearCanvasSelection() {
   m_endpointDragSnapped = false;
   m_bendPointPreview.clear();
   m_bendPointPreviewActive = false;
+  m_contextAnnotationKey.clear();
+  m_annotationPreviewActive = false;
+  m_annotationDragConnector.clear();
+  m_annotationDragKey.clear();
+  m_annotationDragMoved = false;
   m_connectorGestureSourceNode.clear();
   m_connectorGestureTargetNode.clear();
   m_connectorGestureType.clear();
@@ -3778,7 +4140,8 @@ void DiagramCanvas::clearCanvasSelection() {
   m_connectorGestureTargetSnapped = false;
   if (m_interaction == Interaction::CreateConnector ||
       m_interaction == Interaction::MoveSourcePort ||
-      m_interaction == Interaction::MoveTargetPort)
+      m_interaction == Interaction::MoveTargetPort ||
+      m_interaction == Interaction::MoveAnnotation)
     m_interaction = Interaction::None;
   m_sceneDirty = true;
   emit canvasSelectionChanged();
@@ -3806,6 +4169,7 @@ void DiagramCanvas::selectNode(const QString &nodeId, bool toggle) {
     m_selectedBendPoint = -1;
     m_endpointDragTargetNode.clear();
     m_endpointDragActive = false;
+    m_contextAnnotationKey.clear();
   }
   m_sceneDirty = true;
   emit canvasSelectionChanged();
@@ -3823,6 +4187,7 @@ void DiagramCanvas::selectConnector(const QString &connectorId,
   m_endpointDragActive = false;
   m_bendPointPreview.clear();
   m_bendPointPreviewActive = false;
+  m_contextAnnotationKey.clear();
   if (!preserveNodes) {
     m_selectedNodes.clear();
     m_selectedNodeOrder.clear();
@@ -3833,6 +4198,12 @@ void DiagramCanvas::selectConnector(const QString &connectorId,
 }
 
 void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
+  if (event->key() == Qt::Key_Escape &&
+      m_interaction == Interaction::MoveAnnotation) {
+    cancelAnnotationPreview();
+    event->accept();
+    return;
+  }
   if (event->key() == Qt::Key_Escape &&
       m_interaction == Interaction::CreateConnector) {
     cancelConnectorGesture();

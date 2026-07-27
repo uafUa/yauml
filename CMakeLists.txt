@@ -77,6 +77,8 @@ add_library(uuml_core STATIC
     src/core/project_serializer.h
     src/core/project_style.cpp
     src/core/project_style.h
+    src/core/stereotype_catalog.cpp
+    src/core/stereotype_catalog.h
     src/core/project_tree_model.cpp
     src/core/project_tree_model.h
     src/core/workspace_controller.cpp
@@ -204,6 +206,7 @@ qt_add_qml_module(uuml
         qml/DiagramView.qml
         qml/DiagramWindow.qml
         qml/Main.qml
+        qml/ProjectStereotypeDialog.qml
         qml/ProjectStyleDialog.qml
         qml/StyleAssignmentMenu.qml
 )

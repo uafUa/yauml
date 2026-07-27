@@ -129,6 +129,7 @@ private slots:
   void fitToContentUsesMeasuredElementSizeAndIsUndoable();
   void connectorBendPointCanBeAddedMovedAndRemoved();
   void relationshipEndAnnotationsAreEditable();
+  void connectorAnnotationsMoveResetAndExposeStereotypes();
   void edgeGestureCreatesCancelsAndSupportsSelfConnections();
   void relationshipToolboxRequiresSelectedEdgeAndCreatesConnector();
   void multiSelectionToolboxTracksArrangementCommands();
@@ -639,6 +640,8 @@ void DiagramCanvasTests::connectorBendPointCanBeAddedMovedAndRemoved() {
   useStandardInteractionGeometry(controller);
   const QString diagramId = controller.data().diagrams.first().id;
   const auto nodes = controller.data().diagrams.first().nodes;
+  controller.updateNodeGeometry(diagramId, nodes.at(1).id, 500.0, 50.0, 220.0,
+                                120.0);
   const QString connectorId = controller.createRelationship(
       diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("association"));
   QVERIFY(!connectorId.isEmpty());
@@ -722,6 +725,82 @@ void DiagramCanvasTests::relationshipEndAnnotationsAreEditable() {
     QCOMPARE(edits.count(), 1);
     QCOMPARE(edits.takeFirst().at(1).toString(), field);
   }
+}
+
+void DiagramCanvasTests::connectorAnnotationsMoveResetAndExposeStereotypes() {
+  ProjectController controller;
+  populate(controller, 2);
+  useStandardInteractionGeometry(controller);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+  controller.updateNodeGeometry(diagramId, nodes.at(1).id, 500.0, 50.0, 220.0,
+                                120.0);
+  const QString connectorId = controller.createRelationship(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("association"));
+  const auto connector = [&]() {
+    return findConnector(controller.data().diagrams.first(), connectorId);
+  };
+  QVERIFY(connector());
+  const QString relationshipId = connector()->relationshipId;
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+
+  // Scene route: (270, 110) to (500, 110). The "associated with" annotation
+  // starts at scene (385, 110), and the canvas contributes its default
+  // (30, 30) pan.
+  const QPointF automaticName(415.0, 140.0);
+  const QPointF movedName(415.0, 180.0);
+  canvas.drag(automaticName, movedName);
+  const auto placement =
+      connector()->annotationPlacements.value(QStringLiteral("name"));
+  QVERIFY(connector()->annotationPlacements.contains(QStringLiteral("name")));
+  QVERIFY(placement.routePosition >= 0.0 && placement.routePosition <= 1.0);
+  QVERIFY(qAbs(placement.normalOffset - 40.0) < 0.01);
+  QCOMPARE(controller.undoText(), QStringLiteral("Move connector annotation"));
+
+  controller.undo();
+  QVERIFY(connector()->annotationPlacements.isEmpty());
+  controller.redo();
+  QCOMPARE(connector()->annotationPlacements.value(QStringLiteral("name")),
+           placement);
+
+  canvas.rightClick(movedName);
+  QVERIFY(canvas.contextAnnotationHasManualPosition());
+  canvas.resetContextAnnotationPosition();
+  QVERIFY(connector()->annotationPlacements.isEmpty());
+  controller.undo();
+  QCOMPARE(connector()->annotationPlacements.value(QStringLiteral("name")),
+           placement);
+
+  // Escape restores the committed placement and does not add history.
+  canvas.press(movedName);
+  canvas.move({415.0, 220.0});
+  canvas.key(Qt::Key_Escape);
+  canvas.release({415.0, 220.0});
+  QCOMPARE(connector()->annotationPlacements.value(QStringLiteral("name")),
+           placement);
+  QCOMPARE(controller.undoText(), QStringLiteral("Move connector annotation"));
+
+  const QString sourceElement = nodes.at(0).elementId;
+  controller.assignStereotypes(QStringLiteral("element"), sourceElement,
+                               {QStringLiteral("uml.interface")});
+  controller.assignStereotypes(QStringLiteral("relationship"), relationshipId,
+                               {QStringLiteral("uml.trace")});
+  QSignalSpy stereotypeEdits(&canvas, &DiagramCanvas::stereotypeEditRequested);
+
+  // Element stereotypes occupy the line immediately above the bold name.
+  canvas.doubleClick({190.0, 90.0});
+  QCOMPARE(stereotypeEdits.count(), 1);
+  QCOMPARE(stereotypeEdits.takeFirst().at(0).toString(), sourceElement);
+
+  // The relationship stereotype is independently movable and invokes the
+  // catalog assignment UI when double-clicked.
+  canvas.doubleClick({415.0, 127.0});
+  QCOMPARE(stereotypeEdits.count(), 1);
+  const auto edit = stereotypeEdits.takeFirst();
+  QCOMPARE(edit.at(0).toString(), relationshipId);
+  QCOMPARE(edit.at(1).toString(), QStringLiteral("relationship"));
 }
 
 void DiagramCanvasTests::edgeGestureCreatesCancelsAndSupportsSelfConnections() {

@@ -36,6 +36,9 @@ class DiagramCanvas : public QQuickItem {
                  canvasSelectionChanged)
   Q_PROPERTY(bool selectedConnectorHasBendPoints READ
                  selectedConnectorHasBendPoints NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(
+      bool contextAnnotationHasManualPosition READ
+          contextAnnotationHasManualPosition NOTIFY canvasSelectionChanged)
   Q_PROPERTY(QString connectorInteractionPrompt READ connectorInteractionPrompt
                  NOTIFY canvasSelectionChanged)
   Q_PROPERTY(int defaultDistributionGap READ defaultDistributionGap WRITE
@@ -97,6 +100,7 @@ public:
   bool containerSelected() const;
   bool bendPointSelected() const;
   bool selectedConnectorHasBendPoints() const;
+  bool contextAnnotationHasManualPosition() const;
   QString connectorInteractionPrompt() const;
   int defaultDistributionGap() const;
   void setDefaultDistributionGap(int gap);
@@ -139,6 +143,8 @@ public:
   Q_INVOKABLE void addBendPointAtContextPosition();
   Q_INVOKABLE void removeSelectedBendPoint();
   Q_INVOKABLE void clearSelectedConnectorBendPoints();
+  Q_INVOKABLE void resetContextAnnotationPosition();
+  Q_INVOKABLE void resetSelectedConnectorAnnotationPositions();
   Q_INVOKABLE void setSelectedConnectorRouting(const QString &routing);
   Q_INVOKABLE void setSelectedPortSnapPoints(int horizontalPointCount,
                                              int verticalPointCount);
@@ -182,6 +188,8 @@ signals:
   void editRequested(const QString &objectId, const QString &field, int index,
                      const QString &text, qreal x, qreal y, qreal width,
                      qreal height, qreal fontPixelSize, bool fontBold);
+  void stereotypeEditRequested(const QString &objectId,
+                               const QString &objectKind);
 
 protected:
   QSGNode *updatePaintNode(QSGNode *oldNode,
@@ -207,6 +215,7 @@ private:
     MoveSourcePort,
     MoveTargetPort,
     MoveBendPoint,
+    MoveAnnotation,
     CreateConnector
   };
   struct ConnectorEndpoints {
@@ -225,6 +234,12 @@ private:
     QString text;
     QRectF sceneRect;
     bool fontBold = false;
+  };
+  struct AnnotationHit {
+    QString connectorId;
+    QString relationshipId;
+    QString key;
+    QRectF sceneRect;
   };
 
   const Diagram *diagram() const;
@@ -245,7 +260,9 @@ private:
                const QSet<QString> &excludedPresentationIds) const;
   const ConnectorPresentation *hitConnector(const QPointF &scenePoint) const;
   TextHit hitText(const QPointF &scenePoint) const;
-  QRectF textLineRect(const QRectF &nodeRect, int line) const;
+  AnnotationHit hitConnectorAnnotation(const QPointF &scenePoint) const;
+  QRectF textLineRect(const QRectF &nodeRect, int line,
+                      qreal headerHeight) const;
   ConnectorEndpoints
   connectorEndpoints(const ConnectorPresentation &connector) const;
   ui::ConnectorRoute
@@ -262,6 +279,9 @@ private:
   void cancelEndpointDrag();
   void updateBendPointPreview(const QPointF &scenePoint);
   void commitBendPointPreview();
+  void updateAnnotationPreview(const QPointF &scenePoint);
+  void commitAnnotationPreview();
+  void cancelAnnotationPreview();
   bool startConnectorGesture(const QString &relationshipType);
   void updateRelationshipToolboxCandidate(const QPointF &viewPoint);
   void clearRelationshipToolboxCandidate();
@@ -321,7 +341,14 @@ private:
   QList<ConnectorBendPoint> m_bendPointPreview;
   int m_selectedBendPoint = -1;
   int m_contextSegment = -1;
+  QString m_contextAnnotationKey;
   bool m_bendPointPreviewActive = false;
+  QString m_annotationDragConnector;
+  QString m_annotationDragKey;
+  QPointF m_annotationDragOffset;
+  ConnectorAnnotationPlacement m_annotationPreview;
+  bool m_annotationPreviewActive = false;
+  bool m_annotationDragMoved = false;
   bool m_leftButtonPressed = false;
   QString m_connectorGestureSourceNode;
   QString m_connectorGestureType;

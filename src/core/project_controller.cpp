@@ -8,6 +8,7 @@
 #include "core/project_serializer.h"
 #include "core/project_style.h"
 #include "core/project_tree_model.h"
+#include "core/stereotype_catalog.h"
 
 #include <QColor>
 #include <QDir>
@@ -40,6 +41,14 @@ QVariantMap diagramStyleMap(const DiagramStyle &style) {
           {QStringLiteral("primaryText"), style.primaryText},
           {QStringLiteral("secondaryText"), style.secondaryText},
           {QStringLiteral("divider"), style.divider}};
+}
+
+QVariantMap stereotypeDefinitionMap(const StereotypeDefinition &definition,
+                                    bool common) {
+  return {{QStringLiteral("id"), definition.id},
+          {QStringLiteral("name"), definition.name},
+          {QStringLiteral("applicableTo"), definition.applicableTo},
+          {QStringLiteral("common"), common}};
 }
 
 QString normalizedStyleColor(const QVariant &value) {
@@ -819,6 +828,18 @@ QString ProjectController::selectedTargetMultiplicity() const {
   return relationship ? relationship->targetEnd.multiplicity : QString();
 }
 
+QString ProjectController::selectedStereotypes() const {
+  if (m_selectedKind == QStringLiteral("element")) {
+    if (const auto *element = findElement(m_data, m_selectedId))
+      return stereotype_catalog::displayText(m_data, element->stereotypeIds);
+  } else if (m_selectedKind == QStringLiteral("relationship")) {
+    if (const auto *relationship = findRelationship(m_data, m_selectedId))
+      return stereotype_catalog::displayText(m_data,
+                                             relationship->stereotypeIds);
+  }
+  return {};
+}
+
 bool ProjectController::canUndo() const { return m_undoStack.canUndo(); }
 bool ProjectController::canRedo() const { return m_undoStack.canRedo(); }
 QString ProjectController::undoText() const { return m_undoStack.undoText(); }
@@ -830,6 +851,17 @@ QVariantList ProjectController::diagramStyles() const {
   for (const auto &style : m_data.diagramStyles)
     styles.append(diagramStyleMap(style));
   return styles;
+}
+
+QVariantList ProjectController::stereotypeCatalog() const {
+  QVariantList catalog;
+  catalog.reserve(stereotype_catalog::commonDefinitions().size() +
+                  m_data.stereotypeDefinitions.size());
+  for (const auto &definition : stereotype_catalog::commonDefinitions())
+    catalog.append(stereotypeDefinitionMap(definition, true));
+  for (const auto &definition : m_data.stereotypeDefinitions)
+    catalog.append(stereotypeDefinitionMap(definition, false));
+  return catalog;
 }
 
 void ProjectController::newProject(const QString &name) {
@@ -1074,6 +1106,213 @@ void ProjectController::assignStyleToPresentations(
       this, std::move(changes), description));
 }
 
+QVariantMap
+ProjectController::stereotypeDefinition(const QString &stereotypeId) const {
+  const auto *definition = stereotype_catalog::find(m_data, stereotypeId);
+  return definition
+             ? stereotypeDefinitionMap(
+                   *definition, stereotype_catalog::isCommon(stereotypeId))
+             : QVariantMap{};
+}
+
+QString
+ProjectController::saveProjectStereotype(const QString &stereotypeId,
+                                         const QString &name,
+                                         const QStringList &applicableTo) {
+  const QString trimmedName = name.trimmed();
+  if (trimmedName.isEmpty()) {
+    m_diagnostics.addError(QStringLiteral("stereotype"),
+                           QStringLiteral("A stereotype needs a name"));
+    return {};
+  }
+  if (!stereotypeId.isEmpty() && stereotype_catalog::isCommon(stereotypeId)) {
+    m_diagnostics.addError(
+        QStringLiteral("stereotype"),
+        QStringLiteral("Common UML stereotypes are read-only"));
+    return {};
+  }
+
+  for (const auto &definition : stereotype_catalog::commonDefinitions()) {
+    if (definition.name.compare(trimmedName, Qt::CaseInsensitive) == 0) {
+      m_diagnostics.addError(
+          QStringLiteral("stereotype"),
+          QStringLiteral("A common UML stereotype named \"%1\" already exists")
+              .arg(trimmedName));
+      return {};
+    }
+  }
+  const auto duplicate = std::find_if(
+      m_data.stereotypeDefinitions.cbegin(),
+      m_data.stereotypeDefinitions.cend(),
+      [&](const StereotypeDefinition &candidate) {
+        return candidate.id != stereotypeId &&
+               candidate.name.compare(trimmedName, Qt::CaseInsensitive) == 0;
+      });
+  if (duplicate != m_data.stereotypeDefinitions.cend()) {
+    m_diagnostics.addError(
+        QStringLiteral("stereotype"),
+        QStringLiteral("A project stereotype named \"%1\" already exists")
+            .arg(trimmedName));
+    return {};
+  }
+
+  const QSet<QString> supported = {
+      QStringLiteral("package"), QStringLiteral("class"),
+      QStringLiteral("struct"), QStringLiteral("enumeration"),
+      stereotype_catalog::kRelationshipApplicability};
+  QStringList normalizedApplicability;
+  for (const QString &value : applicableTo) {
+    const QString normalized = value.trimmed();
+    if (supported.contains(normalized) &&
+        !normalizedApplicability.contains(normalized))
+      normalizedApplicability.append(normalized);
+  }
+  if (normalizedApplicability.isEmpty()) {
+    m_diagnostics.addError(
+        QStringLiteral("stereotype"),
+        QStringLiteral("Choose at least one applicable subject type"));
+    return {};
+  }
+
+  StereotypeDefinition definition;
+  if (stereotypeId.isEmpty()) {
+    definition.id = newId();
+  } else {
+    const auto *existing = findStereotypeDefinition(m_data, stereotypeId);
+    if (!existing)
+      return {};
+    definition = *existing;
+    for (const auto &element : m_data.elements) {
+      if (element.stereotypeIds.contains(stereotypeId) &&
+          !normalizedApplicability.contains(
+              stereotype_catalog::applicabilityFor(element.type))) {
+        m_diagnostics.addError(
+            QStringLiteral("stereotype"),
+            QStringLiteral(
+                "The edited applicability would invalidate an existing "
+                "assignment to \"%1\"")
+                .arg(element.name),
+            element.id);
+        return {};
+      }
+    }
+    for (const auto &relationship : m_data.relationships) {
+      if (relationship.stereotypeIds.contains(stereotypeId) &&
+          !normalizedApplicability.contains(
+              stereotype_catalog::kRelationshipApplicability)) {
+        m_diagnostics.addError(
+            QStringLiteral("stereotype"),
+            QStringLiteral(
+                "The edited applicability would invalidate an existing "
+                "relationship assignment"),
+            relationship.id);
+        return {};
+      }
+    }
+  }
+  definition.name = trimmedName;
+  definition.applicableTo = normalizedApplicability;
+  pushCommand(std::make_unique<SaveStereotypeDefinitionCommand>(this, m_data,
+                                                                definition));
+  return definition.id;
+}
+
+bool ProjectController::deleteProjectStereotype(const QString &stereotypeId) {
+  if (!findStereotypeDefinition(m_data, stereotypeId))
+    return false;
+  pushCommand(std::make_unique<DeleteStereotypeDefinitionCommand>(
+      this, m_data, stereotypeId));
+  return true;
+}
+
+int ProjectController::stereotypeAssignmentCount(
+    const QString &stereotypeId) const {
+  int count = 0;
+  for (const auto &element : m_data.elements)
+    count += element.stereotypeIds.contains(stereotypeId);
+  for (const auto &relationship : m_data.relationships)
+    count += relationship.stereotypeIds.contains(stereotypeId);
+  return count;
+}
+
+QVariantList
+ProjectController::applicableStereotypes(const QString &kind,
+                                         const QString &subjectId) const {
+  QString applicability;
+  if (kind == QStringLiteral("element")) {
+    const auto *element = findElement(m_data, subjectId);
+    if (!element)
+      return {};
+    applicability = stereotype_catalog::applicabilityFor(element->type);
+  } else if (kind == QStringLiteral("relationship")) {
+    if (!findRelationship(m_data, subjectId))
+      return {};
+    applicability = stereotype_catalog::kRelationshipApplicability;
+  } else {
+    return {};
+  }
+  QVariantList result;
+  for (const QVariant &entry : stereotypeCatalog()) {
+    const QVariantMap definition = entry.toMap();
+    if (definition.value(QStringLiteral("applicableTo"))
+            .toStringList()
+            .contains(applicability))
+      result.append(definition);
+  }
+  return result;
+}
+
+QStringList
+ProjectController::stereotypeIdsForObject(const QString &kind,
+                                          const QString &subjectId) const {
+  if (kind == QStringLiteral("element")) {
+    if (const auto *element = findElement(m_data, subjectId))
+      return element->stereotypeIds;
+  } else if (kind == QStringLiteral("relationship")) {
+    if (const auto *relationship = findRelationship(m_data, subjectId))
+      return relationship->stereotypeIds;
+  }
+  return {};
+}
+
+void ProjectController::assignStereotypes(const QString &kind,
+                                          const QString &subjectId,
+                                          const QStringList &stereotypeIds) {
+  QString applicability;
+  const QStringList before = stereotypeIdsForObject(kind, subjectId);
+  if (kind == QStringLiteral("element")) {
+    const auto *element = findElement(m_data, subjectId);
+    if (!element)
+      return;
+    applicability = stereotype_catalog::applicabilityFor(element->type);
+  } else if (kind == QStringLiteral("relationship")) {
+    if (!findRelationship(m_data, subjectId))
+      return;
+    applicability = stereotype_catalog::kRelationshipApplicability;
+  } else {
+    return;
+  }
+
+  QStringList normalized;
+  for (const QString &id : stereotypeIds) {
+    const auto *definition = stereotype_catalog::find(m_data, id);
+    if (!definition ||
+        !stereotype_catalog::appliesTo(*definition, applicability)) {
+      m_diagnostics.addError(
+          QStringLiteral("stereotype"),
+          QStringLiteral("A selected stereotype does not apply to this item"),
+          subjectId);
+      return;
+    }
+    if (!normalized.contains(id))
+      normalized.append(id);
+  }
+  if (before == normalized)
+    return;
+  pushCommand(std::make_unique<SetStereotypeAssignmentsCommand>(
+      this, kind, subjectId, before, normalized));
+}
+
 int ProjectController::applyCppImportPlan(const CppImportPreview &preview) {
   QList<ModelElement> desiredElements;
   desiredElements.reserve(preview.elementApplicableCount());
@@ -1171,7 +1410,8 @@ QString ProjectController::addElementAtImpl(const QString &type,
       NodePresentation node;
       node.id = newId();
       node.elementId = element.id;
-      const QSizeF contentSize = presentation_layout::nodeContentSize(element);
+      const QSizeF contentSize =
+          presentation_layout::nodeContentSize(m_data, element);
       if (std::isfinite(x) && std::isfinite(y)) {
         node.geometry = QRectF(QPointF(x, y), contentSize);
         if (coordinatesAreCenter)
@@ -1660,7 +1900,7 @@ int ProjectController::addElementsToDiagram(const QString &diagramId,
   qreal placementHeight = 0.0;
   for (const QString &elementId : acceptedIds) {
     const QSizeF size = presentation_layout::nodePlacementSize(
-        *findElement(m_data, elementId), sizingMode);
+        m_data, *findElement(m_data, elementId), sizingMode);
     contentSizeByElement.insert(elementId, size);
     placementWidth = std::max(placementWidth, size.width() + 24.0);
     placementHeight = std::max(placementHeight, size.height() + 24.0);
@@ -1855,7 +2095,7 @@ int ProjectController::addTreeItemsToDiagram(const QString &diagramId,
     if (!element)
       continue;
     const QSizeF size =
-        presentation_layout::nodePlacementSize(*element, sizingMode);
+        presentation_layout::nodePlacementSize(m_data, *element, sizingMode);
     contentSizeByElement.insert(elementId, size);
     placementWidth = std::max(placementWidth, size.width() + 24.0);
     placementHeight = std::max(placementHeight, size.height() + 24.0);
@@ -2770,6 +3010,63 @@ void ProjectController::clearConnectorBendPoints(const QString &diagramId,
     return;
   updateConnectorBendPoints(diagramId, connectorId, {},
                             QStringLiteral("Clear connector bend points"));
+}
+
+void ProjectController::setConnectorAnnotationPlacement(
+    const QString &diagramId, const QString &connectorId,
+    const QString &annotationKey, qreal routePosition, qreal tangentOffset,
+    qreal normalOffset) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *connector =
+      diagram ? findConnector(*diagram, connectorId) : nullptr;
+  if (!connector || annotationKey.trimmed().isEmpty() ||
+      !std::isfinite(routePosition) || routePosition < 0.0 ||
+      routePosition > 1.0 || !std::isfinite(tangentOffset) ||
+      !std::isfinite(normalOffset))
+    return;
+  ConnectorAnnotationPlacement placement;
+  const auto existing =
+      connector->annotationPlacements.constFind(annotationKey);
+  if (existing != connector->annotationPlacements.cend())
+    placement = *existing;
+  placement.routePosition = routePosition;
+  placement.tangentOffset = tangentOffset;
+  placement.normalOffset = normalOffset;
+  auto after = connector->annotationPlacements;
+  after.insert(annotationKey, placement);
+  if (after == connector->annotationPlacements)
+    return;
+  pushCommand(std::make_unique<UpdateConnectorAnnotationPlacementsCommand>(
+      this, diagramId, connectorId, connector->annotationPlacements,
+      std::move(after), QStringLiteral("Move connector annotation")));
+}
+
+void ProjectController::resetConnectorAnnotationPlacement(
+    const QString &diagramId, const QString &connectorId,
+    const QString &annotationKey) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *connector =
+      diagram ? findConnector(*diagram, connectorId) : nullptr;
+  if (!connector || !connector->annotationPlacements.contains(annotationKey))
+    return;
+  auto after = connector->annotationPlacements;
+  after.remove(annotationKey);
+  pushCommand(std::make_unique<UpdateConnectorAnnotationPlacementsCommand>(
+      this, diagramId, connectorId, connector->annotationPlacements,
+      std::move(after), QStringLiteral("Reset connector annotation position")));
+}
+
+void ProjectController::resetConnectorAnnotationPlacements(
+    const QString &diagramId, const QString &connectorId) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *connector =
+      diagram ? findConnector(*diagram, connectorId) : nullptr;
+  if (!connector || connector->annotationPlacements.isEmpty())
+    return;
+  pushCommand(std::make_unique<UpdateConnectorAnnotationPlacementsCommand>(
+      this, diagramId, connectorId, connector->annotationPlacements,
+      QHash<QString, ConnectorAnnotationPlacement>{},
+      QStringLiteral("Reset connector annotation positions")));
 }
 
 void ProjectController::updateConnectorBendPoints(

@@ -117,6 +117,10 @@ Item {
             editor.selectAll()
         }
 
+        onStereotypeEditRequested: function(objectId, objectKind) {
+            diagramStereotypeDialog.openFor(objectKind, objectId)
+        }
+
     }
 
     Connections {
@@ -207,6 +211,10 @@ Item {
         onStyleChosen: function(styleId) {
             canvas.assignStyleToSelection(styleId)
         }
+    }
+
+    ProjectStereotypeDialog {
+        id: diagramStereotypeDialog
     }
 
     Label {
@@ -356,6 +364,12 @@ Item {
             onManageRequested: presentationStyleDialog.openFor(
                                    canvas.selectedStyleId)
         }
+        MenuItem {
+            text: qsTr("Stereotypes…")
+            enabled: canvas.selectedNodeCount === 1
+            onTriggered: diagramStereotypeDialog.openFor(
+                             "element", projectController.selectedId)
+        }
         MenuSeparator {}
         CatalogMenuItem {
             catalogId: "presentation.removeElement"
@@ -387,6 +401,16 @@ Item {
             onTriggered: canvas.clearSelectedConnectorBendPoints()
         }
         MenuSeparator {}
+        MenuItem {
+            text: qsTr("Reset this annotation position")
+            enabled: canvas.contextAnnotationHasManualPosition
+            onTriggered: canvas.resetContextAnnotationPosition()
+        }
+        MenuItem {
+            text: qsTr("Reset all annotation positions")
+            onTriggered: canvas.resetSelectedConnectorAnnotationPositions()
+        }
+        MenuSeparator {}
         Menu {
             title: qsTr("Routing")
             CatalogMenuItem {
@@ -403,6 +427,11 @@ Item {
                 checked: canvas.selectedConnectorRouting === "orthogonal"
                 onTriggered: canvas.setSelectedConnectorRouting("orthogonal")
             }
+        }
+        MenuItem {
+            text: qsTr("Stereotypes…")
+            onTriggered: diagramStereotypeDialog.openFor(
+                             "relationship", projectController.selectedId)
         }
         MenuSeparator {}
         CatalogMenuItem {

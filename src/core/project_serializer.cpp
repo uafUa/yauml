@@ -4,6 +4,7 @@
 #include "core/json5.h"
 #include "core/project_schema.h"
 #include "core/project_schema_version.h"
+#include "core/stereotype_catalog.h"
 
 #include <QColor>
 #include <QDir>
@@ -209,6 +210,15 @@ QJsonObject diagramStyleToJson(const DiagramStyle &style) {
   return object;
 }
 
+QJsonObject stereotypeDefinitionToJson(const StereotypeDefinition &definition) {
+  QJsonObject object = definition.extra;
+  object.insert(QStringLiteral("id"), definition.id);
+  object.insert(QStringLiteral("name"), definition.name);
+  object.insert(QStringLiteral("applicableTo"),
+                stringArray(definition.applicableTo));
+  return object;
+}
+
 QJsonObject elementToJson(const ModelElement &element) {
   QJsonObject object = element.extra;
   object.insert(QStringLiteral("id"), element.id);
@@ -235,6 +245,11 @@ QJsonObject elementToJson(const ModelElement &element) {
     object.insert(QStringLiteral("styleId"), element.styleId);
   else
     object.remove(QStringLiteral("styleId"));
+  if (!element.stereotypeIds.isEmpty())
+    object.insert(QStringLiteral("stereotypeIds"),
+                  stringArray(element.stereotypeIds));
+  else
+    object.remove(QStringLiteral("stereotypeIds"));
   return object;
 }
 
@@ -312,6 +327,11 @@ QJsonObject relationshipToJson(const Relationship &relationship) {
     object.insert(QStringLiteral("targetEnd"), targetEnd);
   else
     object.remove(QStringLiteral("targetEnd"));
+  if (!relationship.stereotypeIds.isEmpty())
+    object.insert(QStringLiteral("stereotypeIds"),
+                  stringArray(relationship.stereotypeIds));
+  else
+    object.remove(QStringLiteral("stereotypeIds"));
   return object;
 }
 
@@ -362,7 +382,70 @@ QJsonObject containerToJson(const ContainerPresentation &container) {
   return object;
 }
 
-QJsonObject connectorToJson(const ConnectorPresentation &connector) {
+QJsonObject
+annotationPlacementToJson(const ConnectorAnnotationPlacement &placement) {
+  QJsonObject object = placement.extra;
+  object.insert(QStringLiteral("routePosition"), placement.routePosition);
+  if (!qFuzzyIsNull(placement.tangentOffset))
+    object.insert(QStringLiteral("tangentOffset"), placement.tangentOffset);
+  else
+    object.remove(QStringLiteral("tangentOffset"));
+  if (!qFuzzyIsNull(placement.normalOffset))
+    object.insert(QStringLiteral("normalOffset"), placement.normalOffset);
+  else
+    object.remove(QStringLiteral("normalOffset"));
+  return object;
+}
+
+ConnectorAnnotationPlacement
+readAnnotationPlacement(const QJsonValue &value, const QString &connectorId,
+                        const QString &annotationKey,
+                        QList<Diagnostic> &diagnostics) {
+  ConnectorAnnotationPlacement placement;
+  const qreal invalidCoordinate = std::numeric_limits<qreal>::quiet_NaN();
+  if (!value.isObject()) {
+    diagnostics.append(error(
+        QStringLiteral("validation"),
+        QStringLiteral("Connector annotation placement %1 must be an object")
+            .arg(annotationKey),
+        connectorId));
+    placement.routePosition = invalidCoordinate;
+    return placement;
+  }
+  const QJsonObject object = value.toObject();
+  placement.routePosition =
+      object.value(QStringLiteral("routePosition")).toDouble(invalidCoordinate);
+  placement.tangentOffset =
+      object.value(QStringLiteral("tangentOffset")).toDouble(0.0);
+  placement.normalOffset =
+      object.value(QStringLiteral("normalOffset")).toDouble(0.0);
+  placement.extra = withoutKeys(object, {QStringLiteral("routePosition"),
+                                         QStringLiteral("tangentOffset"),
+                                         QStringLiteral("normalOffset")});
+  return placement;
+}
+
+bool relationshipAnnotationHasText(const Relationship &relationship,
+                                   const QString &key) {
+  if (key == QStringLiteral("name"))
+    return !relationship.name.isEmpty();
+  if (key == QStringLiteral("stereotype"))
+    return !relationship.stereotypeIds.isEmpty();
+  if (key == QStringLiteral("sourceRole"))
+    return !relationship.sourceEnd.role.isEmpty();
+  if (key == QStringLiteral("sourceMultiplicity"))
+    return !relationship.sourceEnd.multiplicity.isEmpty();
+  if (key == QStringLiteral("targetRole"))
+    return !relationship.targetEnd.role.isEmpty();
+  if (key == QStringLiteral("targetMultiplicity"))
+    return !relationship.targetEnd.multiplicity.isEmpty();
+  // Preserve extensions produced by newer versions even though this version
+  // cannot determine whether their semantic annotation is visible.
+  return true;
+}
+
+QJsonObject connectorToJson(const ConnectorPresentation &connector,
+                            const Relationship *relationship) {
   QJsonObject object = connector.extra;
   object.insert(QStringLiteral("id"), connector.id);
   object.insert(QStringLiteral("relationshipId"), connector.relationshipId);
@@ -390,6 +473,19 @@ QJsonObject connectorToJson(const ConnectorPresentation &connector) {
   } else {
     object.remove(QStringLiteral("bendPoints"));
   }
+  QJsonObject annotationPlacements;
+  QStringList annotationKeys = connector.annotationPlacements.keys();
+  std::sort(annotationKeys.begin(), annotationKeys.end());
+  for (const QString &key : annotationKeys) {
+    if (!relationship || relationshipAnnotationHasText(*relationship, key))
+      annotationPlacements.insert(
+          key,
+          annotationPlacementToJson(connector.annotationPlacements.value(key)));
+  }
+  if (!annotationPlacements.isEmpty())
+    object.insert(QStringLiteral("annotationPlacements"), annotationPlacements);
+  else
+    object.remove(QStringLiteral("annotationPlacements"));
   return object;
 }
 
@@ -418,6 +514,9 @@ QByteArray modelBytes(const ProjectData &project) {
   QJsonArray styles;
   for (const auto &style : project.diagramStyles)
     styles.append(diagramStyleToJson(style));
+  QJsonArray stereotypes;
+  for (const auto &definition : project.stereotypeDefinitions)
+    stereotypes.append(stereotypeDefinitionToJson(definition));
   QJsonArray elements;
   for (const auto &element : project.elements)
     elements.append(elementToJson(element));
@@ -431,6 +530,10 @@ QByteArray modelBytes(const ProjectData &project) {
     object.insert(QStringLiteral("styles"), styles);
   else
     object.remove(QStringLiteral("styles"));
+  if (!stereotypes.isEmpty())
+    object.insert(QStringLiteral("stereotypes"), stereotypes);
+  else
+    object.remove(QStringLiteral("stereotypes"));
   if (!project.namespaceStyleIds.isEmpty()) {
     QJsonObject namespaceStyles;
     QStringList paths = project.namespaceStyleIds.keys();
@@ -470,7 +573,8 @@ QByteArray diagramsBytes(const ProjectData &project) {
       nodes.append(nodeToJson(node));
     QJsonArray connectors;
     for (const auto &connector : diagram.connectors)
-      connectors.append(connectorToJson(connector));
+      connectors.append(connectorToJson(
+          connector, findRelationship(project, connector.relationshipId)));
     if (!containers.isEmpty())
       object.insert(QStringLiteral("containers"), containers);
     else
@@ -652,9 +756,10 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
 
   const QJsonObject &model = migration.documents.model;
   project.modelExtra = withoutKeys(
-      model, {QStringLiteral("styles"), QStringLiteral("namespaceStyles"),
-              QStringLiteral("elements"), QStringLiteral("browserFolders"),
-              QStringLiteral("browserOrder"), QStringLiteral("relationships")});
+      model, {QStringLiteral("styles"), QStringLiteral("stereotypes"),
+              QStringLiteral("namespaceStyles"), QStringLiteral("elements"),
+              QStringLiteral("browserFolders"), QStringLiteral("browserOrder"),
+              QStringLiteral("relationships")});
   for (const auto &value : model.value(QStringLiteral("styles")).toArray()) {
     const QJsonObject object = value.toObject();
     DiagramStyle style;
@@ -673,6 +778,36 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
                  QStringLiteral("border"), QStringLiteral("primaryText"),
                  QStringLiteral("secondaryText"), QStringLiteral("divider")});
     project.diagramStyles.append(std::move(style));
+  }
+  const QJsonValue stereotypesValue =
+      model.value(QStringLiteral("stereotypes"));
+  if (!stereotypesValue.isUndefined() && !stereotypesValue.isArray())
+    outcome.diagnostics.append(
+        error(QStringLiteral("validation"),
+              QStringLiteral("Project stereotypes must be an array")));
+  for (const auto &value : stereotypesValue.toArray()) {
+    if (!value.isObject()) {
+      outcome.diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral("A project stereotype must be an object")));
+      continue;
+    }
+    const QJsonObject object = value.toObject();
+    StereotypeDefinition definition;
+    definition.id = object.value(QStringLiteral("id")).toString();
+    definition.name = object.value(QStringLiteral("name")).toString();
+    const QJsonValue applicableTo =
+        object.value(QStringLiteral("applicableTo"));
+    if (!applicableTo.isArray())
+      outcome.diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral("Stereotype applicableTo must be an array"),
+                definition.id));
+    definition.applicableTo = readStringArray(applicableTo);
+    definition.extra =
+        withoutKeys(object, {QStringLiteral("id"), QStringLiteral("name"),
+                             QStringLiteral("applicableTo")});
+    project.stereotypeDefinitions.append(std::move(definition));
   }
   const QJsonObject namespaceStyles =
       model.value(QStringLiteral("namespaceStyles")).toObject();
@@ -703,13 +838,21 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
     element.browserParent =
         readBrowserParent(object.value(QStringLiteral("browserParent")));
     element.styleId = object.value(QStringLiteral("styleId")).toString();
+    const QJsonValue elementStereotypes =
+        object.value(QStringLiteral("stereotypeIds"));
+    if (!elementStereotypes.isUndefined() && !elementStereotypes.isArray())
+      outcome.diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral("Element stereotypeIds must be an array"),
+                element.id));
+    element.stereotypeIds = readStringArray(elementStereotypes);
     element.extra = withoutKeys(
         object,
         {QStringLiteral("id"), QStringLiteral("type"), QStringLiteral("name"),
          QStringLiteral("packageId"), QStringLiteral("enclosingTypeId"),
          QStringLiteral("attributes"), QStringLiteral("operations"),
          QStringLiteral("enumLiterals"), QStringLiteral("browserParent"),
-         QStringLiteral("styleId")});
+         QStringLiteral("styleId"), QStringLiteral("stereotypeIds")});
     project.elements.append(element);
   }
 
@@ -750,11 +893,20 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
     relationship.targetEnd = relationshipEndFromJson(
         object.value(QStringLiteral("targetEnd")), QStringLiteral("targetEnd"),
         relationship.id, outcome.diagnostics);
+    const QJsonValue relationshipStereotypes =
+        object.value(QStringLiteral("stereotypeIds"));
+    if (!relationshipStereotypes.isUndefined() &&
+        !relationshipStereotypes.isArray())
+      outcome.diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral("Relationship stereotypeIds must be an array"),
+                relationship.id));
+    relationship.stereotypeIds = readStringArray(relationshipStereotypes);
     relationship.extra = withoutKeys(
-        object,
-        {QStringLiteral("id"), QStringLiteral("type"), QStringLiteral("name"),
-         QStringLiteral("sourceId"), QStringLiteral("targetId"),
-         QStringLiteral("sourceEnd"), QStringLiteral("targetEnd")});
+        object, {QStringLiteral("id"), QStringLiteral("type"),
+                 QStringLiteral("name"), QStringLiteral("sourceId"),
+                 QStringLiteral("targetId"), QStringLiteral("sourceEnd"),
+                 QStringLiteral("targetEnd"), QStringLiteral("stereotypeIds")});
     project.relationships.append(relationship);
   }
 
@@ -869,11 +1021,30 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
           connector.bendPoints.append(
               readBendPoint(bendPointValue, connector.id, outcome.diagnostics));
       }
+      const QJsonValue annotationPlacementsValue =
+          connectorObject.value(QStringLiteral("annotationPlacements"));
+      if (!annotationPlacementsValue.isUndefined() &&
+          !annotationPlacementsValue.isObject()) {
+        outcome.diagnostics.append(error(
+            QStringLiteral("validation"),
+            QStringLiteral("Connector annotationPlacements must be an object"),
+            connector.id));
+      } else {
+        const QJsonObject placements = annotationPlacementsValue.toObject();
+        for (auto placement = placements.begin(); placement != placements.end();
+             ++placement) {
+          connector.annotationPlacements.insert(
+              placement.key(),
+              readAnnotationPlacement(placement.value(), connector.id,
+                                      placement.key(), outcome.diagnostics));
+        }
+      }
       connector.extra = withoutKeys(
           connectorObject,
           {QStringLiteral("id"), QStringLiteral("relationshipId"),
            QStringLiteral("routing"), QStringLiteral("sourceAnchor"),
-           QStringLiteral("targetAnchor"), QStringLiteral("bendPoints")});
+           QStringLiteral("targetAnchor"), QStringLiteral("bendPoints"),
+           QStringLiteral("annotationPlacements")});
       diagram.connectors.append(connector);
     }
     diagram.extra = withoutKeys(
@@ -1038,6 +1209,84 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
                   QStringLiteral("Diagram style %1 color is invalid").arg(role),
                   style.id));
   }
+  const QSet<QString> validStereotypeApplicabilities = {
+      QStringLiteral("package"), QStringLiteral("class"),
+      QStringLiteral("struct"), QStringLiteral("enumeration"),
+      stereotype_catalog::kRelationshipApplicability};
+  QSet<QString> stereotypeNames;
+  for (const auto &definition : stereotype_catalog::commonDefinitions())
+    stereotypeNames.insert(definition.name.trimmed().toCaseFolded());
+  for (const auto &definition : project.stereotypeDefinitions) {
+    checkId(definition.id, QStringLiteral("project stereotype"));
+    const QString normalizedName = definition.name.trimmed().toCaseFolded();
+    if (normalizedName.isEmpty()) {
+      diagnostics.append(error(QStringLiteral("validation"),
+                               QStringLiteral("A stereotype has no name"),
+                               definition.id));
+    } else if (stereotypeNames.contains(normalizedName)) {
+      diagnostics.append(error(
+          QStringLiteral("validation"),
+          QStringLiteral("Stereotype names must be unique"), definition.id));
+    } else {
+      stereotypeNames.insert(normalizedName);
+    }
+    if (stereotype_catalog::isCommon(definition.id))
+      diagnostics.append(error(
+          QStringLiteral("validation"),
+          QStringLiteral("A project stereotype cannot use a common UML ID"),
+          definition.id));
+    if (definition.applicableTo.isEmpty())
+      diagnostics.append(error(
+          QStringLiteral("validation"),
+          QStringLiteral("A stereotype must apply to at least one subject"),
+          definition.id));
+    QSet<QString> seenApplicabilities;
+    for (const QString &applicability : definition.applicableTo) {
+      if (!validStereotypeApplicabilities.contains(applicability))
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("Unknown stereotype applicability %1")
+                      .arg(applicability),
+                  definition.id));
+      if (seenApplicabilities.contains(applicability))
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("A stereotype repeats an applicability"),
+                  definition.id));
+      seenApplicabilities.insert(applicability);
+    }
+  }
+  const auto validateStereotypeReferences =
+      [&](const QStringList &stereotypeIds, const QString &applicability,
+          const QString &subjectId) {
+        QSet<QString> seen;
+        for (const QString &stereotypeId : stereotypeIds) {
+          if (seen.contains(stereotypeId)) {
+            diagnostics.append(
+                error(QStringLiteral("validation"),
+                      QStringLiteral("A stereotype is assigned more than once"),
+                      subjectId));
+            continue;
+          }
+          seen.insert(stereotypeId);
+          const auto *definition =
+              stereotype_catalog::find(project, stereotypeId);
+          if (!definition) {
+            diagnostics.append(
+                error(QStringLiteral("validation"),
+                      QStringLiteral("Stereotype reference %1 is invalid")
+                          .arg(stereotypeId),
+                      subjectId));
+          } else if (!stereotype_catalog::appliesTo(*definition,
+                                                    applicability)) {
+            diagnostics.append(
+                error(QStringLiteral("validation"),
+                      QStringLiteral("Stereotype %1 does not apply to %2")
+                          .arg(definition->name, applicability),
+                      subjectId));
+          }
+        }
+      };
   const auto validateStyleReference = [&](const QString &styleId,
                                           const QString &subjectId) {
     if (!styleId.isEmpty() && !styleIds.contains(styleId))
@@ -1062,6 +1311,9 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
                                    .arg(element.packageId),
                                element.id));
     validateStyleReference(element.styleId, element.id);
+    validateStereotypeReferences(
+        element.stereotypeIds,
+        stereotype_catalog::applicabilityFor(element.type), element.id);
     if (!element.enclosingTypeId.isEmpty()) {
       const auto *owner = findElement(project, element.enclosingTypeId);
       if (!owner || owner->id == element.id ||
@@ -1283,6 +1535,9 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
       diagnostics.append(error(QStringLiteral("validation"),
                                QStringLiteral("Relationship target is missing"),
                                relationship.id));
+    validateStereotypeReferences(relationship.stereotypeIds,
+                                 stereotype_catalog::kRelationshipApplicability,
+                                 relationship.id);
   }
 
   for (const auto &diagram : project.diagrams) {
@@ -1435,6 +1690,21 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
                     QStringLiteral("Connector bend point coordinates must be "
                                    "finite"),
                     connector.id));
+      }
+      for (auto placement = connector.annotationPlacements.cbegin();
+           placement != connector.annotationPlacements.cend(); ++placement) {
+        const auto &value = placement.value();
+        if (!std::isfinite(value.routePosition) || value.routePosition < 0.0 ||
+            value.routePosition > 1.0 || !std::isfinite(value.tangentOffset) ||
+            !std::isfinite(value.normalOffset)) {
+          diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral(
+                        "Connector annotation placement %1 must contain finite "
+                        "offsets and a route position between 0 and 1")
+                        .arg(placement.key()),
+                    connector.id));
+        }
       }
     }
   }

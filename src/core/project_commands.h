@@ -562,6 +562,26 @@ private:
   QList<ConnectorBendPoint> m_after;
 };
 
+class UpdateConnectorAnnotationPlacementsCommand final : public ProjectCommand {
+public:
+  UpdateConnectorAnnotationPlacementsCommand(
+      ProjectController *controller, QString diagramId, QString connectorId,
+      QHash<QString, ConnectorAnnotationPlacement> before,
+      QHash<QString, ConnectorAnnotationPlacement> after,
+      const QString &description);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project,
+             const QHash<QString, ConnectorAnnotationPlacement> &placements);
+
+  QString m_diagramId;
+  QString m_connectorId;
+  QHash<QString, ConnectorAnnotationPlacement> m_before;
+  QHash<QString, ConnectorAnnotationPlacement> m_after;
+};
+
 enum class ElementTextProperty { Name, Attribute, Operation, Literal };
 
 class EditElementTextCommand final : public ProjectCommand {
@@ -691,6 +711,60 @@ private:
   qsizetype m_index = -1;
   DiagramStyle m_style;
   QList<StyleAssignmentChange> m_assignments;
+};
+
+class SetStereotypeAssignmentsCommand final : public ProjectCommand {
+public:
+  SetStereotypeAssignmentsCommand(ProjectController *controller, QString kind,
+                                  QString subjectId, QStringList before,
+                                  QStringList after);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, const QStringList &stereotypeIds);
+
+  QString m_kind;
+  QString m_subjectId;
+  QStringList m_before;
+  QStringList m_after;
+};
+
+class SaveStereotypeDefinitionCommand final : public ProjectCommand {
+public:
+  SaveStereotypeDefinitionCommand(ProjectController *controller,
+                                  const ProjectData &project,
+                                  StereotypeDefinition after);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  qsizetype m_index = -1;
+  std::optional<StereotypeDefinition> m_before;
+  StereotypeDefinition m_after;
+};
+
+struct StereotypeAssignmentSnapshot {
+  QString kind;
+  QString subjectId;
+  QStringList stereotypeIds;
+};
+
+class DeleteStereotypeDefinitionCommand final : public ProjectCommand {
+public:
+  DeleteStereotypeDefinitionCommand(ProjectController *controller,
+                                    const ProjectData &project,
+                                    QString stereotypeId);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void restoreAssignments(ProjectData &project) const;
+
+  qsizetype m_index = -1;
+  StereotypeDefinition m_definition;
+  QList<StereotypeAssignmentSnapshot> m_assignments;
 };
 
 } // namespace uuml

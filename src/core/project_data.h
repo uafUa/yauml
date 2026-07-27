@@ -64,6 +64,18 @@ struct DiagramStyle {
   bool operator==(const DiagramStyle &) const = default;
 };
 
+// Common UML stereotypes are supplied by the application; this record stores
+// only project-specific catalog entries. Assignments use stable IDs so a
+// project stereotype can be renamed without rewriting every subject.
+struct StereotypeDefinition {
+  QString id;
+  QString name;
+  QStringList applicableTo;
+  QJsonObject extra;
+
+  bool operator==(const StereotypeDefinition &) const = default;
+};
+
 struct ModelElement {
   QString id;
   ElementType type = ElementType::Class;
@@ -77,6 +89,7 @@ struct ModelElement {
   QStringList enumLiterals;
   BrowserParent browserParent;
   QString styleId;
+  QStringList stereotypeIds;
   QJsonObject extra;
 
   bool operator==(const ModelElement &) const = default;
@@ -112,6 +125,7 @@ struct Relationship {
   QString targetId;
   RelationshipEnd sourceEnd;
   RelationshipEnd targetEnd;
+  QStringList stereotypeIds;
   QJsonObject extra;
 
   bool operator==(const Relationship &) const = default;
@@ -161,6 +175,18 @@ struct ConnectorBendPoint {
   bool operator==(const ConnectorBendPoint &) const = default;
 };
 
+// Manual connector annotations remain attached to a route as its geometry
+// changes. routePosition is normalized from source (0) to target (1); the two
+// offsets are measured in scene units along the local tangent and normal.
+struct ConnectorAnnotationPlacement {
+  qreal routePosition = 0.5;
+  qreal tangentOffset = 0.0;
+  qreal normalOffset = 0.0;
+  QJsonObject extra;
+
+  bool operator==(const ConnectorAnnotationPlacement &) const = default;
+};
+
 struct ConnectorPresentation {
   QString id;
   QString relationshipId;
@@ -168,6 +194,7 @@ struct ConnectorPresentation {
   ConnectorAnchor sourceAnchor;
   ConnectorAnchor targetAnchor;
   QList<ConnectorBendPoint> bendPoints;
+  QHash<QString, ConnectorAnnotationPlacement> annotationPlacements;
   QJsonObject extra;
 
   bool operator==(const ConnectorPresentation &) const = default;
@@ -200,6 +227,7 @@ struct ProjectData {
   QString name;
   CppImportConfiguration cppImport;
   QList<DiagramStyle> diagramStyles;
+  QList<StereotypeDefinition> stereotypeDefinitions;
   QList<ModelElement> elements;
   QList<BrowserFolder> browserFolders;
   // Legacy/synthetic namespace tree nodes do not have a stable ModelElement.
@@ -227,6 +255,10 @@ const ModelElement *findElement(const ProjectData &project, const QString &id);
 DiagramStyle *findDiagramStyle(ProjectData &project, const QString &id);
 const DiagramStyle *findDiagramStyle(const ProjectData &project,
                                      const QString &id);
+StereotypeDefinition *findStereotypeDefinition(ProjectData &project,
+                                               const QString &id);
+const StereotypeDefinition *findStereotypeDefinition(const ProjectData &project,
+                                                     const QString &id);
 BrowserFolder *findBrowserFolder(ProjectData &project, const QString &id);
 const BrowserFolder *findBrowserFolder(const ProjectData &project,
                                        const QString &id);

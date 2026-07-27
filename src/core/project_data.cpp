@@ -180,6 +180,16 @@ const DiagramStyle *findDiagramStyle(const ProjectData &project,
   return findById(project.diagramStyles, id);
 }
 
+StereotypeDefinition *findStereotypeDefinition(ProjectData &project,
+                                               const QString &id) {
+  return findById(project.stereotypeDefinitions, id);
+}
+
+const StereotypeDefinition *findStereotypeDefinition(const ProjectData &project,
+                                                     const QString &id) {
+  return findById(project.stereotypeDefinitions, id);
+}
+
 BrowserFolder *findBrowserFolder(ProjectData &project, const QString &id) {
   return findById(project.browserFolders, id);
 }

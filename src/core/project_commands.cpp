@@ -1175,6 +1175,33 @@ void UpdateConnectorBendPointsCommand::apply(
   }
 }
 
+UpdateConnectorAnnotationPlacementsCommand::
+    UpdateConnectorAnnotationPlacementsCommand(
+        ProjectController *controller, QString diagramId, QString connectorId,
+        QHash<QString, ConnectorAnnotationPlacement> before,
+        QHash<QString, ConnectorAnnotationPlacement> after,
+        const QString &description)
+    : ProjectCommand(controller, description),
+      m_diagramId(std::move(diagramId)), m_connectorId(std::move(connectorId)),
+      m_before(std::move(before)), m_after(std::move(after)) {}
+
+void UpdateConnectorAnnotationPlacementsCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void UpdateConnectorAnnotationPlacementsCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void UpdateConnectorAnnotationPlacementsCommand::apply(
+    ProjectData &project,
+    const QHash<QString, ConnectorAnnotationPlacement> &placements) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    if (auto *connector = findConnector(*diagram, m_connectorId))
+      connector->annotationPlacements = placements;
+  }
+}
+
 EditElementTextCommand::EditElementTextCommand(ProjectController *controller,
                                                QString elementId,
                                                ElementTextProperty property,
@@ -1407,6 +1434,123 @@ void DeleteDiagramStyleCommand::revert(ProjectData &project) {
   insertAtRecordedPosition(project.diagramStyles, m_index, m_style);
   for (const auto &assignment : m_assignments)
     applyStyleAssignment(project, assignment, assignment.before);
+}
+
+SetStereotypeAssignmentsCommand::SetStereotypeAssignmentsCommand(
+    ProjectController *controller, QString kind, QString subjectId,
+    QStringList before, QStringList after)
+    : ProjectCommand(controller, QStringLiteral("Assign stereotypes")),
+      m_kind(std::move(kind)), m_subjectId(std::move(subjectId)),
+      m_before(std::move(before)), m_after(std::move(after)) {}
+
+void SetStereotypeAssignmentsCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void SetStereotypeAssignmentsCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void SetStereotypeAssignmentsCommand::apply(ProjectData &project,
+                                            const QStringList &stereotypeIds) {
+  if (m_kind == QStringLiteral("element")) {
+    if (auto *element = findElement(project, m_subjectId))
+      element->stereotypeIds = stereotypeIds;
+  } else if (m_kind == QStringLiteral("relationship")) {
+    if (auto *relationship = findRelationship(project, m_subjectId))
+      relationship->stereotypeIds = stereotypeIds;
+  }
+}
+
+SaveStereotypeDefinitionCommand::SaveStereotypeDefinitionCommand(
+    ProjectController *controller, const ProjectData &project,
+    StereotypeDefinition after)
+    : ProjectCommand(controller,
+                     findStereotypeDefinition(project, after.id)
+                         ? QStringLiteral("Edit project stereotype")
+                         : QStringLiteral("Create project stereotype")),
+      m_index(indexOfId(project.stereotypeDefinitions, after.id)),
+      m_after(std::move(after)) {
+  if (m_index >= 0)
+    m_before = project.stereotypeDefinitions.at(m_index);
+  else
+    m_index = project.stereotypeDefinitions.size();
+}
+
+void SaveStereotypeDefinitionCommand::execute(ProjectData &project) {
+  if (m_before) {
+    if (auto *definition = findStereotypeDefinition(project, m_after.id))
+      *definition = m_after;
+  } else {
+    insertAtRecordedPosition(project.stereotypeDefinitions, m_index, m_after);
+  }
+}
+
+void SaveStereotypeDefinitionCommand::revert(ProjectData &project) {
+  if (m_before) {
+    if (auto *definition = findStereotypeDefinition(project, m_before->id))
+      *definition = *m_before;
+  } else {
+    removeRecordedValue(project.stereotypeDefinitions, m_index, m_after.id);
+  }
+}
+
+DeleteStereotypeDefinitionCommand::DeleteStereotypeDefinitionCommand(
+    ProjectController *controller, const ProjectData &project,
+    QString stereotypeId)
+    : ProjectCommand(controller, QStringLiteral("Delete project stereotype")),
+      m_index(indexOfId(project.stereotypeDefinitions, stereotypeId)) {
+  if (m_index < 0)
+    return;
+  m_definition = project.stereotypeDefinitions.at(m_index);
+  for (const auto &element : project.elements) {
+    if (element.stereotypeIds.contains(stereotypeId))
+      m_assignments.append(
+          {QStringLiteral("element"), element.id, element.stereotypeIds});
+  }
+  for (const auto &relationship : project.relationships) {
+    if (relationship.stereotypeIds.contains(stereotypeId))
+      m_assignments.append({QStringLiteral("relationship"), relationship.id,
+                            relationship.stereotypeIds});
+  }
+}
+
+void DeleteStereotypeDefinitionCommand::execute(ProjectData &project) {
+  if (m_index < 0)
+    return;
+  for (const auto &assignment : m_assignments) {
+    QStringList after = assignment.stereotypeIds;
+    after.removeAll(m_definition.id);
+    if (assignment.kind == QStringLiteral("element")) {
+      if (auto *element = findElement(project, assignment.subjectId))
+        element->stereotypeIds = after;
+    } else if (auto *relationship =
+                   findRelationship(project, assignment.subjectId)) {
+      relationship->stereotypeIds = after;
+    }
+  }
+  removeRecordedValue(project.stereotypeDefinitions, m_index, m_definition.id);
+}
+
+void DeleteStereotypeDefinitionCommand::revert(ProjectData &project) {
+  if (m_index < 0)
+    return;
+  insertAtRecordedPosition(project.stereotypeDefinitions, m_index,
+                           m_definition);
+  restoreAssignments(project);
+}
+
+void DeleteStereotypeDefinitionCommand::restoreAssignments(
+    ProjectData &project) const {
+  for (const auto &assignment : m_assignments) {
+    if (assignment.kind == QStringLiteral("element")) {
+      if (auto *element = findElement(project, assignment.subjectId))
+        element->stereotypeIds = assignment.stereotypeIds;
+    } else if (auto *relationship =
+                   findRelationship(project, assignment.subjectId)) {
+      relationship->stereotypeIds = assignment.stereotypeIds;
+    }
+  }
 }
 
 } // namespace uuml

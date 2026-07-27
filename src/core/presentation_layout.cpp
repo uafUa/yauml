@@ -1,5 +1,7 @@
 #include "core/presentation_layout.h"
 
+#include "core/stereotype_catalog.h"
+
 #include <QCoreApplication>
 #include <QFont>
 #include <QFontMetricsF>
@@ -125,8 +127,12 @@ QString fullyQualifiedElementName(const ProjectData &project,
 
 } // namespace
 
-QSizeF nodeContentSize(const ModelElement &element) {
+static QSizeF nodeContentSizeImpl(const ModelElement &element,
+                                  const QString &stereotypeText) {
   qreal widestLine = applicationTextWidth(element.name, true);
+  if (!stereotypeText.isEmpty())
+    widestLine =
+        std::max(widestLine, applicationTextWidth(stereotypeText, false));
   const QStringList lines = bodyLines(element);
   for (const QString &line : lines)
     widestLine = std::max(widestLine, applicationTextWidth(line, false));
@@ -135,9 +141,20 @@ QSizeF nodeContentSize(const ModelElement &element) {
       kMinimumNodeWidth, std::ceil(widestLine + 2.0 * kNodeTextPadding + 8.0));
   const qreal height =
       std::max(kMinimumNodeHeight,
-               std::ceil(kNodeHeaderHeight + lines.size() * kNodeLineHeight +
-                         kNodeBottomPadding));
+               std::ceil(kNodeHeaderHeight +
+                         (stereotypeText.isEmpty() ? 0.0 : kNodeLineHeight) +
+                         lines.size() * kNodeLineHeight + kNodeBottomPadding));
   return {width, height};
+}
+
+QSizeF nodeContentSize(const ModelElement &element) {
+  return nodeContentSizeImpl(element, {});
+}
+
+QSizeF nodeContentSize(const ProjectData &project,
+                       const ModelElement &element) {
+  return nodeContentSizeImpl(
+      element, stereotype_catalog::displayText(project, element.stereotypeIds));
 }
 
 QSizeF nodePlacementSize(const ModelElement &element,
@@ -146,6 +163,15 @@ QSizeF nodePlacementSize(const ModelElement &element,
                                       Qt::CaseInsensitive) == 0
              ? QSizeF(kFixedNodeWidth, kFixedNodeHeight)
              : nodeContentSize(element);
+}
+
+QSizeF nodePlacementSize(const ProjectData &project,
+                         const ModelElement &element,
+                         const QString &sizingMode) {
+  return sizingMode.trimmed().compare(QStringLiteral("fixed"),
+                                      Qt::CaseInsensitive) == 0
+             ? QSizeF(kFixedNodeWidth, kFixedNodeHeight)
+             : nodeContentSize(project, element);
 }
 
 QString fullyQualifiedElementName(const ProjectData &project,
@@ -185,9 +211,17 @@ QString containerDisplayName(const ProjectData &project,
 
 qreal containerTitleWidth(const ProjectData &project,
                           const ContainerPresentation &container) {
-  return std::ceil(
-      applicationTextWidth(containerDisplayName(project, container), true) +
-      2.0 * kNodeTextPadding + 8.0);
+  qreal widestText =
+      applicationTextWidth(containerDisplayName(project, container), true);
+  if (container.subjectKind == QStringLiteral("package")) {
+    if (const auto *package = findElement(project, container.subjectId)) {
+      widestText = std::max(
+          widestText, applicationTextWidth(stereotype_catalog::displayText(
+                                               project, package->stereotypeIds),
+                                           false));
+    }
+  }
+  return std::ceil(widestText + 2.0 * kNodeTextPadding + 8.0);
 }
 
 QRectF containerContentGeometry(const ProjectData &project,

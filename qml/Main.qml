@@ -236,6 +236,10 @@ ApplicationWindow {
                 text: qsTr("Project diagram &styles…")
                 onTriggered: browserStyleDialog.openManager()
             }
+            MenuItem {
+                text: qsTr("Project &stereotypes…")
+                onTriggered: projectStereotypeDialog.openManager()
+            }
             CatalogAction {
                 catalogId: "edit.preferences"
                 text: qsTr("&Preferences…")
@@ -771,6 +775,36 @@ ApplicationWindow {
                     }
                     Label {
                         Layout.leftMargin: 10
+                        text: qsTr("Stereotypes")
+                        visible: projectController.selectedKind === "element"
+                                 || projectController.selectedKind
+                                    === "relationship"
+                    }
+                    RowLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 10
+                        Layout.rightMargin: 10
+                        visible: projectController.selectedKind === "element"
+                                 || projectController.selectedKind
+                                    === "relationship"
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            color: projectController.selectedStereotypes.length > 0
+                                   ? uiTheme.bodyText : uiTheme.mutedText
+                            text: projectController.selectedStereotypes.length > 0
+                                  ? projectController.selectedStereotypes
+                                  : qsTr("None")
+                        }
+                        Button {
+                            text: qsTr("Choose…")
+                            onClicked: projectStereotypeDialog.openFor(
+                                           projectController.selectedKind,
+                                           projectController.selectedId)
+                        }
+                    }
+                    Label {
+                        Layout.leftMargin: 10
                         text: qsTr("Source end")
                         font.bold: true
                         visible: projectController.selectedKind === "relationship"
@@ -1024,6 +1058,13 @@ ApplicationWindow {
             onManageRequested: browserStyleDialog.openFor(
                                    treeContextMenu.targetStyleId)
         }
+        MenuItem {
+            visible: treeContextMenu.targetKind === "element"
+            height: visible ? implicitHeight : 0
+            text: qsTr("Stereotypes…")
+            onTriggered: projectStereotypeDialog.openFor(
+                             "element", treeContextMenu.targetId)
+        }
         CatalogMenuItem {
             catalogId: "browser.deleteSelection"
             visible: treeContextMenu.selectedItemCount > 0
@@ -1080,6 +1121,11 @@ ApplicationWindow {
                         treeContextMenu.targetId,
                         styleId)
         }
+    }
+
+    ProjectStereotypeDialog {
+        id: projectStereotypeDialog
+        objectName: "projectStereotypeDialog"
     }
 
     CatalogDialog {
