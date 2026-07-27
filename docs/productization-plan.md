@@ -381,7 +381,11 @@ toolboxes implemented, expansion planned
 - Incremental loading/indexing, schema migrations, merge diagnostics, and
   expanded recovery testing.
 - Performance benchmarks and rendered-image regression coverage.
-- Windows packaging automation followed by cross-platform packaging.
+- Windows CI and packaging automation is implemented. Every main-branch update
+  and pull request performs a clean MSVC Release build with Qt and libclang,
+  runs the test suite, and publishes a verified portable ZIP plus SHA-256
+  checksum. A matching `v*` tag promotes those same artifacts to a GitHub
+  Release. Cross-platform packaging remains future work.
 
 ## Phase 6: diagram export — lower priority
 

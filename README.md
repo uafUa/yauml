@@ -64,6 +64,19 @@ This Release configuration uses MSVC and the matching Qt 6.11.1 MSVC kit. The
 Visual Studio generator locates the MSVC toolchain without requiring a Developer
 PowerShell window.
 
+### GitHub builds and releases
+
+GitHub Actions performs the same clean MSVC Release build and complete test
+suite for pull requests and changes to `main`. Successful runs provide a
+portable Windows ZIP in the run's **Artifacts** section. Pushing a version tag
+such as `v0.1.0` publishes that tested ZIP and its SHA-256 checksum as a GitHub
+Release.
+
+The package includes the Qt/QML runtime and `libclang.dll`, and is smoke-tested
+after deployment. See
+[`docs/releasing.md`](docs/releasing.md) for downloading development artifacts,
+creating releases, version rules, and local packaging.
+
 ## Run
 
 Open a new unsaved project:

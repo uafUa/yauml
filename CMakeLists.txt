@@ -31,6 +31,8 @@ find_path(UUML_LIBCLANG_INCLUDE_DIR clang-c/Index.h
 find_library(UUML_LIBCLANG_LIBRARY NAMES libclang clang
     HINTS ${UUML_LLVM_HINTS}
     PATH_SUFFIXES lib)
+option(UUML_REQUIRE_LIBCLANG
+    "Fail configuration when the C++ import dependency is unavailable" OFF)
 
 add_library(uuml_theme STATIC
     src/ui/ui_theme.cpp
@@ -90,6 +92,9 @@ if(UUML_LIBCLANG_INCLUDE_DIR AND UUML_LIBCLANG_LIBRARY)
     target_include_directories(uuml_core PRIVATE ${UUML_LIBCLANG_INCLUDE_DIR})
     target_link_libraries(uuml_core PUBLIC ${UUML_LIBCLANG_LIBRARY})
     message(STATUS "C++ import enabled with ${UUML_LIBCLANG_LIBRARY}")
+elseif(UUML_REQUIRE_LIBCLANG)
+    message(FATAL_ERROR
+        "libclang was not found, but UUML_REQUIRE_LIBCLANG is enabled")
 else()
     target_compile_definitions(uuml_core PRIVATE UUML_HAS_LIBCLANG=0)
     message(WARNING
@@ -157,7 +162,19 @@ add_custom_target(generate_performance_example
     VERBATIM)
 
 qt_add_executable(uuml
+    src/app/icon_registry.cpp
+    src/app/icon_registry.h
     src/app/main.cpp
+)
+
+file(GLOB_RECURSE UUML_ICON_SVG_FILES CONFIGURE_DEPENDS
+    "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/*.svg")
+qt_add_resources(uuml "uuml_icons"
+    PREFIX "/icons"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/action-icons.json5"
+        ${UUML_ICON_SVG_FILES}
 )
 
 if(WIN32 AND UUML_LIBCLANG_LIBRARY)
@@ -174,6 +191,12 @@ qt_add_qml_module(uuml
     URI Uuml
     VERSION 1.0
     QML_FILES
+        qml/CatalogAction.qml
+        qml/CatalogButton.qml
+        qml/CatalogDialog.qml
+        qml/CatalogMenuItem.qml
+        qml/CatalogToolButton.qml
+        qml/ContextToolboxFrame.qml
         qml/DiagramArea.qml
         qml/DiagramView.qml
         qml/DiagramWindow.qml
@@ -288,6 +311,21 @@ if(BUILD_TESTING)
             -DSOURCE_ROOT=${CMAKE_CURRENT_SOURCE_DIR}
             -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/check_color_literals.cmake)
     if(WIN32)
+        set(UUML_RUNTIME_TESTS
+            uuml_core_tests
+            uuml_canvas_tests
+            uuml_cli_validate
+            uuml_performance_example_validate
+            uuml_ui_smoke)
+        if(UUML_LIBCLANG_INCLUDE_DIR AND UUML_LIBCLANG_LIBRARY)
+            list(APPEND UUML_RUNTIME_TESTS uuml_cpp_preview)
+        endif()
+        # A package build deliberately skips post-link deployment. Give CTest
+        # the selected Qt kit explicitly so Windows never opens a missing-DLL
+        # system dialog while running the pre-package test suite.
+        set_tests_properties(${UUML_RUNTIME_TESTS} PROPERTIES
+            ENVIRONMENT_MODIFICATION
+                "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
         set_tests_properties(uuml_canvas_tests uuml_ui_smoke PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_QUICK_BACKEND=software")
     else()
