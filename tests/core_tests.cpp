@@ -86,6 +86,7 @@ private slots:
   void actionIconCatalogIsValid();
   void deterministicRoundTrip();
   void unversionedProjectMigrates();
+  void stereotypeCatalogSeedMigrationAndEmptyPersistence();
   void invalidProjectSchemaVersionsAreRejected();
   void projectDiagramStylesPersistResolveAndUndo();
   void cppSynchronizationSourcePersistsAndIsUndoable();
@@ -389,7 +390,8 @@ void CoreTests::unversionedProjectMigrates() {
                     return diagnostic.severity == DiagnosticSeverity::Info &&
                            diagnostic.category == QStringLiteral("migration") &&
                            diagnostic.message.contains(
-                               QStringLiteral("legacy version 0 to 1"));
+                               QStringLiteral("version 0 to %1")
+                                   .arg(kCurrentProjectSchemaVersion));
                   }));
 
   // Migration is deliberately in-memory until an explicit save. Once saved,
@@ -399,6 +401,83 @@ void CoreTests::unversionedProjectMigrates() {
   QVERIFY(canonical.ok);
   QVERIFY(!canonical.migrated);
   QCOMPARE(canonical.project, migrated.project);
+}
+
+void CoreTests::stereotypeCatalogSeedMigrationAndEmptyPersistence() {
+  QTemporaryDir legacyDirectory;
+  QVERIFY(legacyDirectory.isValid());
+
+  ProjectData legacy = createStarterProject(QStringLiteral("Schema 1 catalog"));
+  StereotypeDefinition custom;
+  custom.id = newId();
+  custom.name = QStringLiteral("audited");
+  custom.applicableTo = {QStringLiteral("class")};
+  legacy.stereotypeDefinitions.append(custom);
+  ModelElement element;
+  element.id = newId();
+  element.name = QStringLiteral("Service");
+  element.stereotypeIds = {QStringLiteral("uml.interface"), custom.id};
+  legacy.elements.append(element);
+  QVERIFY(ProjectSerializer::save(legacyDirectory.path(), legacy).ok);
+
+  const QString manifestPath =
+      QDir(legacyDirectory.path()).filePath(QStringLiteral("manifest.json5"));
+  QFile manifestFile(manifestPath);
+  QVERIFY(manifestFile.open(QIODevice::ReadOnly));
+  const auto parsedManifest = Json5::parse(manifestFile.readAll());
+  manifestFile.close();
+  QVERIFY2(parsedManifest, qPrintable(parsedManifest.error));
+  QJsonObject manifest = parsedManifest.document.object();
+  manifest.insert(QStringLiteral("schemaVersion"), 1);
+  writeTestFile(manifestPath,
+                Json5::serialize(QJsonDocument(std::move(manifest))));
+
+  // Schema 1 stored only definitions created by the user; conventional UML
+  // definitions were supplied by the application at runtime.
+  const QString modelPath = QDir(legacyDirectory.path())
+                                .filePath(QStringLiteral("model/model.json5"));
+  QFile modelFile(modelPath);
+  QVERIFY(modelFile.open(QIODevice::ReadOnly));
+  const auto parsedModel = Json5::parse(modelFile.readAll());
+  modelFile.close();
+  QVERIFY2(parsedModel, qPrintable(parsedModel.error));
+  QJsonObject model = parsedModel.document.object();
+  const QJsonArray savedCatalog =
+      model.value(QStringLiteral("stereotypes")).toArray();
+  QVERIFY(!savedCatalog.isEmpty());
+  QJsonArray customOnly;
+  for (const QJsonValue &value : savedCatalog) {
+    if (value.toObject().value(QStringLiteral("id")).toString() == custom.id)
+      customOnly.append(value);
+  }
+  QCOMPARE(customOnly.size(), 1);
+  model.insert(QStringLiteral("stereotypes"), customOnly);
+  writeTestFile(modelPath, Json5::serialize(QJsonDocument(std::move(model))));
+
+  const LoadOutcome migrated = ProjectSerializer::load(legacyDirectory.path());
+  QVERIFY(migrated.ok);
+  QVERIFY(migrated.migrated);
+  QCOMPARE(migrated.project.schemaVersion, kCurrentProjectSchemaVersion);
+  QCOMPARE(migrated.project.stereotypeDefinitions.size(),
+           stereotype_catalog::defaultDefinitions().size() + 1);
+  QVERIFY(findStereotypeDefinition(migrated.project,
+                                   QStringLiteral("uml.interface")));
+  QVERIFY(findStereotypeDefinition(migrated.project, custom.id));
+  QCOMPARE(findElement(migrated.project, element.id)->stereotypeIds,
+           element.stereotypeIds);
+
+  // In schema 2 an empty array is intentional and must not be repopulated on
+  // every load after a user removes all seeded definitions.
+  QTemporaryDir emptyDirectory;
+  QVERIFY(emptyDirectory.isValid());
+  ProjectData empty = createStarterProject(QStringLiteral("Empty catalog"));
+  empty.stereotypeDefinitions.clear();
+  QVERIFY(ProjectSerializer::save(emptyDirectory.path(), empty).ok);
+  const LoadOutcome emptyReloaded =
+      ProjectSerializer::load(emptyDirectory.path());
+  QVERIFY(emptyReloaded.ok);
+  QVERIFY(!emptyReloaded.migrated);
+  QVERIFY(emptyReloaded.project.stereotypeDefinitions.isEmpty());
 }
 
 void CoreTests::invalidProjectSchemaVersionsAreRejected() {
@@ -2512,8 +2591,33 @@ void CoreTests::stereotypeCatalogAssignmentsPersistAndAreUndoable() {
       {QStringLiteral("class"), QStringLiteral("relationship")});
   QVERIFY(!customId.isEmpty());
   QCOMPARE(controller.stereotypeCatalog().size(),
-           stereotype_catalog::commonDefinitions().size() + 1);
-  QVERIFY(!controller.deleteProjectStereotype(QStringLiteral("uml.interface")));
+           stereotype_catalog::defaultDefinitions().size() + 1);
+
+  // Seeded UML entries are ordinary project definitions after creation.
+  const auto *abstractDefinition = findStereotypeDefinition(
+      controller.data(), QStringLiteral("uml.abstract"));
+  QVERIFY(abstractDefinition);
+  const QString abstractId = abstractDefinition->id;
+  const QStringList abstractApplicability = abstractDefinition->applicableTo;
+  QCOMPARE(controller.saveProjectStereotype(abstractId,
+                                            QStringLiteral("abstract type"),
+                                            abstractApplicability),
+           abstractId);
+  QCOMPARE(findStereotypeDefinition(controller.data(),
+                                    QStringLiteral("uml.abstract"))
+               ->name,
+           QStringLiteral("abstract type"));
+  controller.undo();
+  QCOMPARE(findStereotypeDefinition(controller.data(),
+                                    QStringLiteral("uml.abstract"))
+               ->name,
+           QStringLiteral("abstract"));
+  QVERIFY(controller.deleteProjectStereotype(QStringLiteral("uml.abstract")));
+  QVERIFY(!findStereotypeDefinition(controller.data(),
+                                    QStringLiteral("uml.abstract")));
+  controller.undo();
+  QVERIFY(findStereotypeDefinition(controller.data(),
+                                   QStringLiteral("uml.abstract")));
 
   controller.assignStereotypes(QStringLiteral("element"), sourceElement,
                                {QStringLiteral("uml.interface"), customId});

@@ -7,8 +7,11 @@ namespace uuml::stereotype_catalog {
 inline const QString kRelationshipApplicability =
     QStringLiteral("relationship");
 
-const QList<StereotypeDefinition> &commonDefinitions();
-bool isCommon(const QString &stereotypeId);
+// New projects and the schema-1 migration copy these conventional UML
+// definitions into the project-owned catalog. They are templates only: once
+// copied, every definition can be edited or deleted like any other project
+// stereotype.
+const QList<StereotypeDefinition> &defaultDefinitions();
 const StereotypeDefinition *find(const ProjectData &project,
                                  const QString &stereotypeId);
 QString applicabilityFor(ElementType type);

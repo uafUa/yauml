@@ -305,18 +305,21 @@ toolboxes implemented, expansion planned
   presentation command; **Reset position** returns an annotation, or all
   annotations, to automatic layout. Re-routing projects existing placements
   onto the new path so manual layout remains visually stable.
-- Add a stereotype catalog with stable identifiers. Read-only common UML
-  stereotypes are supplied by the application; project-specific definitions
-  and their applicability live in project JSON5. Semantic elements—packages,
-  classes, structs, enumerations, and nested types—and relationships can
-  reference zero or more catalog entries. Custom project-browser folders remain
-  organizational rather than UML entities and do not acquire semantic
-  stereotypes.
+- Add a stereotype catalog with stable identifiers. New projects seed their
+  project-owned catalog with conventional UML definitions; after creation,
+  those defaults are editable and deletable like entries created by the user.
+  Definitions, applicability, and assignments live in project JSON5. Semantic
+  elements—packages, classes, structs, enumerations, and nested types—and
+  relationships can reference zero or more catalog entries. Custom
+  project-browser folders remain organizational rather than UML entities and
+  do not acquire semantic stereotypes.
 - Render stereotypes conventionally as `«name»`. Element stereotypes appear
   above the element name; relationship stereotypes are movable connector
-  annotations. The properties panel and in-place editor expose assignments,
-  while a project stereotype manager supports create, rename, applicability,
-  and delete-with-usage-confirmation workflows.
+  annotations. The properties panel, context actions, and in-place diagram
+  interaction open the same checkable dropdown, filtering the project catalog
+  by applicability and committing all checkbox changes as one undo command
+  when it closes. A separate project stereotype manager supports create,
+  rename, applicability, and delete-with-usage-confirmation workflows.
 - Implement edits with field-sized polymorphic commands:
   relationship-metadata commands retain only the changed endpoint values,
   stereotype commands retain assignment IDs, and annotation-move commands
@@ -325,9 +328,9 @@ toolboxes implemented, expansion planned
   a later import rule explicitly owns one of those fields.
 - The complete slice is implemented: semantic endpoint data, automatic
   rendering and property editing, route-relative drag/reset placement, and the
-  common/project stereotype catalog with assignment workflows. Persistence,
-  command undo/redo, validation, canvas interaction, and application smoke
-  tests protect the delivered behavior.
+  seeded project-owned stereotype catalog with dropdown assignment workflows.
+  Persistence, schema migration, command undo/redo, validation, canvas
+  interaction, and application smoke tests protect the delivered behavior.
 
 ## Phase 4: C++ import and synchronization — in progress
 

@@ -214,7 +214,8 @@ int main(int argc, char *argv[]) {
         0, &application,
         [&project, &workspace, &engine, &uiTheme, supportsDetachedWindows] {
           const QString firstDiagram = project.data().diagrams.first().id;
-          project.addElement(QStringLiteral("class"), firstDiagram);
+          const QString smokeElement =
+              project.addElement(QStringLiteral("class"), firstDiagram);
           const QString secondDiagram = project.addDiagram();
           project.addElement(QStringLiteral("enumeration"), secondDiagram);
           const QString smokeFolder = project.addBrowserFolder(
@@ -232,6 +233,7 @@ int main(int argc, char *argv[]) {
               QStringLiteral(R"([{"kind":"folder","id":"%1"}])")
                   .arg(smokeFolder),
               100.0, 100.0);
+          project.selectObject(smokeElement, QStringLiteral("element"));
           if (supportsDetachedWindows)
             workspace.detachDiagram(secondDiagram, 80, 80);
 
@@ -252,6 +254,14 @@ int main(int argc, char *argv[]) {
                                   ? rootObject->findChild<QObject *>(
                                         QStringLiteral("browserStyleDialog"))
                                   : nullptr;
+          auto *stereotypeDialog =
+              rootObject ? rootObject->findChild<QObject *>(
+                               QStringLiteral("projectStereotypeDialog"))
+                         : nullptr;
+          auto *stereotypeDropdown =
+              rootObject ? rootObject->findChild<QObject *>(
+                               QStringLiteral("propertyStereotypeDropdown"))
+                         : nullptr;
           auto *tabs = rootObject ? rootObject->findChild<QObject *>(
                                         QStringLiteral("preferencesTabs"))
                                   : nullptr;
@@ -261,6 +271,13 @@ int main(int argc, char *argv[]) {
               !styleDialog ||
               !QMetaObject::invokeMethod(styleDialog, "openManager") ||
               !QMetaObject::invokeMethod(styleDialog, "close") ||
+              !stereotypeDialog ||
+              !QMetaObject::invokeMethod(stereotypeDialog, "openManager") ||
+              !QMetaObject::invokeMethod(stereotypeDialog, "close") ||
+              !stereotypeDropdown ||
+              !QMetaObject::invokeMethod(stereotypeDropdown, "openBelow") ||
+              !QMetaObject::invokeMethod(stereotypeDropdown,
+                                         "cancelDropdown") ||
               !preferences || !tabs ||
               !QMetaObject::invokeMethod(preferences, "open")) {
             QCoreApplication::exit(1);

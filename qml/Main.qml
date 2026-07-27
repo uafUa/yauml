@@ -780,28 +780,19 @@ ApplicationWindow {
                                  || projectController.selectedKind
                                     === "relationship"
                     }
-                    RowLayout {
+                    StereotypeDropdown {
+                        id: propertyStereotypeDropdown
+                        objectName: "propertyStereotypeDropdown"
                         Layout.fillWidth: true
                         Layout.leftMargin: 10
                         Layout.rightMargin: 10
                         visible: projectController.selectedKind === "element"
                                  || projectController.selectedKind
                                     === "relationship"
-                        Label {
-                            Layout.fillWidth: true
-                            wrapMode: Text.Wrap
-                            color: projectController.selectedStereotypes.length > 0
-                                   ? uiTheme.bodyText : uiTheme.mutedText
-                            text: projectController.selectedStereotypes.length > 0
-                                  ? projectController.selectedStereotypes
-                                  : qsTr("None")
-                        }
-                        Button {
-                            text: qsTr("Choose…")
-                            onClicked: projectStereotypeDialog.openFor(
-                                           projectController.selectedKind,
-                                           projectController.selectedId)
-                        }
+                        targetKind: projectController.selectedKind
+                        targetId: projectController.selectedId
+                        onManageRequested:
+                            projectStereotypeDialog.openManager()
                     }
                     Label {
                         Layout.leftMargin: 10
@@ -1062,8 +1053,18 @@ ApplicationWindow {
             visible: treeContextMenu.targetKind === "element"
             height: visible ? implicitHeight : 0
             text: qsTr("Stereotypes…")
-            onTriggered: projectStereotypeDialog.openFor(
-                             "element", treeContextMenu.targetId)
+            onTriggered: {
+                const menuX = treeContextMenu.x
+                const menuY = treeContextMenu.y
+                const objectId = treeContextMenu.targetId
+                // Let the context menu finish closing before opening the
+                // checkable dropdown in the same popup stack.
+                Qt.callLater(function() {
+                    treeStereotypeDropdown.openAt(
+                                root.contentItem, menuX, menuY,
+                                "element", objectId)
+                })
+            }
         }
         CatalogMenuItem {
             catalogId: "browser.deleteSelection"
@@ -1126,6 +1127,13 @@ ApplicationWindow {
     ProjectStereotypeDialog {
         id: projectStereotypeDialog
         objectName: "projectStereotypeDialog"
+    }
+
+    StereotypeDropdown {
+        id: treeStereotypeDropdown
+        objectName: "treeStereotypeDropdown"
+        showField: false
+        onManageRequested: projectStereotypeDialog.openManager()
     }
 
     CatalogDialog {

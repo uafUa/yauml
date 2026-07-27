@@ -117,8 +117,10 @@ Item {
             editor.selectAll()
         }
 
-        onStereotypeEditRequested: function(objectId, objectKind) {
-            diagramStereotypeDialog.openFor(objectKind, objectId)
+        onStereotypeEditRequested: function(objectId, objectKind,
+                                            x, y, width, height) {
+            diagramStereotypeDropdown.openAt(canvas, x, y + height,
+                                             objectKind, objectId)
         }
 
     }
@@ -215,6 +217,12 @@ Item {
 
     ProjectStereotypeDialog {
         id: diagramStereotypeDialog
+    }
+
+    StereotypeDropdown {
+        id: diagramStereotypeDropdown
+        showField: false
+        onManageRequested: diagramStereotypeDialog.openManager()
     }
 
     Label {
@@ -367,8 +375,15 @@ Item {
         MenuItem {
             text: qsTr("Stereotypes…")
             enabled: canvas.selectedNodeCount === 1
-            onTriggered: diagramStereotypeDialog.openFor(
-                             "element", projectController.selectedId)
+            onTriggered: {
+                const menuX = elementMenu.x
+                const menuY = elementMenu.y
+                const objectId = projectController.selectedId
+                Qt.callLater(function() {
+                    diagramStereotypeDropdown.openAt(
+                                root, menuX, menuY, "element", objectId)
+                })
+            }
         }
         MenuSeparator {}
         CatalogMenuItem {
@@ -430,8 +445,16 @@ Item {
         }
         MenuItem {
             text: qsTr("Stereotypes…")
-            onTriggered: diagramStereotypeDialog.openFor(
-                             "relationship", projectController.selectedId)
+            onTriggered: {
+                const menuX = connectorMenu.x
+                const menuY = connectorMenu.y
+                const objectId = projectController.selectedId
+                Qt.callLater(function() {
+                    diagramStereotypeDropdown.openAt(
+                                root, menuX, menuY,
+                                "relationship", objectId)
+                })
+            }
         }
         MenuSeparator {}
         CatalogMenuItem {

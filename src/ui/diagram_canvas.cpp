@@ -3570,7 +3570,9 @@ void DiagramCanvas::mouseDoubleClickEvent(QMouseEvent *event) {
       const QString kind = findRelationship(m_project->data(), hit.objectId)
                                ? QStringLiteral("relationship")
                                : QStringLiteral("element");
-      emit stereotypeEditRequested(hit.objectId, kind);
+      const QRectF view = toView(hit.sceneRect);
+      emit stereotypeEditRequested(hit.objectId, kind, view.x(), view.y(),
+                                   view.width(), view.height());
       event->accept();
       return;
     }

@@ -1,7 +1,10 @@
 #include "core/project_schema.h"
 
 #include "core/project_schema_version.h"
+#include "core/stereotype_catalog.h"
 
+#include <QJsonArray>
+#include <QSet>
 #include <cmath>
 #include <limits>
 #include <utility>
@@ -50,6 +53,45 @@ void migrateVersionZeroToOne(ProjectJsonDocuments &documents) {
   documents.manifest.insert(QStringLiteral("schemaVersion"), 1);
 }
 
+QJsonObject stereotypeDefinitionJson(const StereotypeDefinition &definition) {
+  QJsonArray applicableTo;
+  for (const QString &value : definition.applicableTo)
+    applicableTo.append(value);
+  return {{QStringLiteral("id"), definition.id},
+          {QStringLiteral("name"), definition.name},
+          {QStringLiteral("applicableTo"), applicableTo}};
+}
+
+void migrateVersionOneToTwo(ProjectJsonDocuments &documents) {
+  // In schema 1 the conventional UML entries lived in the application and
+  // only custom entries were serialized. Schema 2 makes the whole catalog
+  // project-owned. Copy each missing default once, retaining all custom entries
+  // and their order after the seeded section.
+  const QJsonValue catalogValue =
+      documents.model.value(QStringLiteral("stereotypes"));
+  if (catalogValue.isUndefined() || catalogValue.isArray()) {
+    const QJsonArray existing = catalogValue.toArray();
+    QSet<QString> existingIds;
+    for (const QJsonValue &value : existing) {
+      if (value.isObject())
+        existingIds.insert(
+            value.toObject().value(QStringLiteral("id")).toString());
+    }
+
+    QJsonArray migrated;
+    for (const auto &definition : stereotype_catalog::defaultDefinitions()) {
+      if (!existingIds.contains(definition.id))
+        migrated.append(stereotypeDefinitionJson(definition));
+    }
+    for (const QJsonValue &value : existing)
+      migrated.append(value);
+    documents.model.insert(QStringLiteral("stereotypes"), migrated);
+  }
+  // Preserve malformed values for the normal load validator to report rather
+  // than silently replacing user data during migration.
+  documents.manifest.insert(QStringLiteral("schemaVersion"), 2);
+}
+
 } // namespace
 
 SchemaMigrationOutcome
@@ -77,6 +119,10 @@ ProjectSchemaMigrator::migrate(ProjectJsonDocuments documents) {
       migrateVersionZeroToOne(outcome.documents);
       version = 1;
       break;
+    case 1:
+      migrateVersionOneToTwo(outcome.documents);
+      version = 2;
+      break;
     default:
       outcome.diagnostics.append(schemaError(
           QStringLiteral("No migration path exists from schema version %1")
@@ -88,7 +134,7 @@ ProjectSchemaMigrator::migrate(ProjectJsonDocuments documents) {
   outcome.migrated = outcome.sourceVersion != version;
   if (outcome.migrated) {
     outcome.diagnostics.append(migrationInfo(
-        QStringLiteral("Migrated project schema from legacy version %1 to %2 "
+        QStringLiteral("Migrated project schema from version %1 to %2 "
                        "in memory; save the project to persist the upgrade")
             .arg(outcome.sourceVersion)
             .arg(version)));

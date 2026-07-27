@@ -530,10 +530,9 @@ QByteArray modelBytes(const ProjectData &project) {
     object.insert(QStringLiteral("styles"), styles);
   else
     object.remove(QStringLiteral("styles"));
-  if (!stereotypes.isEmpty())
-    object.insert(QStringLiteral("stereotypes"), stereotypes);
-  else
-    object.remove(QStringLiteral("stereotypes"));
+  // Schema 2 distinguishes an intentionally empty project catalog from a
+  // schema-1 project that still needs the conventional UML defaults seeded.
+  object.insert(QStringLiteral("stereotypes"), stereotypes);
   if (!project.namespaceStyleIds.isEmpty()) {
     QJsonObject namespaceStyles;
     QStringList paths = project.namespaceStyleIds.keys();
@@ -1214,8 +1213,6 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
       QStringLiteral("struct"), QStringLiteral("enumeration"),
       stereotype_catalog::kRelationshipApplicability};
   QSet<QString> stereotypeNames;
-  for (const auto &definition : stereotype_catalog::commonDefinitions())
-    stereotypeNames.insert(definition.name.trimmed().toCaseFolded());
   for (const auto &definition : project.stereotypeDefinitions) {
     checkId(definition.id, QStringLiteral("project stereotype"));
     const QString normalizedName = definition.name.trimmed().toCaseFolded();
@@ -1230,11 +1227,6 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
     } else {
       stereotypeNames.insert(normalizedName);
     }
-    if (stereotype_catalog::isCommon(definition.id))
-      diagnostics.append(error(
-          QStringLiteral("validation"),
-          QStringLiteral("A project stereotype cannot use a common UML ID"),
-          definition.id));
     if (definition.applicableTo.isEmpty())
       diagnostics.append(error(
           QStringLiteral("validation"),

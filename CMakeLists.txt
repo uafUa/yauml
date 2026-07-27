@@ -208,6 +208,7 @@ qt_add_qml_module(uuml
         qml/Main.qml
         qml/ProjectStereotypeDialog.qml
         qml/ProjectStyleDialog.qml
+        qml/StereotypeDropdown.qml
         qml/StyleAssignmentMenu.qml
 )
 

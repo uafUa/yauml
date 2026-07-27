@@ -64,9 +64,9 @@ struct DiagramStyle {
   bool operator==(const DiagramStyle &) const = default;
 };
 
-// Common UML stereotypes are supplied by the application; this record stores
-// only project-specific catalog entries. Assignments use stable IDs so a
-// project stereotype can be renamed without rewriting every subject.
+// Every stereotype definition belongs to the project. New projects begin with
+// conventional UML entries, but users can edit or delete those defaults.
+// Assignments use stable IDs so renaming does not rewrite every subject.
 struct StereotypeDefinition {
   QString id;
   QString name;

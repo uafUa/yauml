@@ -43,12 +43,10 @@ QVariantMap diagramStyleMap(const DiagramStyle &style) {
           {QStringLiteral("divider"), style.divider}};
 }
 
-QVariantMap stereotypeDefinitionMap(const StereotypeDefinition &definition,
-                                    bool common) {
+QVariantMap stereotypeDefinitionMap(const StereotypeDefinition &definition) {
   return {{QStringLiteral("id"), definition.id},
           {QStringLiteral("name"), definition.name},
-          {QStringLiteral("applicableTo"), definition.applicableTo},
-          {QStringLiteral("common"), common}};
+          {QStringLiteral("applicableTo"), definition.applicableTo}};
 }
 
 QString normalizedStyleColor(const QVariant &value) {
@@ -855,12 +853,9 @@ QVariantList ProjectController::diagramStyles() const {
 
 QVariantList ProjectController::stereotypeCatalog() const {
   QVariantList catalog;
-  catalog.reserve(stereotype_catalog::commonDefinitions().size() +
-                  m_data.stereotypeDefinitions.size());
-  for (const auto &definition : stereotype_catalog::commonDefinitions())
-    catalog.append(stereotypeDefinitionMap(definition, true));
+  catalog.reserve(m_data.stereotypeDefinitions.size());
   for (const auto &definition : m_data.stereotypeDefinitions)
-    catalog.append(stereotypeDefinitionMap(definition, false));
+    catalog.append(stereotypeDefinitionMap(definition));
   return catalog;
 }
 
@@ -1109,10 +1104,7 @@ void ProjectController::assignStyleToPresentations(
 QVariantMap
 ProjectController::stereotypeDefinition(const QString &stereotypeId) const {
   const auto *definition = stereotype_catalog::find(m_data, stereotypeId);
-  return definition
-             ? stereotypeDefinitionMap(
-                   *definition, stereotype_catalog::isCommon(stereotypeId))
-             : QVariantMap{};
+  return definition ? stereotypeDefinitionMap(*definition) : QVariantMap{};
 }
 
 QString
@@ -1124,22 +1116,6 @@ ProjectController::saveProjectStereotype(const QString &stereotypeId,
     m_diagnostics.addError(QStringLiteral("stereotype"),
                            QStringLiteral("A stereotype needs a name"));
     return {};
-  }
-  if (!stereotypeId.isEmpty() && stereotype_catalog::isCommon(stereotypeId)) {
-    m_diagnostics.addError(
-        QStringLiteral("stereotype"),
-        QStringLiteral("Common UML stereotypes are read-only"));
-    return {};
-  }
-
-  for (const auto &definition : stereotype_catalog::commonDefinitions()) {
-    if (definition.name.compare(trimmedName, Qt::CaseInsensitive) == 0) {
-      m_diagnostics.addError(
-          QStringLiteral("stereotype"),
-          QStringLiteral("A common UML stereotype named \"%1\" already exists")
-              .arg(trimmedName));
-      return {};
-    }
   }
   const auto duplicate = std::find_if(
       m_data.stereotypeDefinitions.cbegin(),

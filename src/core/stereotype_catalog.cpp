@@ -1,12 +1,10 @@
 #include "core/stereotype_catalog.h"
 
-#include <algorithm>
-
 namespace uuml::stereotype_catalog {
 namespace {
 
-StereotypeDefinition common(QString id, QString name,
-                            QStringList applicableTo) {
+StereotypeDefinition defaultDefinition(QString id, QString name,
+                                       QStringList applicableTo) {
   StereotypeDefinition definition;
   definition.id = std::move(id);
   definition.name = std::move(name);
@@ -16,52 +14,46 @@ StereotypeDefinition common(QString id, QString name,
 
 } // namespace
 
-const QList<StereotypeDefinition> &commonDefinitions() {
+const QList<StereotypeDefinition> &defaultDefinitions() {
   static const QList<StereotypeDefinition> definitions = {
-      common(QStringLiteral("uml.interface"), QStringLiteral("interface"),
-             {QStringLiteral("class"), QStringLiteral("struct")}),
-      common(QStringLiteral("uml.abstract"), QStringLiteral("abstract"),
-             {QStringLiteral("class"), QStringLiteral("struct")}),
-      common(QStringLiteral("uml.utility"), QStringLiteral("utility"),
-             {QStringLiteral("class"), QStringLiteral("struct")}),
-      common(QStringLiteral("uml.entity"), QStringLiteral("entity"),
-             {QStringLiteral("class"), QStringLiteral("struct")}),
-      common(QStringLiteral("uml.control"), QStringLiteral("control"),
-             {QStringLiteral("class"), QStringLiteral("struct")}),
-      common(QStringLiteral("uml.boundary"), QStringLiteral("boundary"),
-             {QStringLiteral("class"), QStringLiteral("struct")}),
-      common(QStringLiteral("uml.service"), QStringLiteral("service"),
-             {QStringLiteral("class"), QStringLiteral("struct")}),
-      common(QStringLiteral("uml.datatype"), QStringLiteral("dataType"),
-             {QStringLiteral("class"), QStringLiteral("struct"),
-              QStringLiteral("enumeration")}),
-      common(QStringLiteral("uml.subsystem"), QStringLiteral("subsystem"),
-             {QStringLiteral("package")}),
-      common(QStringLiteral("uml.trace"), QStringLiteral("trace"),
-             {kRelationshipApplicability}),
-      common(QStringLiteral("uml.refine"), QStringLiteral("refine"),
-             {kRelationshipApplicability}),
-      common(QStringLiteral("uml.derive"), QStringLiteral("derive"),
-             {kRelationshipApplicability})};
+      defaultDefinition(QStringLiteral("uml.interface"),
+                        QStringLiteral("interface"),
+                        {QStringLiteral("class"), QStringLiteral("struct")}),
+      defaultDefinition(QStringLiteral("uml.abstract"),
+                        QStringLiteral("abstract"),
+                        {QStringLiteral("class"), QStringLiteral("struct")}),
+      defaultDefinition(QStringLiteral("uml.utility"),
+                        QStringLiteral("utility"),
+                        {QStringLiteral("class"), QStringLiteral("struct")}),
+      defaultDefinition(QStringLiteral("uml.entity"), QStringLiteral("entity"),
+                        {QStringLiteral("class"), QStringLiteral("struct")}),
+      defaultDefinition(QStringLiteral("uml.control"),
+                        QStringLiteral("control"),
+                        {QStringLiteral("class"), QStringLiteral("struct")}),
+      defaultDefinition(QStringLiteral("uml.boundary"),
+                        QStringLiteral("boundary"),
+                        {QStringLiteral("class"), QStringLiteral("struct")}),
+      defaultDefinition(QStringLiteral("uml.service"),
+                        QStringLiteral("service"),
+                        {QStringLiteral("class"), QStringLiteral("struct")}),
+      defaultDefinition(QStringLiteral("uml.datatype"),
+                        QStringLiteral("dataType"),
+                        {QStringLiteral("class"), QStringLiteral("struct"),
+                         QStringLiteral("enumeration")}),
+      defaultDefinition(QStringLiteral("uml.subsystem"),
+                        QStringLiteral("subsystem"),
+                        {QStringLiteral("package")}),
+      defaultDefinition(QStringLiteral("uml.trace"), QStringLiteral("trace"),
+                        {kRelationshipApplicability}),
+      defaultDefinition(QStringLiteral("uml.refine"), QStringLiteral("refine"),
+                        {kRelationshipApplicability}),
+      defaultDefinition(QStringLiteral("uml.derive"), QStringLiteral("derive"),
+                        {kRelationshipApplicability})};
   return definitions;
-}
-
-bool isCommon(const QString &stereotypeId) {
-  return std::any_of(commonDefinitions().cbegin(), commonDefinitions().cend(),
-                     [&](const StereotypeDefinition &definition) {
-                       return definition.id == stereotypeId;
-                     });
 }
 
 const StereotypeDefinition *find(const ProjectData &project,
                                  const QString &stereotypeId) {
-  const auto common =
-      std::find_if(commonDefinitions().cbegin(), commonDefinitions().cend(),
-                   [&](const StereotypeDefinition &definition) {
-                     return definition.id == stereotypeId;
-                   });
-  if (common != commonDefinitions().cend())
-    return &*common;
   return findStereotypeDefinition(project, stereotypeId);
 }
 

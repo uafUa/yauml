@@ -792,15 +792,23 @@ void DiagramCanvasTests::connectorAnnotationsMoveResetAndExposeStereotypes() {
   // Element stereotypes occupy the line immediately above the bold name.
   canvas.doubleClick({190.0, 90.0});
   QCOMPARE(stereotypeEdits.count(), 1);
-  QCOMPARE(stereotypeEdits.takeFirst().at(0).toString(), sourceElement);
+  const auto elementEdit = stereotypeEdits.takeFirst();
+  QCOMPARE(elementEdit.size(), 6);
+  QCOMPARE(elementEdit.at(0).toString(), sourceElement);
+  QCOMPARE(elementEdit.at(1).toString(), QStringLiteral("element"));
+  QVERIFY(elementEdit.at(4).toReal() > 0.0);
+  QVERIFY(elementEdit.at(5).toReal() > 0.0);
 
   // The relationship stereotype is independently movable and invokes the
   // catalog assignment UI when double-clicked.
   canvas.doubleClick({415.0, 127.0});
   QCOMPARE(stereotypeEdits.count(), 1);
   const auto edit = stereotypeEdits.takeFirst();
+  QCOMPARE(edit.size(), 6);
   QCOMPARE(edit.at(0).toString(), relationshipId);
   QCOMPARE(edit.at(1).toString(), QStringLiteral("relationship"));
+  QVERIFY(edit.at(4).toReal() > 0.0);
+  QVERIFY(edit.at(5).toReal() > 0.0);
 }
 
 void DiagramCanvasTests::edgeGestureCreatesCancelsAndSupportsSelfConnections() {

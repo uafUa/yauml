@@ -189,7 +189,8 @@ signals:
                      const QString &text, qreal x, qreal y, qreal width,
                      qreal height, qreal fontPixelSize, bool fontBold);
   void stereotypeEditRequested(const QString &objectId,
-                               const QString &objectKind);
+                               const QString &objectKind, qreal x, qreal y,
+                               qreal width, qreal height);
 
 protected:
   QSGNode *updatePaintNode(QSGNode *oldNode,

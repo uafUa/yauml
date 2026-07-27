@@ -1,5 +1,7 @@
 #include "core/project_data.h"
 
+#include "core/stereotype_catalog.h"
+
 #include <QUuid>
 
 namespace uuml {
@@ -138,6 +140,7 @@ ProjectData createStarterProject(const QString &name) {
   ProjectData project;
   project.id = newId();
   project.name = name;
+  project.stereotypeDefinitions = stereotype_catalog::defaultDefinitions();
 
   Diagram diagram;
   diagram.id = newId();
