@@ -132,6 +132,19 @@ void applyMembershipChanges(Diagram &diagram,
   }
 }
 
+void applyPortSnapPointChanges(
+    Diagram &diagram, const QList<NodePortSnapPointChange> &changes,
+    bool forward) {
+  for (const auto &change : changes) {
+    if (auto *node = findNode(diagram, change.nodeId)) {
+      node->horizontalPortSnapPoints =
+          forward ? change.afterHorizontal : change.beforeHorizontal;
+      node->verticalPortSnapPoints =
+          forward ? change.afterVertical : change.beforeVertical;
+    }
+  }
+}
+
 } // namespace
 
 CreateElementCommand::CreateElementCommand(
@@ -542,13 +555,15 @@ void AddElementToDiagramCommand::revert(ProjectData &project) {
 AddElementsToDiagramCommand::AddElementsToDiagramCommand(
     ProjectController *controller, const ProjectData &project,
     QString diagramId, QList<NodePresentation> presentations,
-    QList<ConnectorPresentation> connectors)
+    QList<ConnectorPresentation> connectors,
+    QList<NodePortSnapPointChange> portChanges)
     : ProjectCommand(controller,
                      presentations.size() == 1
                          ? QStringLiteral("Add element to diagram")
                          : QStringLiteral("Add %1 elements to diagram")
                                .arg(presentations.size())),
-      m_diagramId(std::move(diagramId)) {
+      m_diagramId(std::move(diagramId)),
+      m_portChanges(std::move(portChanges)) {
   const auto *diagram = findDiagram(project, m_diagramId);
   Q_ASSERT(diagram);
   if (!diagram)
@@ -570,6 +585,7 @@ void AddElementsToDiagramCommand::execute(ProjectData &project) {
     for (const auto &presentation : m_presentations)
       insertAtRecordedPosition(diagram->nodes, presentation.index,
                                presentation.value);
+    applyPortSnapPointChanges(*diagram, m_portChanges, true);
     for (const auto &connector : m_connectors)
       insertAtRecordedPosition(diagram->connectors, connector.index,
                                connector.value);
@@ -582,6 +598,7 @@ void AddElementsToDiagramCommand::revert(ProjectData &project) {
          connector != m_connectors.crend(); ++connector)
       removeRecordedValue(diagram->connectors, connector->index,
                           connector->value.id);
+    applyPortSnapPointChanges(*diagram, m_portChanges, false);
     for (auto presentation = m_presentations.crbegin();
          presentation != m_presentations.crend(); ++presentation)
       removeRecordedValue(diagram->nodes, presentation->index,
@@ -594,10 +611,12 @@ AddContainerPresentationsCommand::AddContainerPresentationsCommand(
     QString diagramId, QList<ContainerPresentation> containers,
     QList<NodePresentation> nodes, QList<ConnectorPresentation> connectors,
     QList<ContainerChildrenChange> membershipChanges,
+    QList<NodePortSnapPointChange> portChanges,
     QList<PresentationGeometryChange> geometryChanges, QString description)
     : ProjectCommand(controller, description),
       m_diagramId(std::move(diagramId)),
       m_membershipChanges(std::move(membershipChanges)),
+      m_portChanges(std::move(portChanges)),
       m_geometryChanges(std::move(geometryChanges)) {
   const auto *diagram = findDiagram(project, m_diagramId);
   Q_ASSERT(diagram);
@@ -627,6 +646,7 @@ void AddContainerPresentationsCommand::execute(ProjectData &project) {
                                container.value);
     for (const auto &node : m_nodes)
       insertAtRecordedPosition(diagram->nodes, node.index, node.value);
+    applyPortSnapPointChanges(*diagram, m_portChanges, true);
     for (const auto &connector : m_connectors)
       insertAtRecordedPosition(diagram->connectors, connector.index,
                                connector.value);
@@ -653,6 +673,7 @@ void AddContainerPresentationsCommand::revert(ProjectData &project) {
          connector != m_connectors.crend(); ++connector)
       removeRecordedValue(diagram->connectors, connector->index,
                           connector->value.id);
+    applyPortSnapPointChanges(*diagram, m_portChanges, false);
     for (auto node = m_nodes.crbegin(); node != m_nodes.crend(); ++node)
       removeRecordedValue(diagram->nodes, node->index, node->value.id);
     for (auto container = m_containers.crbegin();

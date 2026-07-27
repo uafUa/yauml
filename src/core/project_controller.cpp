@@ -636,6 +636,194 @@ selfConnectorBendPoints(const QRectF &rect, const ConnectorAnchor &source,
   return bendPoints;
 }
 
+struct PendingConnectorEndpoint {
+  qsizetype connectorIndex = -1;
+  bool source = false;
+  QString nodeId;
+  ConnectorSide side = ConnectorSide::Automatic;
+  qreal preferredOffset = 0.5;
+};
+
+QString endpointGroupKey(const QString &nodeId, ConnectorSide side) {
+  return nodeId + u'|' + QString::number(static_cast<int>(side));
+}
+
+void attachNewConnectorsToSnapPoints(
+    const ProjectData &project, Diagram &diagram,
+    const QSet<QString> &newConnectorIds) {
+  if (newConnectorIds.isEmpty())
+    return;
+
+  QHash<QString, NodePresentation *> nodeByElement;
+  nodeByElement.reserve(diagram.nodes.size());
+  for (auto &node : diagram.nodes)
+    nodeByElement.insert(node.elementId, &node);
+
+  QHash<QString, QList<PendingConnectorEndpoint>> pendingByGroup;
+  QHash<QString, QList<qreal>> occupiedOffsetsByGroup;
+  QHash<QString, NodePresentation *> nodeByGroup;
+  QHash<QString, ConnectorSide> sideByGroup;
+
+  const auto collectEndpoint = [&](qsizetype connectorIndex, bool source) {
+    auto &connector = diagram.connectors[connectorIndex];
+    const auto *relationship =
+        findRelationship(project, connector.relationshipId);
+    if (!relationship)
+      return;
+    auto *sourceNode = nodeByElement.value(relationship->sourceId, nullptr);
+    auto *targetNode = nodeByElement.value(relationship->targetId, nullptr);
+    if (!sourceNode || !targetNode)
+      return;
+
+    auto *node = source ? sourceNode : targetNode;
+    const auto *otherNode = source ? targetNode : sourceNode;
+    ConnectorAnchor anchor =
+        source ? connector.sourceAnchor : connector.targetAnchor;
+    if (anchor.side == ConnectorSide::Automatic) {
+      QPointF target = otherNode->geometry.center();
+      if (!connector.bendPoints.isEmpty()) {
+        target = source ? connector.bendPoints.constFirst().position
+                        : connector.bendPoints.constLast().position;
+      }
+      anchor = edgeAnchorToward(node->geometry, target);
+    }
+
+    const QString groupKey = endpointGroupKey(node->id, anchor.side);
+    nodeByGroup.insert(groupKey, node);
+    sideByGroup.insert(groupKey, anchor.side);
+    if (newConnectorIds.contains(connector.id)) {
+      pendingByGroup[groupKey].append(
+          {connectorIndex, source, node->id, anchor.side, anchor.offset});
+    } else {
+      occupiedOffsetsByGroup[groupKey].append(anchor.offset);
+    }
+  };
+
+  for (qsizetype index = 0; index < diagram.connectors.size(); ++index) {
+    collectEndpoint(index, true);
+    collectEndpoint(index, false);
+  }
+
+  for (auto group = pendingByGroup.begin(); group != pendingByGroup.end();
+       ++group) {
+    auto *node = nodeByGroup.value(group.key(), nullptr);
+    const ConnectorSide side =
+        sideByGroup.value(group.key(), ConnectorSide::Automatic);
+    if (!node || side == ConnectorSide::Automatic)
+      continue;
+
+    const int endpointCount =
+        occupiedOffsetsByGroup.value(group.key()).size() + group->size();
+    const int currentCount =
+        connector_ports::snapPointCountForSide(*node, side);
+    const int pointCount = connector_ports::normalizedSnapPointCount(
+        std::max(currentCount, endpointCount));
+    if (side == ConnectorSide::Top || side == ConnectorSide::Bottom)
+      node->horizontalPortSnapPoints = pointCount;
+    else
+      node->verticalPortSnapPoints = pointCount;
+
+    const QVector<qreal> offsets = connector_ports::snapOffsets(pointCount);
+    QVector<bool> occupied(offsets.size(), false);
+    const auto nearestAvailableIndex = [&](qreal preferred) {
+      int bestIndex = -1;
+      qreal bestDistance = std::numeric_limits<qreal>::max();
+      for (int index = 0; index < offsets.size(); ++index) {
+        if (occupied.at(index))
+          continue;
+        const qreal distance = std::abs(offsets.at(index) - preferred);
+        if (distance < bestDistance) {
+          bestDistance = distance;
+          bestIndex = index;
+        }
+      }
+      return bestIndex;
+    };
+
+    // Existing endpoints remain user-authoritative. Reserve the closest new
+    // marker for each one without moving its persisted free offset.
+    for (const qreal existingOffset :
+         occupiedOffsetsByGroup.value(group.key())) {
+      const int index = nearestAvailableIndex(existingOffset);
+      if (index >= 0)
+        occupied[index] = true;
+    }
+
+    std::stable_sort(
+        group->begin(), group->end(),
+        [](const PendingConnectorEndpoint &left,
+           const PendingConnectorEndpoint &right) {
+          if (!qFuzzyCompare(left.preferredOffset, right.preferredOffset))
+            return left.preferredOffset < right.preferredOffset;
+          if (left.connectorIndex != right.connectorIndex)
+            return left.connectorIndex < right.connectorIndex;
+          return left.source && !right.source;
+        });
+    for (const auto &endpoint : std::as_const(*group)) {
+      const int index = nearestAvailableIndex(endpoint.preferredOffset);
+      if (index < 0)
+        continue;
+      occupied[index] = true;
+      ConnectorAnchor anchor{endpoint.side, offsets.at(index)};
+      auto &connector = diagram.connectors[endpoint.connectorIndex];
+      if (endpoint.source)
+        connector.sourceAnchor = anchor;
+      else
+        connector.targetAnchor = anchor;
+    }
+  }
+
+  // A restored semantic self-relationship needs external geometry just like
+  // one created interactively; otherwise its equal endpoints are invisible.
+  for (auto &connector : diagram.connectors) {
+    if (!newConnectorIds.contains(connector.id))
+      continue;
+    const auto *relationship =
+        findRelationship(project, connector.relationshipId);
+    if (!relationship || relationship->sourceId != relationship->targetId)
+      continue;
+    if (const auto *node =
+            nodeByElement.value(relationship->sourceId, nullptr)) {
+      connector.bendPoints = selfConnectorBendPoints(
+          node->geometry, connector.sourceAnchor, connector.targetAnchor);
+    }
+  }
+}
+
+QList<NodePortSnapPointChange>
+existingNodePortChanges(const Diagram &before, const Diagram &after,
+                        const QSet<QString> &newNodeIds) {
+  QList<NodePortSnapPointChange> changes;
+  for (const auto &beforeNode : before.nodes) {
+    if (newNodeIds.contains(beforeNode.id))
+      continue;
+    const auto *afterNode = findNode(after, beforeNode.id);
+    if (!afterNode ||
+        (beforeNode.horizontalPortSnapPoints ==
+             afterNode->horizontalPortSnapPoints &&
+         beforeNode.verticalPortSnapPoints ==
+             afterNode->verticalPortSnapPoints)) {
+      continue;
+    }
+    changes.append({beforeNode.id, beforeNode.horizontalPortSnapPoints,
+                    beforeNode.verticalPortSnapPoints,
+                    afterNode->horizontalPortSnapPoints,
+                    afterNode->verticalPortSnapPoints});
+  }
+  return changes;
+}
+
+void copyAutoAttachedPresentations(
+    const Diagram &prospective, QList<NodePresentation> &newNodes,
+    QList<ConnectorPresentation> &newConnectors) {
+  for (auto &node : newNodes)
+    if (const auto *updated = findNode(prospective, node.id))
+      node = *updated;
+  for (auto &connector : newConnectors)
+    if (const auto *updated = findConnector(prospective, connector.id))
+      connector = *updated;
+}
+
 QHash<QString, QString> containerOwners(const Diagram &diagram) {
   QHash<QString, QString> owners;
   for (const auto &container : diagram.containers)
@@ -1946,15 +2134,25 @@ int ProjectController::addElementsToDiagram(const QString &diagramId,
   }
 
   QList<ConnectorPresentation> connectors;
+  QSet<QString> newConnectorIds;
   for (const auto &elementId : acceptedIds) {
     auto additions =
         connectorsForNewPresentation(m_data, prospective, elementId);
+    for (const auto &connector : additions)
+      newConnectorIds.insert(connector.id);
     prospective.connectors.append(additions);
     connectors.append(std::move(additions));
   }
+  attachNewConnectorsToSnapPoints(m_data, prospective, newConnectorIds);
+  copyAutoAttachedPresentations(prospective, presentations, connectors);
+  QSet<QString> newNodeIds;
+  for (const auto &presentation : presentations)
+    newNodeIds.insert(presentation.id);
+  const QList<NodePortSnapPointChange> portChanges =
+      existingNodePortChanges(*diagram, prospective, newNodeIds);
   pushCommand(std::make_unique<AddElementsToDiagramCommand>(
       this, m_data, diagramId, std::move(presentations),
-      std::move(connectors)));
+      std::move(connectors), portChanges));
   if (duplicateCount > 0) {
     m_diagnostics.addInfo(
         QStringLiteral("command"),
@@ -2365,12 +2563,22 @@ int ProjectController::addTreeItemsToDiagram(const QString &diagramId,
   }
 
   QList<ConnectorPresentation> connectors;
+  QSet<QString> newConnectorIds;
   for (const auto &node : newNodes) {
     auto additions =
         connectorsForNewPresentation(m_data, prospective, node.elementId);
+    for (const auto &connector : additions)
+      newConnectorIds.insert(connector.id);
     prospective.connectors.append(additions);
     connectors.append(std::move(additions));
   }
+  attachNewConnectorsToSnapPoints(m_data, prospective, newConnectorIds);
+  copyAutoAttachedPresentations(prospective, newNodes, connectors);
+  QSet<QString> newNodeIds;
+  for (const auto &node : newNodes)
+    newNodeIds.insert(node.id);
+  const QList<NodePortSnapPointChange> portChanges =
+      existingNodePortChanges(*diagram, prospective, newNodeIds);
 
   if (newContainers.isEmpty() && newNodes.isEmpty() &&
       membershipChanges.isEmpty()) {
@@ -2383,7 +2591,7 @@ int ProjectController::addTreeItemsToDiagram(const QString &diagramId,
   const int changes = qMax(1, newContainers.size() + newNodes.size());
   pushCommand(std::make_unique<AddContainerPresentationsCommand>(
       this, m_data, diagramId, std::move(newContainers), std::move(newNodes),
-      std::move(connectors), std::move(membershipChanges)));
+      std::move(connectors), std::move(membershipChanges), portChanges));
   return changes;
 }
 
@@ -2446,7 +2654,8 @@ int ProjectController::addEmptyPackageToDiagram(const QString &diagramId,
   pushCommand(std::make_unique<AddContainerPresentationsCommand>(
       this, m_data, diagramId, QList<ContainerPresentation>{frame},
       QList<NodePresentation>{}, QList<ConnectorPresentation>{},
-      std::move(membershipChanges), std::move(geometryChanges),
+      std::move(membershipChanges), QList<NodePortSnapPointChange>{},
+      std::move(geometryChanges),
       QStringLiteral("Add empty namespace to diagram")));
   return 1;
 }
@@ -2542,7 +2751,8 @@ bool ProjectController::wrapPresentationInPackage(
   pushCommand(std::make_unique<AddContainerPresentationsCommand>(
       this, m_data, diagramId, QList<ContainerPresentation>{frame},
       QList<NodePresentation>{}, QList<ConnectorPresentation>{},
-      std::move(membershipChanges), std::move(geometryChanges),
+      std::move(membershipChanges), QList<NodePortSnapPointChange>{},
+      std::move(geometryChanges),
       QStringLiteral("Wrap presentation in parent namespace")));
   return true;
 }

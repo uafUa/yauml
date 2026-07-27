@@ -39,9 +39,12 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_64
-          tools: tools_ifw,qt.tools.ifw.411
+          # The anonymous Qt tools repository currently publishes IFW 4.7.
+          # Move to 4.11 once Qt exposes qt.tools.ifw.411 there; using the
+          # authenticated Qt Account repository would require CI credentials.
+          tools: tools_ifw,qt.tools.ifw.47
           cache: true
-          cache-key-prefix: install-qt-action-ifw411
+          cache-key-prefix: install-qt-action-ifw47
 
       - name: Locate LLVM
         shell: pwsh

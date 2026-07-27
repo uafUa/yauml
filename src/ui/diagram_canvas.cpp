@@ -20,6 +20,7 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QKeyEvent>
+#include <QKeySequence>
 #include <QMatrix4x4>
 #include <QMouseEvent>
 #include <QPainter>
@@ -3297,7 +3298,9 @@ DiagramCanvas::TextHit DiagramCanvas::hitText(const QPointF &scenePoint) const {
           element->id,
           QStringLiteral("name"),
           -1,
-          element->name,
+          presentation_layout::elementDisplayNameInPackage(
+              m_project->data(), *element,
+              presentation_layout::containingPackageElementId(*d, node->id)),
           QRectF(rect.left() + 4,
                  rect.top() + (stereotype.isEmpty() ? 0.0 : kLineHeight) + 3,
                  rect.width() - 8, kHeaderHeight - 6),
@@ -4055,6 +4058,80 @@ void DiagramCanvas::resetLassoState() {
   update();
 }
 
+void DiagramCanvas::selectAllInContext() {
+  const auto *d = diagram();
+  if (!d)
+    return;
+
+  const auto ownerContainerId = [&](const QString &presentationId) {
+    const auto owner = std::find_if(
+        d->containers.cbegin(), d->containers.cend(),
+        [&](const ContainerPresentation &container) {
+          return container.childPresentationIds.contains(presentationId);
+        });
+    return owner == d->containers.cend() ? QString{} : owner->id;
+  };
+
+  QString scopeContainerId = m_selectedContainer;
+  if (scopeContainerId.isEmpty() && !m_selectedNodeOrder.isEmpty()) {
+    // A selected child makes its closest container the natural selection
+    // scope. Selections spanning different frames deliberately fall back to
+    // the whole diagram instead of choosing an arbitrary owner.
+    scopeContainerId = ownerContainerId(m_selectedNodeOrder.constFirst());
+    for (const QString &nodeId : m_selectedNodeOrder) {
+      if (ownerContainerId(nodeId) != scopeContainerId) {
+        scopeContainerId.clear();
+        break;
+      }
+    }
+  }
+
+  QSet<QString> scopedNodeIds;
+  if (!scopeContainerId.isEmpty()) {
+    // Selection follows one visible hierarchy level. A nested frame is a
+    // separate scope and its children must not leak into its parent selection.
+    if (const auto *container = findContainer(*d, scopeContainerId))
+      for (const QString &childId : container->childPresentationIds)
+        if (findNode(*d, childId))
+          scopedNodeIds.insert(childId);
+  } else {
+    QSet<QString> containedPresentationIds;
+    for (const auto &container : d->containers)
+      for (const QString &childId : container.childPresentationIds)
+        containedPresentationIds.insert(childId);
+    for (const auto &node : d->nodes)
+      if (!containedPresentationIds.contains(node.id))
+        scopedNodeIds.insert(node.id);
+  }
+
+  // Keep an empty selected frame active; Ctrl+A in it is a harmless no-op.
+  if (scopedNodeIds.isEmpty())
+    return;
+
+  clearRelationshipToolboxCandidate();
+  clearArrangementToolboxCandidate(true);
+  clearConnectorToolboxCandidate(true);
+  clearPresentationToolboxCandidate(true);
+  emit contextToolboxesDismissRequested();
+
+  m_selectedNodes = scopedNodeIds;
+  m_selectedNodeOrder.clear();
+  m_selectedNodeOrder.reserve(scopedNodeIds.size());
+  for (const auto &node : d->nodes)
+    if (scopedNodeIds.contains(node.id))
+      m_selectedNodeOrder.append(node.id);
+  m_selectedContainer.clear();
+  m_selectedConnector.clear();
+  m_selectedBendPoint = -1;
+  m_endpointDragTargetNode.clear();
+  m_endpointDragActive = false;
+  m_contextAnnotationKey.clear();
+  synchronizeProjectSelection();
+  m_sceneDirty = true;
+  emit canvasSelectionChanged();
+  update();
+}
+
 void DiagramCanvas::synchronizeProjectSelection() {
   if (!m_project)
     return;
@@ -4347,7 +4424,10 @@ void DiagramCanvas::editSelectedPresentationName() {
     if (!node || !element)
       return;
     objectId = element->id;
-    currentName = element->name;
+    currentName = presentation_layout::elementDisplayNameInPackage(
+        m_project->data(), *element,
+        presentation_layout::containingPackageElementId(*diagramData,
+                                                        node->id));
     visibleGeometry = visibleNodeGeometry(*node);
     const QString stereotype = stereotype_catalog::displayText(
         m_project->data(), element->stereotypeIds);
@@ -4709,6 +4789,11 @@ void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
   if (event->key() == Qt::Key_Escape &&
       m_interaction == Interaction::CreateConnector) {
     cancelConnectorGesture();
+    event->accept();
+    return;
+  }
+  if (event->matches(QKeySequence::SelectAll)) {
+    selectAllInContext();
     event->accept();
     return;
   }

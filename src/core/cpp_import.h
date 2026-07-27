@@ -32,6 +32,8 @@ struct CppImportOptions {
   // rule, for example when a project has deleted the conventional definition.
   QString localTypeStereotypeId;
   QStringList localTypeStereotypeApplicableTo;
+  QString privateTypeStereotypeId;
+  QStringList privateTypeStereotypeApplicableTo;
 };
 
 void configureCppImportStereotypes(CppImportOptions &options,
@@ -54,6 +56,10 @@ struct CppSourceSymbol {
   QString filePath;
   int line = 0;
   int column = 0;
+  // Access belongs to the declaration itself rather than its enclosing type.
+  // It is retained through planning so a private nested declaration can carry
+  // a project-owned «private» stereotype without making access a UML type.
+  bool privateNestedType = false;
 
   bool operator==(const CppSourceSymbol &) const = default;
 };

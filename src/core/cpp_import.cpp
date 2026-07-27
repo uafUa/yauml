@@ -295,6 +295,12 @@ ModelElement sourceElement(const CppSourceSymbol &symbol,
       options.localTypeStereotypeApplicableTo.contains(applicability)) {
     managedStereotypeIds.append(options.localTypeStereotypeId);
   }
+  if (symbol.privateNestedType &&
+      !options.privateTypeStereotypeId.isEmpty() &&
+      options.privateTypeStereotypeApplicableTo.contains(applicability) &&
+      !managedStereotypeIds.contains(options.privateTypeStereotypeId)) {
+    managedStereotypeIds.append(options.privateTypeStereotypeId);
+  }
   for (const QString &stereotypeId : previouslyManaged)
     if (!managedStereotypeIds.contains(stereotypeId))
       element.stereotypeIds.removeAll(stereotypeId);
@@ -1139,6 +1145,29 @@ struct AstVisitorContext {
   QSet<QString> *declarationFiles;
 };
 
+bool isPrivateNestedType(CXCursor cursor) {
+  const CXCursor parent = clang_getCursorSemanticParent(cursor);
+  CXCursorKind parentKind = clang_getCursorKind(parent);
+  if (parentKind == CXCursor_ClassTemplate)
+    parentKind = clang_getTemplateCursorKind(parent);
+  const bool nestedInRecord =
+      parentKind == CXCursor_ClassDecl || parentKind == CXCursor_StructDecl ||
+      parentKind == CXCursor_ClassTemplatePartialSpecialization;
+  if (!nestedInRecord)
+    return false;
+
+  const CX_CXXAccessSpecifier access = clang_getCXXAccessSpecifier(cursor);
+  if (access == CX_CXXPrivate)
+    return true;
+  if (access == CX_CXXPublic || access == CX_CXXProtected)
+    return false;
+
+  // Some libclang versions report InvalidAccessSpecifier when access is
+  // implicit. C++ class members default to private and struct members to
+  // public, so retain the language rule as a deterministic fallback.
+  return parentKind == CXCursor_ClassDecl;
+}
+
 CXChildVisitResult visitAst(CXCursor cursor, CXCursor,
                             CXClientData clientData) {
   auto &context = *static_cast<AstVisitorContext *>(clientData);
@@ -1170,6 +1199,7 @@ CXChildVisitResult visitAst(CXCursor cursor, CXCursor,
   symbol.filePath = filePath;
   symbol.line = line;
   symbol.column = column;
+  symbol.privateNestedType = isPrivateNestedType(cursor);
   symbol.symbolId = takeString(clang_getCursorUSR(cursor));
   if (symbol.symbolId.isEmpty())
     symbol.symbolId = QStringLiteral("cpp:%1#%2").arg(filePath, name);
@@ -1949,12 +1979,23 @@ void configureCppImportStereotypes(CppImportOptions &options,
                                    const ProjectData &project) {
   options.localTypeStereotypeId.clear();
   options.localTypeStereotypeApplicableTo.clear();
+  options.privateTypeStereotypeId.clear();
+  options.privateTypeStereotypeApplicableTo.clear();
   const auto *localDefinition = stereotype_catalog::findByConventionalIdOrName(
       project, stereotype_catalog::kLocalStereotypeId, QStringLiteral("local"));
-  if (!localDefinition)
-    return;
-  options.localTypeStereotypeId = localDefinition->id;
-  options.localTypeStereotypeApplicableTo = localDefinition->applicableTo;
+  if (localDefinition) {
+    options.localTypeStereotypeId = localDefinition->id;
+    options.localTypeStereotypeApplicableTo = localDefinition->applicableTo;
+  }
+  const auto *privateDefinition =
+      stereotype_catalog::findByConventionalIdOrName(
+          project, stereotype_catalog::kPrivateStereotypeId,
+          QStringLiteral("private"));
+  if (privateDefinition) {
+    options.privateTypeStereotypeId = privateDefinition->id;
+    options.privateTypeStereotypeApplicableTo =
+        privateDefinition->applicableTo;
+  }
 }
 
 int CppImportPreview::elementApplicableCount() const {

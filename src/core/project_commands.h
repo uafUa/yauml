@@ -191,6 +191,17 @@ private:
   qsizetype m_index;
 };
 
+// Adding a presentation can materialize several semantic relationships at
+// once. Existing endpoint nodes may therefore need denser snap-point sets in
+// the same undoable command.
+struct NodePortSnapPointChange {
+  QString nodeId;
+  int beforeHorizontal = 1;
+  int beforeVertical = 1;
+  int afterHorizontal = 1;
+  int afterVertical = 1;
+};
+
 class AddElementToDiagramCommand final : public ProjectCommand {
 public:
   AddElementToDiagramCommand(ProjectController *controller,
@@ -221,7 +232,8 @@ public:
   AddElementsToDiagramCommand(ProjectController *controller,
                               const ProjectData &project, QString diagramId,
                               QList<NodePresentation> presentations,
-                              QList<ConnectorPresentation> connectors);
+                              QList<ConnectorPresentation> connectors,
+                              QList<NodePortSnapPointChange> portChanges = {});
 
 private:
   struct PositionedNode {
@@ -239,6 +251,7 @@ private:
   QString m_diagramId;
   QList<PositionedNode> m_presentations;
   QList<PositionedConnector> m_connectors;
+  QList<NodePortSnapPointChange> m_portChanges;
 };
 
 // Adds a cohesive presentation slice—frames, leaves, connectors, membership,
@@ -251,6 +264,7 @@ public:
       QString diagramId, QList<ContainerPresentation> containers,
       QList<NodePresentation> nodes, QList<ConnectorPresentation> connectors,
       QList<ContainerChildrenChange> membershipChanges,
+      QList<NodePortSnapPointChange> portChanges = {},
       QList<PresentationGeometryChange> geometryChanges = {},
       QString description =
           QStringLiteral("Add project-tree items to diagram"));
@@ -277,6 +291,7 @@ private:
   QList<PositionedNode> m_nodes;
   QList<PositionedConnector> m_connectors;
   QList<ContainerChildrenChange> m_membershipChanges;
+  QList<NodePortSnapPointChange> m_portChanges;
   QList<PresentationGeometryChange> m_geometryChanges;
 };
 

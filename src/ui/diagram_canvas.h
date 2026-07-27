@@ -360,6 +360,7 @@ private:
   void finishLassoSelection();
   void cancelLassoSelection();
   void resetLassoState();
+  void selectAllInContext();
   void synchronizeProjectSelection();
   void createElementAt(const QString &type, const QPointF &sceneCenter);
   void selectNode(const QString &nodeId, bool toggle);

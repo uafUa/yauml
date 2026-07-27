@@ -122,6 +122,7 @@ private slots:
   void lassoSelectsAndMovesMultipleNodesAsOneCommand();
   void lassoModifiersAddAndToggleSelection();
   void lassoStartsOnEmptyContainerBody();
+  void contextualSelectAllUsesContainerScope();
   void clippedChildIsOnlyInteractiveInsideContainer();
   void arrangementAndNudgingAreUndoableTransactions();
   void contextCreationUsesTheClickedDiagramAndPosition();
@@ -136,6 +137,7 @@ private slots:
   void multiSelectionToolboxTracksArrangementCommands();
   void connectorToolboxEditsRoutingAndAnnotations();
   void presentationToolboxTracksNodesContainersAndPriorities();
+  void inPlaceNameEditorUsesRenderedName();
   void connectorEndpointsDragToReattachAndCancel();
   void connectorPortsSnapAndRemainFreelyPlaceable();
   void liveDragSnappingIsUndoableAndAltSuppressesIt();
@@ -453,6 +455,89 @@ void DiagramCanvasTests::lassoStartsOnEmptyContainerBody() {
 
   QCOMPARE(canvas.selectedNodeCount(), 2);
   QCOMPARE(controller.data().diagrams.first(), before);
+}
+
+void DiagramCanvasTests::contextualSelectAllUsesContainerScope() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString first = controller.addElement(QStringLiteral("class"));
+  const QString second = controller.addElement(QStringLiteral("struct"));
+  controller.addElement(QStringLiteral("class"), diagramId);
+  const QString fourth = controller.addElement(QStringLiteral("class"));
+  const QString folder = controller.addBrowserFolder(
+      QStringLiteral("model"), {}, QStringLiteral("Selection scope"));
+  const QString subfolder = controller.addBrowserFolder(
+      QStringLiteral("folder"), folder, QStringLiteral("Nested scope"));
+  const auto itemJson = [](const QString &kind, const QString &id) {
+    return QString::fromUtf8(
+        QJsonDocument(QJsonArray{QJsonObject{{QStringLiteral("kind"), kind},
+                                             {QStringLiteral("id"), id}}})
+            .toJson(QJsonDocument::Compact));
+  };
+  QVERIFY(
+      controller.moveBrowserItems(itemJson(QStringLiteral("element"), first),
+                                  QStringLiteral("folder"), folder));
+  QVERIFY(
+      controller.moveBrowserItems(itemJson(QStringLiteral("element"), second),
+                                  QStringLiteral("folder"), subfolder));
+  QVERIFY(
+      controller.moveBrowserItems(itemJson(QStringLiteral("element"), fourth),
+                                  QStringLiteral("folder"), folder));
+  QCOMPARE(controller.addTreeItemsToDiagram(
+               diagramId, {first, second, fourth},
+               itemJson(QStringLiteral("folder"), folder), 180.0, 120.0),
+           5);
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  const Diagram &diagram = controller.data().diagrams.first();
+  QCOMPARE(diagram.nodes.size(), 4);
+  QCOMPARE(diagram.containers.size(), 2);
+  const auto rootFrame =
+      std::find_if(diagram.containers.cbegin(), diagram.containers.cend(),
+                   [&](const ContainerPresentation &container) {
+                     return container.subjectId == folder;
+                   });
+  QVERIFY(rootFrame != diagram.containers.cend());
+  const QPointF viewPan(30.0, 30.0);
+  const QPointF frameHeader =
+      rootFrame->geometry.topLeft() + QPointF(10.0, 10.0) +
+      viewPan;
+  canvas.press(frameHeader);
+  canvas.release(frameHeader);
+  QVERIFY(canvas.containerSelected());
+
+  canvas.key(Qt::Key_A, Qt::ControlModifier);
+  QCOMPARE(canvas.selectedNodeCount(), 2);
+
+  canvas.clearCanvasSelection();
+  canvas.key(Qt::Key_A, Qt::ControlModifier);
+  QCOMPARE(canvas.selectedNodeCount(), 1);
+
+  canvas.clearCanvasSelection();
+  const auto child =
+      std::find_if(diagram.nodes.cbegin(), diagram.nodes.cend(),
+                   [&](const NodePresentation &node) {
+                     return node.elementId == first;
+                   });
+  QVERIFY(child != diagram.nodes.cend());
+  canvas.press(child->geometry.center() + viewPan);
+  canvas.release(child->geometry.center() + viewPan);
+  QCOMPARE(canvas.selectedNodeCount(), 1);
+  canvas.key(Qt::Key_A, Qt::ControlModifier);
+  QCOMPARE(canvas.selectedNodeCount(), 2);
+
+  canvas.clearCanvasSelection();
+  const auto nestedChild =
+      std::find_if(diagram.nodes.cbegin(), diagram.nodes.cend(),
+                   [&](const NodePresentation &node) {
+                     return node.elementId == second;
+                   });
+  QVERIFY(nestedChild != diagram.nodes.cend());
+  canvas.press(nestedChild->geometry.center() + viewPan);
+  canvas.release(nestedChild->geometry.center() + viewPan);
+  canvas.key(Qt::Key_A, Qt::ControlModifier);
+  QCOMPARE(canvas.selectedNodeCount(), 1);
 }
 
 void DiagramCanvasTests::clippedChildIsOnlyInteractiveInsideContainer() {
@@ -1217,6 +1302,52 @@ void DiagramCanvasTests::
   QVERIFY(canvas.presentationToolboxCandidate());
   canvas.key(Qt::Key_Escape);
   QVERIFY(!canvas.presentationToolboxCandidate());
+}
+
+void DiagramCanvasTests::inPlaceNameEditorUsesRenderedName() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString packageId = controller.addElement(QStringLiteral("package"));
+  controller.selectObject(packageId, QStringLiteral("element"));
+  controller.setSelectedName(QStringLiteral("domain"));
+  const QString typeId = controller.addElement(QStringLiteral("class"));
+  controller.selectObject(typeId, QStringLiteral("element"));
+  controller.setSelectedName(QStringLiteral("domain::Service"));
+
+  const QString typeJson = QString::fromUtf8(
+      QJsonDocument(QJsonArray{QJsonObject{
+                        {QStringLiteral("kind"), QStringLiteral("element")},
+                        {QStringLiteral("id"), typeId}}})
+          .toJson(QJsonDocument::Compact));
+  QVERIFY(controller.moveBrowserItemsWithPackageReassignment(
+      typeJson, QStringLiteral("element"), packageId));
+  controller.selectObject(packageId, QStringLiteral("element"));
+  controller.addSelectedToDiagram(diagramId);
+
+  const Diagram &diagram = controller.data().diagrams.first();
+  const auto node =
+      std::find_if(diagram.nodes.cbegin(), diagram.nodes.cend(),
+                   [&](const NodePresentation &candidate) {
+                     return candidate.elementId == typeId;
+                   });
+  QVERIFY(node != diagram.nodes.cend());
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  const QPointF header =
+      node->geometry.topLeft() + QPointF(node->geometry.width() / 2.0, 12.0) +
+      QPointF(30.0, 30.0);
+  canvas.press(header);
+  canvas.release(header);
+
+  QSignalSpy edits(&canvas, &DiagramCanvas::editRequested);
+  canvas.editSelectedPresentationName();
+  QCOMPARE(edits.count(), 1);
+  QCOMPARE(edits.takeFirst().at(3).toString(), QStringLiteral("Service"));
+
+  canvas.doubleClick(header);
+  QCOMPARE(edits.count(), 1);
+  QCOMPARE(edits.takeFirst().at(3).toString(), QStringLiteral("Service"));
 }
 
 void DiagramCanvasTests::connectorEndpointsDragToReattachAndCancel() {

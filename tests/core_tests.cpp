@@ -1395,6 +1395,8 @@ void CoreTests::cppImportCreatesNestedTypeContainment() {
                                        "class Outer {\n"
                                        "public:\n"
                                        "  struct Inner {};\n"
+                                       "private:\n"
+                                       "  class Hidden {};\n"
                                        "};\n"
                                        "}\n"));
 
@@ -1408,8 +1410,12 @@ void CoreTests::cppImportCreatesNestedTypeContainment() {
       sourceDirectory.filePath(QStringLiteral("compile_commands.json")),
       QJsonDocument(QJsonArray{command}).toJson(QJsonDocument::Indented));
 
-  const CppImportPreview preview =
-      CppImportService::preview(sourceDirectory.path(), {});
+  ProjectController controller;
+  CppImportOptions options;
+  configureCppImportStereotypes(options, controller.data());
+  const CppImportPreview preview = CppImportService::preview(
+      sourceDirectory.path(), controller.data().elements,
+      controller.data().relationships, options);
   QVERIFY(preview.ok);
   const auto containment = std::find_if(
       preview.relationships.cbegin(), preview.relationships.cend(),
@@ -1422,7 +1428,28 @@ void CoreTests::cppImportCreatesNestedTypeContainment() {
   QVERIFY(containment != preview.relationships.cend());
   QVERIFY(containment->relationshipType == RelationshipType::Containment);
 
-  ProjectController controller;
+  const auto hiddenItem = std::find_if(
+      preview.items.cbegin(), preview.items.cend(),
+      [](const CppImportItem &item) {
+        return item.symbol.qualifiedName ==
+               QStringLiteral("domain::Outer::Hidden");
+      });
+  QVERIFY(hiddenItem != preview.items.cend());
+  QVERIFY(hiddenItem->symbol.privateNestedType);
+  QVERIFY(hiddenItem->desiredElement.stereotypeIds.contains(
+      stereotype_catalog::kPrivateStereotypeId));
+
+  const auto publicInnerItem = std::find_if(
+      preview.items.cbegin(), preview.items.cend(),
+      [](const CppImportItem &item) {
+        return item.symbol.qualifiedName ==
+               QStringLiteral("domain::Outer::Inner");
+      });
+  QVERIFY(publicInnerItem != preview.items.cend());
+  QVERIFY(!publicInnerItem->symbol.privateNestedType);
+  QVERIFY(!publicInnerItem->desiredElement.stereotypeIds.contains(
+      stereotype_catalog::kPrivateStereotypeId));
+
   QCOMPARE(controller.applyCppImportPlan(preview), preview.applicableCount());
   const auto outer = std::find_if(
       controller.data().elements.cbegin(), controller.data().elements.cend(),
@@ -3409,12 +3436,46 @@ void CoreTests::relationshipTypesAndPresentationRemoval() {
                         return node.elementId == sourceElement;
                       }));
   QSet<QString> restoredRelationshipIds;
-  for (const auto &connector : controller.data().diagrams.first().connectors) {
+  const auto &restoredDiagram = controller.data().diagrams.first();
+  for (const auto &connector : restoredDiagram.connectors) {
     restoredRelationshipIds.insert(connector.relationshipId);
-    QVERIFY(connector.sourceAnchor.side == ConnectorSide::Automatic);
-    QVERIFY(connector.targetAnchor.side == ConnectorSide::Automatic);
+    QVERIFY(connector.sourceAnchor.side != ConnectorSide::Automatic);
+    QVERIFY(connector.targetAnchor.side != ConnectorSide::Automatic);
+    const auto *relationship =
+        findRelationship(controller.data(), connector.relationshipId);
+    QVERIFY(relationship);
+    const auto sourceNode =
+        std::find_if(restoredDiagram.nodes.cbegin(),
+                     restoredDiagram.nodes.cend(),
+                     [&](const NodePresentation &node) {
+                       return node.elementId == relationship->sourceId;
+                     });
+    const auto targetNode =
+        std::find_if(restoredDiagram.nodes.cbegin(),
+                     restoredDiagram.nodes.cend(),
+                     [&](const NodePresentation &node) {
+                       return node.elementId == relationship->targetId;
+                     });
+    QVERIFY(sourceNode != restoredDiagram.nodes.cend());
+    QVERIFY(targetNode != restoredDiagram.nodes.cend());
+    const int sourcePointCount = connector_ports::snapPointCountForSide(
+        *sourceNode, connector.sourceAnchor.side);
+    const int targetPointCount = connector_ports::snapPointCountForSide(
+        *targetNode, connector.targetAnchor.side);
+    QCOMPARE(sourcePointCount, types.size());
+    QCOMPARE(targetPointCount, types.size());
+    QVERIFY(connector_ports::snapOffsets(sourcePointCount)
+                .contains(connector.sourceAnchor.offset));
+    QVERIFY(connector_ports::snapOffsets(targetPointCount)
+                .contains(connector.targetAnchor.offset));
   }
   QCOMPARE(restoredRelationshipIds, relationshipIds);
+  controller.undo();
+  const auto &withoutRestoredSource = controller.data().diagrams.first();
+  QCOMPARE(withoutRestoredSource.nodes.size(), 1);
+  QCOMPARE(withoutRestoredSource.nodes.first().horizontalPortSnapPoints, 1);
+  QCOMPARE(withoutRestoredSource.nodes.first().verticalPortSnapPoints, 1);
+  controller.redo();
 
   // Adding related elements to a new diagram materializes its connector
   // presentations as soon as both semantic endpoints are present.
