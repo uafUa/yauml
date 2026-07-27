@@ -296,7 +296,12 @@ int main(int argc, char *argv[]) {
             QCoreApplication::exit(1);
             return;
           }
-          tabs->setProperty("currentIndex", 1);
+          tabs->setProperty("currentIndex", 2);
+          // Instantiate both newly separated settings pages. Hidden
+          // StackLayout children do not necessarily create all ListView
+          // delegates, so visit each page during the smoke test.
+          QTimer::singleShot(100, tabs,
+                             [tabs] { tabs->setProperty("currentIndex", 3); });
         });
     QTimer::singleShot(750, &application, [&engine] {
       const auto roots = engine.rootObjects();

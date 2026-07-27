@@ -34,6 +34,9 @@ class ApplicationSettings final : public QObject {
   Q_PROPERTY(QVariantList cppMemberTypeRules READ cppMemberTypeRules NOTIFY
                  cppMemberTypeRulesChanged)
   Q_PROPERTY(
+      QVariantMap contextToolboxConfiguration READ contextToolboxConfiguration
+          NOTIFY contextToolboxConfigurationChanged)
+  Q_PROPERTY(
       QString packageReassignmentPolicy READ packageReassignmentPolicy WRITE
           setPackageReassignmentPolicy NOTIFY packageReassignmentPolicyChanged)
   Q_PROPERTY(QVariantList recentProjects READ recentProjects NOTIFY
@@ -56,6 +59,7 @@ public:
   static QVariantMap defaultRelationshipGestureKeys();
   static QString defaultCppInterfacePattern();
   static QVariantList defaultCppMemberTypeRules();
+  static QVariantMap defaultContextToolboxConfiguration();
   static QString defaultPackageReassignmentPolicy();
 
   explicit ApplicationSettings(QObject *parent = nullptr);
@@ -78,8 +82,13 @@ public:
   Q_INVOKABLE bool setCppInterfacePattern(const QString &pattern);
   Q_INVOKABLE bool isValidCppInterfacePattern(const QString &pattern) const;
   QVariantList cppMemberTypeRules() const;
+  Q_INVOKABLE QVariantList cppMemberTypeRuleDefaults() const;
   QList<CppMemberTypeRule> cppMemberTypeRuleValues() const;
   Q_INVOKABLE bool setCppMemberTypeRules(const QVariantList &rules);
+  QVariantMap contextToolboxConfiguration() const;
+  Q_INVOKABLE QVariantMap contextToolboxDefaults() const;
+  Q_INVOKABLE bool
+  setContextToolboxConfiguration(const QVariantMap &configuration);
   QString packageReassignmentPolicy() const;
   void setPackageReassignmentPolicy(const QString &policy);
   QVariantList recentProjects() const;
@@ -97,6 +106,7 @@ signals:
   void relationshipGestureKeysChanged();
   void cppInterfacePatternChanged();
   void cppMemberTypeRulesChanged();
+  void contextToolboxConfigurationChanged();
   void packageReassignmentPolicyChanged();
   void recentProjectsChanged();
 
@@ -104,6 +114,7 @@ private:
   void persistDiagramPreferences() const;
   void persistConnectorPreferences() const;
   void persistCppImportPreferences() const;
+  void persistContextToolboxPreferences() const;
   void persistModelingPreferences() const;
   void persistRecentProjects() const;
 
@@ -116,6 +127,7 @@ private:
   QVariantMap m_relationshipGestureKeys;
   QString m_cppInterfacePattern;
   QList<CppMemberTypeRule> m_cppMemberTypeRules;
+  QVariantMap m_contextToolboxConfiguration;
   QString m_packageReassignmentPolicy = QStringLiteral("ask");
   QStringList m_recentProjectPaths;
 };

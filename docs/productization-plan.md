@@ -1,8 +1,8 @@
 # uuml Productization Plan
 
-Status: command foundation, the Phase 3 core, relationship annotations, and
-stereotypes are implemented; contextual toolbox expansion remains in progress.
-Phase 4 source import and relationship inference are implemented, with
+Status: command foundation, the Phase 3 core, contextual toolboxes,
+relationship annotations, and stereotypes are implemented. Phase 4 source
+import and relationship inference are implemented, with
 synchronization hardening in progress. Phase 5 release and persistence
 hardening is underway
 
@@ -254,8 +254,7 @@ history memory grow with total project size rather than the size of each edit.
   presentations resume inheritance. The registry and every assignment persist
   in project JSON5 rather than application preferences.
 
-### 3.8 Contextual hover toolboxes — core target providers implemented;
-customization planned
+### 3.8 Contextual hover toolboxes — implemented
 
 - Keep contextual toolboxes task-specific instead of building one universal
   floating toolbar. The implemented selected-edge toolbox remains dedicated to
@@ -299,10 +298,14 @@ customization planned
   dismisses on Escape, selection change, diagram deactivation, or a short
   pointer-leave delay. Keyboard focus and touch/pen invocation must not depend
   on hover.
-- The remaining expansion is user customization: allow users to choose which
-  applicable non-destructive commands appear in each toolbox without changing
-  the provider priority or interaction rules. Include multi-window focus,
-  zoom, clipping, accessibility, and command undo/redo tests in that slice.
+- Toolbox customization is implemented as an application preference. Separate
+  ordered lists cover relationship creation, multi-selection, selected
+  connectors, and selected elements or containers. Users can enable, disable,
+  reorder, and reset non-destructive actions without changing provider priority
+  or target applicability. Changes apply immediately to main and detached
+  diagram windows; an all-disabled or inapplicable provider does not show an
+  empty floating frame. Persistence, accessibility labels, runtime QML
+  creation, and existing command undo/redo paths are covered by tests.
 
 ### 3.9 Relationship ends, movable annotations, and stereotypes — implemented
 
@@ -395,10 +398,12 @@ customization planned
   By-value members and configured owning pointer templates produce composition;
   configured shared pointer templates and raw pointer/reference members produce
   aggregation; unknown wrappers remain association; and parameter/return-only
-  use produces dependency. Owning and shared pointer templates are editable,
-  persisted preferences (defaulting to `std::unique_ptr` and
-  `std::shared_ptr`). Reclassification keeps stable bindings and therefore uses
-  the normal user-authoritative conflict rules.
+  use produces dependency. Wrapper and container mappings are editable in a
+  dedicated **C++ Relationships** preferences page, including relationship
+  type, source-end multiplicity, and target template argument. The table has
+  duplicate validation and a restore-defaults action. Reclassification keeps
+  stable bindings and therefore uses the normal user-authoritative conflict
+  rules.
 - C++ implementation-file declarations receive the project catalog's `local`
   stereotype. The binding tracks only that derived assignment as source-owned:
   moving the declaration to a header removes it, while manual `private`, `api`,

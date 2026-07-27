@@ -30,6 +30,8 @@ constexpr auto kCppMemberTypeRulesKey = "memberTypeRules";
 // Read-only migration keys used by builds before the rule table existed.
 constexpr auto kCppOwningPointerTypesKey = "owningPointerTypes";
 constexpr auto kCppSharedPointerTypesKey = "sharedPointerTypes";
+constexpr auto kContextToolboxSettingsGroup = "preferences/contextToolboxes";
+constexpr auto kContextToolboxConfigurationKey = "configuration";
 constexpr auto kModelingSettingsGroup = "preferences/modeling";
 constexpr auto kPackageReassignmentPolicyKey = "packageReassignmentPolicy";
 constexpr auto kHistorySettingsGroup = "history";
@@ -189,6 +191,94 @@ void mergeLegacyRules(QList<CppMemberTypeRule> &rules,
   }
 }
 
+QVariantList toolboxEntries(std::initializer_list<const char *> actionIds) {
+  QVariantList entries;
+  entries.reserve(static_cast<qsizetype>(actionIds.size()));
+  for (const char *actionId : actionIds) {
+    entries.append(
+        QVariantMap{{QStringLiteral("actionId"), QString::fromLatin1(actionId)},
+                    {QStringLiteral("enabled"), true}});
+  }
+  return entries;
+}
+
+QVariantMap makeDefaultContextToolboxConfiguration() {
+  return {
+      {QStringLiteral("relationship"),
+       toolboxEntries(
+           {"createRelationship.dependency", "createRelationship.realization",
+            "createRelationship.generalization",
+            "createRelationship.association", "createRelationship.aggregation",
+            "createRelationship.composition",
+            "createRelationship.containment"})},
+      {QStringLiteral("selection"),
+       toolboxEntries({"arrange.alignLeft", "arrange.alignHorizontalCenters",
+                       "arrange.alignRight", "arrange.alignTop",
+                       "arrange.alignVerticalCenters", "arrange.alignBottom",
+                       "arrange.matchWidth", "arrange.matchHeight",
+                       "arrange.matchSize", "arrange.distributeHorizontally",
+                       "arrange.distributeVertically", "arrange.fitToContent",
+                       "style.assignNamed"})},
+      {QStringLiteral("connector"),
+       toolboxEntries(
+           {"connector.routeStraight", "connector.routeOrthogonal",
+            "connector.editName", "connector.editSourceRole",
+            "connector.editSourceMultiplicity", "connector.editTargetRole",
+            "connector.editTargetMultiplicity", "connector.editStereotypes",
+            "connector.resetAnnotationPositions"})},
+      {QStringLiteral("presentation"),
+       toolboxEntries({"presentation.editName", "arrange.fitToContent",
+                       "style.assignNamed",
+                       "presentation.addIncomingRelatedTypes",
+                       "presentation.addOutgoingRelatedTypes",
+                       "presentation.wrapInNamespace"})},
+  };
+}
+
+QVariantMap
+normalizedContextToolboxConfiguration(const QVariantMap &candidate) {
+  const QVariantMap defaults = makeDefaultContextToolboxConfiguration();
+  QVariantMap normalized;
+
+  for (auto group = defaults.cbegin(); group != defaults.cend(); ++group) {
+    const QVariantList defaultEntries = group.value().toList();
+    QSet<QString> knownActionIds;
+    for (const QVariant &entryValue : defaultEntries)
+      knownActionIds.insert(
+          entryValue.toMap().value(QStringLiteral("actionId")).toString());
+
+    QSet<QString> seenActionIds;
+    QVariantList entries;
+    for (const QVariant &entryValue : candidate.value(group.key()).toList()) {
+      const QVariantMap entry = entryValue.toMap();
+      const QString actionId =
+          entry.value(QStringLiteral("actionId")).toString();
+      if (!knownActionIds.contains(actionId) ||
+          seenActionIds.contains(actionId))
+        continue;
+      entries.append(
+          QVariantMap{{QStringLiteral("actionId"), actionId},
+                      {QStringLiteral("enabled"),
+                       entry.value(QStringLiteral("enabled"), true).toBool()}});
+      seenActionIds.insert(actionId);
+    }
+
+    // A newly introduced command must appear for existing installations. An
+    // explicit disabled entry remains disabled; only genuinely unknown entries
+    // are appended with their product default.
+    for (const QVariant &entryValue : defaultEntries) {
+      const QVariantMap entry = entryValue.toMap();
+      const QString actionId =
+          entry.value(QStringLiteral("actionId")).toString();
+      if (seenActionIds.contains(actionId))
+        continue;
+      entries.append(entry);
+    }
+    normalized.insert(group.key(), entries);
+  }
+  return normalized;
+}
+
 } // namespace
 
 ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
@@ -273,6 +363,11 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
   }
   settings.endGroup();
 
+  settings.beginGroup(QLatin1String(kContextToolboxSettingsGroup));
+  m_contextToolboxConfiguration = normalizedContextToolboxConfiguration(
+      settings.value(QLatin1String(kContextToolboxConfigurationKey)).toMap());
+  settings.endGroup();
+
   settings.beginGroup(QLatin1String(kModelingSettingsGroup));
   m_packageReassignmentPolicy = normalizedPackageReassignmentPolicy(
       settings
@@ -314,6 +409,10 @@ QString ApplicationSettings::defaultCppInterfacePattern() {
 
 QVariantList ApplicationSettings::defaultCppMemberTypeRules() {
   return memberTypeRuleVariants(CppImportOptions::defaultMemberTypeRules());
+}
+
+QVariantMap ApplicationSettings::defaultContextToolboxConfiguration() {
+  return makeDefaultContextToolboxConfiguration();
 }
 
 QString ApplicationSettings::defaultPackageReassignmentPolicy() {
@@ -432,6 +531,10 @@ QVariantList ApplicationSettings::cppMemberTypeRules() const {
   return memberTypeRuleVariants(m_cppMemberTypeRules);
 }
 
+QVariantList ApplicationSettings::cppMemberTypeRuleDefaults() const {
+  return defaultCppMemberTypeRules();
+}
+
 QList<CppMemberTypeRule> ApplicationSettings::cppMemberTypeRuleValues() const {
   return m_cppMemberTypeRules;
 }
@@ -445,6 +548,26 @@ bool ApplicationSettings::setCppMemberTypeRules(const QVariantList &rules) {
   m_cppMemberTypeRules = normalized;
   persistCppImportPreferences();
   emit cppMemberTypeRulesChanged();
+  return true;
+}
+
+QVariantMap ApplicationSettings::contextToolboxConfiguration() const {
+  return m_contextToolboxConfiguration;
+}
+
+QVariantMap ApplicationSettings::contextToolboxDefaults() const {
+  return defaultContextToolboxConfiguration();
+}
+
+bool ApplicationSettings::setContextToolboxConfiguration(
+    const QVariantMap &configuration) {
+  const QVariantMap normalized =
+      normalizedContextToolboxConfiguration(configuration);
+  if (m_contextToolboxConfiguration == normalized)
+    return true;
+  m_contextToolboxConfiguration = normalized;
+  persistContextToolboxPreferences();
+  emit contextToolboxConfigurationChanged();
   return true;
 }
 
@@ -515,6 +638,7 @@ void ApplicationSettings::resetDefaults() {
   setRelationshipGestureKeys(makeDefaultRelationshipGestureKeys());
   setCppInterfacePattern(defaultCppInterfacePattern());
   setCppMemberTypeRules(defaultCppMemberTypeRules());
+  setContextToolboxConfiguration(defaultContextToolboxConfiguration());
   setPackageReassignmentPolicy(defaultPackageReassignmentPolicy());
 }
 
@@ -554,6 +678,15 @@ void ApplicationSettings::persistCppImportPreferences() const {
                     memberTypeRuleVariants(m_cppMemberTypeRules));
   settings.remove(QLatin1String(kCppOwningPointerTypesKey));
   settings.remove(QLatin1String(kCppSharedPointerTypesKey));
+  settings.endGroup();
+  settings.sync();
+}
+
+void ApplicationSettings::persistContextToolboxPreferences() const {
+  QSettings settings;
+  settings.beginGroup(QLatin1String(kContextToolboxSettingsGroup));
+  settings.setValue(QLatin1String(kContextToolboxConfigurationKey),
+                    m_contextToolboxConfiguration);
   settings.endGroup();
   settings.sync();
 }

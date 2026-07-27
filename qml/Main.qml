@@ -1350,6 +1350,120 @@ ApplicationWindow {
             }
             return true
         }
+        readonly property var contextToolboxKinds: [
+            { id: "relationship", label: qsTr("Relationship creation") },
+            { id: "selection", label: qsTr("Multiple selection") },
+            { id: "connector", label: qsTr("Selected connector") },
+            { id: "presentation", label: qsTr("Selected element or container") }
+        ]
+        readonly property var contextToolboxActionLabels: ({
+            "createRelationship.dependency": qsTr("Create dependency"),
+            "createRelationship.realization": qsTr("Create realization / implementation"),
+            "createRelationship.generalization": qsTr("Create generalization / inheritance"),
+            "createRelationship.association": qsTr("Create navigable association"),
+            "createRelationship.aggregation": qsTr("Create aggregation"),
+            "createRelationship.composition": qsTr("Create composition"),
+            "createRelationship.containment": qsTr("Create containment / nesting"),
+            "arrange.alignLeft": qsTr("Align left edges"),
+            "arrange.alignHorizontalCenters": qsTr("Align horizontal centers"),
+            "arrange.alignRight": qsTr("Align right edges"),
+            "arrange.alignTop": qsTr("Align top edges"),
+            "arrange.alignVerticalCenters": qsTr("Align vertical centers"),
+            "arrange.alignBottom": qsTr("Align bottom edges"),
+            "arrange.matchWidth": qsTr("Make same width"),
+            "arrange.matchHeight": qsTr("Make same height"),
+            "arrange.matchSize": qsTr("Make same size"),
+            "arrange.distributeHorizontally": qsTr("Distribute horizontally"),
+            "arrange.distributeVertically": qsTr("Distribute vertically"),
+            "arrange.fitToContent": qsTr("Fit to content"),
+            "style.assignNamed": qsTr("Choose named style"),
+            "connector.routeStraight": qsTr("Use straight routing"),
+            "connector.routeOrthogonal": qsTr("Use orthogonal routing"),
+            "connector.editName": qsTr("Edit relationship name"),
+            "connector.editSourceRole": qsTr("Edit source role"),
+            "connector.editSourceMultiplicity": qsTr("Edit source cardinality"),
+            "connector.editTargetRole": qsTr("Edit target role"),
+            "connector.editTargetMultiplicity": qsTr("Edit target cardinality"),
+            "connector.editStereotypes": qsTr("Choose relationship stereotypes"),
+            "connector.resetAnnotationPositions": qsTr("Reset annotation positions"),
+            "presentation.editName": qsTr("Edit name"),
+            "presentation.addIncomingRelatedTypes": qsTr("Add types that depend on this"),
+            "presentation.addOutgoingRelatedTypes": qsTr("Add types this depends on"),
+            "presentation.wrapInNamespace": qsTr("Wrap in parent namespace")
+        })
+
+        function contextToolboxModel(index) {
+            if (index === 0)
+                return relationshipToolboxPreferencesModel
+            if (index === 1)
+                return selectionToolboxPreferencesModel
+            if (index === 2)
+                return connectorToolboxPreferencesModel
+            return presentationToolboxPreferencesModel
+        }
+
+        function populateContextToolboxModel(model, entries) {
+            model.clear()
+            for (let index = 0; index < entries.length; ++index) {
+                const entry = entries[index]
+                model.append({
+                    actionId: entry.actionId,
+                    actionLabel: contextToolboxActionLabels[entry.actionId]
+                                 || entry.actionId,
+                    actionEnabled: entry.enabled
+                })
+            }
+        }
+
+        function loadContextToolboxConfiguration(configuration) {
+            for (let index = 0; index < contextToolboxKinds.length; ++index) {
+                const toolboxId = contextToolboxKinds[index].id
+                populateContextToolboxModel(
+                            contextToolboxModel(index),
+                            configuration[toolboxId] || [])
+            }
+        }
+
+        function loadCppMemberTypeRules(rules) {
+            cppMemberTypeRulesModel.clear()
+            for (let index = 0; index < rules.length; ++index) {
+                const rule = rules[index]
+                cppMemberTypeRulesModel.append({
+                    typeName: rule.typeName,
+                    relationshipType: rule.relationshipType,
+                    multiplicity: rule.multiplicity,
+                    targetArgument: rule.targetArgument
+                })
+            }
+            ++cppMemberTypeRulesRevision
+        }
+
+        function stagedContextToolboxConfiguration() {
+            const configuration = {}
+            for (let groupIndex = 0;
+                 groupIndex < contextToolboxKinds.length; ++groupIndex) {
+                const entries = []
+                const model = contextToolboxModel(groupIndex)
+                for (let index = 0; index < model.count; ++index) {
+                    const entry = model.get(index)
+                    entries.push({
+                        actionId: entry.actionId,
+                        enabled: entry.actionEnabled
+                    })
+                }
+                configuration[contextToolboxKinds[groupIndex].id] = entries
+            }
+            return configuration
+        }
+
+        function resetCurrentContextToolbox() {
+            const defaults = applicationSettings.contextToolboxDefaults()
+            const toolboxId =
+                    contextToolboxKinds[contextToolboxKind.currentIndex].id
+            populateContextToolboxModel(
+                        contextToolboxModel(contextToolboxKind.currentIndex),
+                        defaults[toolboxId] || [])
+        }
 
         function updateOkButton() {
             const button = standardButton(Dialog.Ok)
@@ -1387,18 +1501,9 @@ ApplicationWindow {
             compositionGestureKey.text = gestureKeys.composition
             containmentGestureKey.text = gestureKeys.containment
             cppInterfacePattern.text = applicationSettings.cppInterfacePattern
-            cppMemberTypeRulesModel.clear()
-            const memberRules = applicationSettings.cppMemberTypeRules
-            for (let index = 0; index < memberRules.length; ++index) {
-                const rule = memberRules[index]
-                cppMemberTypeRulesModel.append({
-                    typeName: rule.typeName,
-                    relationshipType: rule.relationshipType,
-                    multiplicity: rule.multiplicity,
-                    targetArgument: rule.targetArgument
-                })
-            }
-            ++cppMemberTypeRulesRevision
+            loadCppMemberTypeRules(applicationSettings.cppMemberTypeRules)
+            loadContextToolboxConfiguration(
+                        applicationSettings.contextToolboxConfiguration)
             Qt.callLater(updateOkButton)
             colorPreferencesModel.clear()
             const roles = uiTheme.colorRoles
@@ -1449,6 +1554,8 @@ ApplicationWindow {
                 })
             }
             applicationSettings.setCppMemberTypeRules(memberRules)
+            applicationSettings.setContextToolboxConfiguration(
+                        stagedContextToolboxConfiguration())
             const colors = {}
             for (let index = 0; index < colorPreferencesModel.count; ++index) {
                 const entry = colorPreferencesModel.get(index)
@@ -1467,6 +1574,8 @@ ApplicationWindow {
                 Layout.fillWidth: true
                 TabButton { text: qsTr("General") }
                 TabButton { text: qsTr("Connectors") }
+                TabButton { text: qsTr("Toolboxes") }
+                TabButton { text: qsTr("C++ Relationships") }
                 TabButton { text: qsTr("Colors") }
             }
 
@@ -1571,173 +1680,6 @@ ApplicationWindow {
                             wrapMode: Text.Wrap
                             color: uiTheme.mutedText
                             text: qsTr("Controls whether dragging in the project tree changes a type's UML package or enclosing type. Diagram dragging is always presentation-only.")
-                        }
-                        Label {
-                            text: qsTr("C++ import")
-                            font.bold: true
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            wrapMode: Text.Wrap
-                            text: qsTr("Base class names matching this regular expression are imported as realization / implementation relationships. Matching uses the unqualified name, such as IService rather than app::IService.")
-                        }
-                        RowLayout {
-                            Layout.fillWidth: true
-                            Label { text: qsTr("Interface pattern") }
-                            TextField {
-                                id: cppInterfacePattern
-                                Layout.fillWidth: true
-                                selectByMouse: true
-                                placeholderText: "^I[A-Z].*$"
-                            }
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            visible: !preferencesDialog.cppInterfacePatternValid
-                            color: uiTheme.warningBorder
-                            text: qsTr("Enter a valid, non-empty regular expression.")
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            wrapMode: Text.Wrap
-                            color: uiTheme.mutedText
-                            text: qsTr("Rules map a C++ wrapper or container to an imported UML relationship and source-end multiplicity. The target argument is one-based: use 2 for the mapped value in map<Key, Value>. A multiplicity such as {2} reads the corresponding non-type template argument, as in array<T, N>.")
-                        }
-                        Label {
-                            Layout.fillWidth: true
-                            visible: !preferencesDialog.cppMemberTypeRulesValid
-                            color: uiTheme.warningBorder
-                            text: qsTr("Every type rule needs a unique, non-empty C++ type name.")
-                        }
-                        ColumnLayout {
-                            Layout.fillWidth: true
-                            spacing: 6
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                spacing: 8
-                                Label {
-                                    Layout.fillWidth: true
-                                    text: qsTr("C++ type / template")
-                                    font.bold: true
-                                }
-                                Label {
-                                    Layout.preferredWidth: 112
-                                    text: qsTr("Relationship")
-                                    font.bold: true
-                                }
-                                Label {
-                                    Layout.preferredWidth: 86
-                                    text: qsTr("Multiplicity")
-                                    font.bold: true
-                                }
-                                Label {
-                                    Layout.preferredWidth: 72
-                                    text: qsTr("Type arg.")
-                                    font.bold: true
-                                }
-                                Item { Layout.preferredWidth: 34 }
-                            }
-
-                            Repeater {
-                                model: cppMemberTypeRulesModel
-                                delegate: RowLayout {
-                                    id: memberTypeRuleRow
-                                    required property int index
-                                    required property string typeName
-                                    required property string relationshipType
-                                    required property string multiplicity
-                                    required property int targetArgument
-                                    Layout.fillWidth: true
-                                    spacing: 8
-
-                                    TextField {
-                                        Layout.fillWidth: true
-                                        text: memberTypeRuleRow.typeName
-                                        selectByMouse: true
-                                        placeholderText: "std::vector"
-                                        onEditingFinished:
-                                        {
-                                            cppMemberTypeRulesModel.setProperty(
-                                                memberTypeRuleRow.index,
-                                                "typeName", text.trim())
-                                            ++preferencesDialog.cppMemberTypeRulesRevision
-                                        }
-                                    }
-                                    ComboBox {
-                                        Layout.preferredWidth: 112
-                                        model: [qsTr("Composition"),
-                                                qsTr("Aggregation")]
-                                        currentIndex:
-                                            memberTypeRuleRow.relationshipType
-                                            === "aggregation" ? 1 : 0
-                                        onActivated:
-                                        {
-                                            cppMemberTypeRulesModel.setProperty(
-                                                memberTypeRuleRow.index,
-                                                "relationshipType",
-                                                currentIndex === 1
-                                                ? "aggregation"
-                                                : "composition")
-                                            ++preferencesDialog.cppMemberTypeRulesRevision
-                                        }
-                                    }
-                                    TextField {
-                                        Layout.preferredWidth: 86
-                                        text: memberTypeRuleRow.multiplicity
-                                        selectByMouse: true
-                                        placeholderText: "0..*"
-                                        onEditingFinished:
-                                        {
-                                            cppMemberTypeRulesModel.setProperty(
-                                                memberTypeRuleRow.index,
-                                                "multiplicity", text.trim())
-                                            ++preferencesDialog.cppMemberTypeRulesRevision
-                                        }
-                                    }
-                                    SpinBox {
-                                        Layout.preferredWidth: 72
-                                        from: 1
-                                        to: 16
-                                        editable: true
-                                        value: memberTypeRuleRow.targetArgument
-                                        onValueModified:
-                                        {
-                                            cppMemberTypeRulesModel.setProperty(
-                                                memberTypeRuleRow.index,
-                                                "targetArgument", value)
-                                            ++preferencesDialog.cppMemberTypeRulesRevision
-                                        }
-                                    }
-                                    ToolButton {
-                                        Layout.preferredWidth: 34
-                                        text: "×"
-                                        Accessible.name: qsTr("Remove rule")
-                                        onClicked: {
-                                            cppMemberTypeRulesModel.remove(
-                                                memberTypeRuleRow.index)
-                                            ++preferencesDialog.cppMemberTypeRulesRevision
-                                        }
-                                    }
-                                }
-                            }
-
-                            RowLayout {
-                                Layout.fillWidth: true
-                                Item { Layout.fillWidth: true }
-                                Button {
-                                    text: qsTr("Add type rule")
-                                    onClicked: {
-                                        cppMemberTypeRulesModel.append({
-                                            typeName: "",
-                                            relationshipType: "composition",
-                                            multiplicity: "1",
-                                            targetArgument: 1
-                                        })
-                                        ++preferencesDialog.cppMemberTypeRulesRevision
-                                    }
-                                }
-                            }
                         }
                         Item { Layout.preferredHeight: 8 }
                     }
@@ -1860,6 +1802,288 @@ ApplicationWindow {
                     ColumnLayout {
                         anchors.fill: parent
                         anchors.margins: 8
+                        spacing: 10
+
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: qsTr("Choose which non-destructive commands appear in each contextual diagram toolbox and arrange them in the order you use most often.")
+                        }
+                        ComboBox {
+                            id: contextToolboxKind
+                            Layout.fillWidth: true
+                            textRole: "label"
+                            model: preferencesDialog.contextToolboxKinds
+                        }
+                        ListView {
+                            id: contextToolboxPreferencesList
+                            Layout.fillWidth: true
+                            Layout.fillHeight: true
+                            clip: true
+                            spacing: 2
+                            model: preferencesDialog.contextToolboxModel(
+                                       contextToolboxKind.currentIndex)
+                            ScrollBar.vertical: ScrollBar {}
+
+                            delegate: Rectangle {
+                                required property int index
+                                required property string actionId
+                                required property string actionLabel
+                                required property bool actionEnabled
+                                width: contextToolboxPreferencesList.width
+                                height: 42
+                                color: index % 2 === 0
+                                       ? uiTheme.panelBackground
+                                       : uiTheme.panelHeader
+
+                                RowLayout {
+                                    anchors.fill: parent
+                                    anchors.leftMargin: 8
+                                    anchors.rightMargin: 4
+                                    spacing: 6
+
+                                    CheckBox {
+                                        Layout.fillWidth: true
+                                        text: actionLabel
+                                        checked: actionEnabled
+                                        onToggled:
+                                            contextToolboxPreferencesList.model
+                                            .setProperty(index,
+                                                         "actionEnabled",
+                                                         checked)
+                                    }
+                                    ToolButton {
+                                        text: "↑"
+                                        enabled: index > 0
+                                        Accessible.name: qsTr("Move action up")
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: Accessible.name
+                                        onClicked:
+                                            contextToolboxPreferencesList.model
+                                            .move(index, index - 1, 1)
+                                    }
+                                    ToolButton {
+                                        text: "↓"
+                                        enabled:
+                                            index + 1
+                                            < contextToolboxPreferencesList
+                                              .model.count
+                                        Accessible.name: qsTr("Move action down")
+                                        ToolTip.visible: hovered
+                                        ToolTip.text: Accessible.name
+                                        onClicked:
+                                            contextToolboxPreferencesList.model
+                                            .move(index, index + 1, 1)
+                                    }
+                                }
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label {
+                                Layout.fillWidth: true
+                                wrapMode: Text.Wrap
+                                color: uiTheme.mutedText
+                                text: qsTr("Commands that do not apply to the current target remain hidden or disabled. Toolbox priority and hover behavior are not changed here.")
+                            }
+                            Button {
+                                text: qsTr("Reset this toolbox")
+                                onClicked:
+                                    preferencesDialog
+                                    .resetCurrentContextToolbox()
+                            }
+                        }
+                    }
+                }
+
+                ScrollView {
+                    id: cppRelationshipPreferencesScroll
+                    clip: true
+                    contentWidth: availableWidth
+
+                    ColumnLayout {
+                        width: cppRelationshipPreferencesScroll.availableWidth
+                        spacing: 10
+
+                        Label {
+                            text: qsTr("Interface recognition")
+                            font.bold: true
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            text: qsTr("Base class names matching this regular expression are imported as realization / implementation relationships. Matching uses the unqualified name, such as IService rather than app::IService.")
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label { text: qsTr("Interface pattern") }
+                            TextField {
+                                id: cppInterfacePattern
+                                Layout.fillWidth: true
+                                selectByMouse: true
+                                placeholderText: "^I[A-Z].*$"
+                            }
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: !preferencesDialog.cppInterfacePatternValid
+                            color: uiTheme.warningBorder
+                            text: qsTr("Enter a valid, non-empty regular expression.")
+                        }
+                        Label {
+                            text: qsTr("Member type mappings")
+                            font.bold: true
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            color: uiTheme.mutedText
+                            text: qsTr("Rules map a C++ wrapper or container to an imported UML relationship and source-end multiplicity. The target argument is one-based: use 2 for the mapped value in map<Key, Value>. A multiplicity such as {2} reads the corresponding non-type template argument, as in array<T, N>.")
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            visible: !preferencesDialog.cppMemberTypeRulesValid
+                            color: uiTheme.warningBorder
+                            text: qsTr("Every type rule needs a unique, non-empty C++ type name.")
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 8
+                            Label {
+                                Layout.fillWidth: true
+                                text: qsTr("C++ type / template")
+                                font.bold: true
+                            }
+                            Label {
+                                Layout.preferredWidth: 112
+                                text: qsTr("Relationship")
+                                font.bold: true
+                            }
+                            Label {
+                                Layout.preferredWidth: 86
+                                text: qsTr("Multiplicity")
+                                font.bold: true
+                            }
+                            Label {
+                                Layout.preferredWidth: 72
+                                text: qsTr("Type arg.")
+                                font.bold: true
+                            }
+                            Item { Layout.preferredWidth: 34 }
+                        }
+                        Repeater {
+                            model: cppMemberTypeRulesModel
+                            delegate: RowLayout {
+                                id: memberTypeRuleRow
+                                required property int index
+                                required property string typeName
+                                required property string relationshipType
+                                required property string multiplicity
+                                required property int targetArgument
+                                Layout.fillWidth: true
+                                spacing: 8
+
+                                TextField {
+                                    Layout.fillWidth: true
+                                    text: memberTypeRuleRow.typeName
+                                    selectByMouse: true
+                                    placeholderText: "std::vector"
+                                    onEditingFinished:
+                                    {
+                                        cppMemberTypeRulesModel.setProperty(
+                                            memberTypeRuleRow.index,
+                                            "typeName", text.trim())
+                                        ++preferencesDialog.cppMemberTypeRulesRevision
+                                    }
+                                }
+                                ComboBox {
+                                    Layout.preferredWidth: 112
+                                    model: [qsTr("Composition"),
+                                            qsTr("Aggregation")]
+                                    currentIndex:
+                                        memberTypeRuleRow.relationshipType
+                                        === "aggregation" ? 1 : 0
+                                    onActivated:
+                                    {
+                                        cppMemberTypeRulesModel.setProperty(
+                                            memberTypeRuleRow.index,
+                                            "relationshipType",
+                                            currentIndex === 1
+                                            ? "aggregation"
+                                            : "composition")
+                                        ++preferencesDialog.cppMemberTypeRulesRevision
+                                    }
+                                }
+                                TextField {
+                                    Layout.preferredWidth: 86
+                                    text: memberTypeRuleRow.multiplicity
+                                    selectByMouse: true
+                                    placeholderText: "0..*"
+                                    onEditingFinished:
+                                    {
+                                        cppMemberTypeRulesModel.setProperty(
+                                            memberTypeRuleRow.index,
+                                            "multiplicity", text.trim())
+                                        ++preferencesDialog.cppMemberTypeRulesRevision
+                                    }
+                                }
+                                SpinBox {
+                                    Layout.preferredWidth: 72
+                                    from: 1
+                                    to: 16
+                                    editable: true
+                                    value: memberTypeRuleRow.targetArgument
+                                    onValueModified:
+                                    {
+                                        cppMemberTypeRulesModel.setProperty(
+                                            memberTypeRuleRow.index,
+                                            "targetArgument", value)
+                                        ++preferencesDialog.cppMemberTypeRulesRevision
+                                    }
+                                }
+                                ToolButton {
+                                    Layout.preferredWidth: 34
+                                    text: "×"
+                                    Accessible.name: qsTr("Remove rule")
+                                    onClicked: {
+                                        cppMemberTypeRulesModel.remove(
+                                            memberTypeRuleRow.index)
+                                        ++preferencesDialog.cppMemberTypeRulesRevision
+                                    }
+                                }
+                            }
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Button {
+                                text: qsTr("Restore default mappings")
+                                onClicked:
+                                    preferencesDialog.loadCppMemberTypeRules(
+                                        applicationSettings
+                                        .cppMemberTypeRuleDefaults())
+                            }
+                            Item { Layout.fillWidth: true }
+                            Button {
+                                text: qsTr("Add type rule")
+                                onClicked: {
+                                    cppMemberTypeRulesModel.append({
+                                        typeName: "",
+                                        relationshipType: "composition",
+                                        multiplicity: "1",
+                                        targetArgument: 1
+                                    })
+                                    ++preferencesDialog.cppMemberTypeRulesRevision
+                                }
+                            }
+                        }
+                        Item { Layout.preferredHeight: 8 }
+                    }
+                }
+
+                Item {
+                    ColumnLayout {
+                        anchors.fill: parent
+                        anchors.margins: 8
                         spacing: 8
 
                         Label {
@@ -1971,6 +2195,10 @@ ApplicationWindow {
 
         ListModel { id: colorPreferencesModel }
         ListModel { id: cppMemberTypeRulesModel }
+        ListModel { id: relationshipToolboxPreferencesModel }
+        ListModel { id: selectionToolboxPreferencesModel }
+        ListModel { id: connectorToolboxPreferencesModel }
+        ListModel { id: presentationToolboxPreferencesModel }
     }
 
     ColorDialog {

@@ -3747,6 +3747,8 @@ void CoreTests::applicationPreferencesPersist() {
              ApplicationSettings::defaultCppInterfacePattern());
     QCOMPARE(settings.cppMemberTypeRules(),
              ApplicationSettings::defaultCppMemberTypeRules());
+    QCOMPARE(settings.contextToolboxConfiguration(),
+             ApplicationSettings::defaultContextToolboxConfiguration());
     QCOMPARE(settings.packageReassignmentPolicy(), QStringLiteral("ask"));
     QCOMPARE(settings.relationshipGestureKeys(),
              ApplicationSettings::defaultRelationshipGestureKeys());
@@ -3788,6 +3790,30 @@ void CoreTests::applicationPreferencesPersist() {
             {QStringLiteral("targetArgument"), 1}},
     };
     QCOMPARE(settings.cppMemberTypeRules(), normalizedMemberRules);
+    QVariantMap toolboxConfiguration =
+        ApplicationSettings::defaultContextToolboxConfiguration();
+    QVariantList selectionActions =
+        toolboxConfiguration.value(QStringLiteral("selection")).toList();
+    QVariantMap disabledStyle = selectionActions.takeLast().toMap();
+    disabledStyle.insert(QStringLiteral("enabled"), false);
+    selectionActions.prepend(disabledStyle);
+    toolboxConfiguration.insert(QStringLiteral("selection"), selectionActions);
+    QVERIFY(settings.setContextToolboxConfiguration(toolboxConfiguration));
+    QCOMPARE(settings.contextToolboxConfiguration()
+                 .value(QStringLiteral("selection"))
+                 .toList()
+                 .first()
+                 .toMap()
+                 .value(QStringLiteral("actionId"))
+                 .toString(),
+             QStringLiteral("style.assignNamed"));
+    QVERIFY(!settings.contextToolboxConfiguration()
+                 .value(QStringLiteral("selection"))
+                 .toList()
+                 .first()
+                 .toMap()
+                 .value(QStringLiteral("enabled"))
+                 .toBool());
     QVariantMap gestureKeys =
         ApplicationSettings::defaultRelationshipGestureKeys();
     gestureKeys.insert(QStringLiteral("dependency"), QStringLiteral("X"));
@@ -3823,6 +3849,19 @@ void CoreTests::applicationPreferencesPersist() {
             {QStringLiteral("targetArgument"), 1}},
     };
     QCOMPARE(restored.cppMemberTypeRules(), expectedMemberRules);
+    const QVariantList restoredSelectionActions =
+        restored.contextToolboxConfiguration()
+            .value(QStringLiteral("selection"))
+            .toList();
+    QCOMPARE(restoredSelectionActions.first()
+                 .toMap()
+                 .value(QStringLiteral("actionId"))
+                 .toString(),
+             QStringLiteral("style.assignNamed"));
+    QVERIFY(!restoredSelectionActions.first()
+                 .toMap()
+                 .value(QStringLiteral("enabled"))
+                 .toBool());
     QCOMPARE(restored.packageReassignmentPolicy(), QStringLiteral("allow"));
     QVariantMap expectedGestureKeys =
         ApplicationSettings::defaultRelationshipGestureKeys();
@@ -3856,6 +3895,8 @@ void CoreTests::applicationPreferencesPersist() {
              ApplicationSettings::defaultCppInterfacePattern());
     QCOMPARE(restored.cppMemberTypeRules(),
              ApplicationSettings::defaultCppMemberTypeRules());
+    QCOMPARE(restored.contextToolboxConfiguration(),
+             ApplicationSettings::defaultContextToolboxConfiguration());
     QCOMPARE(restored.packageReassignmentPolicy(), QStringLiteral("ask"));
     QCOMPARE(restored.relationshipGestureKeys(),
              ApplicationSettings::defaultRelationshipGestureKeys());

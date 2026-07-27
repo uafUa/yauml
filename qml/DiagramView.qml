@@ -49,38 +49,215 @@ Item {
             label: qsTr("Containment")
         }
     ]
-    readonly property var connectorAnnotationActions: [
+    readonly property var arrangementToolboxActions: [
         {
+            actionId: "arrange.alignLeft",
+            action: alignLeftAction,
+            fallback: qsTr("L")
+        },
+        {
+            actionId: "arrange.alignHorizontalCenters",
+            action: alignHorizontalCenterAction,
+            fallback: qsTr("HC")
+        },
+        {
+            actionId: "arrange.alignRight",
+            action: alignRightAction,
+            fallback: qsTr("R")
+        },
+        {
+            actionId: "arrange.alignTop",
+            action: alignTopAction,
+            fallback: qsTr("T")
+        },
+        {
+            actionId: "arrange.alignVerticalCenters",
+            action: alignVerticalCenterAction,
+            fallback: qsTr("VC")
+        },
+        {
+            actionId: "arrange.alignBottom",
+            action: alignBottomAction,
+            fallback: qsTr("B")
+        },
+        {
+            actionId: "arrange.matchWidth",
+            action: matchWidthAction,
+            fallback: qsTr("W")
+        },
+        {
+            actionId: "arrange.matchHeight",
+            action: matchHeightAction,
+            fallback: qsTr("H")
+        },
+        {
+            actionId: "arrange.matchSize",
+            action: matchSizeAction,
+            fallback: qsTr("WH")
+        },
+        {
+            actionId: "arrange.distributeHorizontally",
+            action: distributeHorizontallyAction,
+            fallback: qsTr("DH")
+        },
+        {
+            actionId: "arrange.distributeVertically",
+            action: distributeVerticallyAction,
+            fallback: qsTr("DV")
+        },
+        {
+            actionId: "arrange.fitToContent",
+            action: fitSelectionAction,
+            fallback: qsTr("Fit")
+        },
+        {
+            actionId: "style.assignNamed",
+            kind: "style",
+            fallback: qsTr("Style"),
+            label: qsTr("Choose style for selection")
+        }
+    ]
+    readonly property var connectorToolboxActions: [
+        {
+            actionId: "connector.routeStraight",
+            kind: "routing",
+            value: "straight",
+            fallback: qsTr("—"),
+            label: qsTr("Use straight routing")
+        },
+        {
+            actionId: "connector.routeOrthogonal",
+            kind: "routing",
+            value: "orthogonal",
+            fallback: qsTr("⌞"),
+            label: qsTr("Use orthogonal routing")
+        },
+        {
+            actionId: "connector.editName",
+            kind: "annotation",
             field: "name",
             fallback: qsTr("N"),
             label: qsTr("Edit relationship name")
         },
         {
+            actionId: "connector.editSourceRole",
+            kind: "annotation",
             field: "sourceRole",
             fallback: qsTr("SR"),
             label: qsTr("Edit source role")
         },
         {
+            actionId: "connector.editSourceMultiplicity",
+            kind: "annotation",
             field: "sourceMultiplicity",
             fallback: qsTr("S#"),
             label: qsTr("Edit source cardinality")
         },
         {
+            actionId: "connector.editTargetRole",
+            kind: "annotation",
             field: "targetRole",
             fallback: qsTr("TR"),
             label: qsTr("Edit target role")
         },
         {
+            actionId: "connector.editTargetMultiplicity",
+            kind: "annotation",
             field: "targetMultiplicity",
             fallback: qsTr("T#"),
             label: qsTr("Edit target cardinality")
         },
         {
+            actionId: "connector.editStereotypes",
+            kind: "annotation",
             field: "stereotypes",
             fallback: qsTr("«»"),
             label: qsTr("Choose relationship stereotypes")
+        },
+        {
+            actionId: "connector.resetAnnotationPositions",
+            kind: "reset",
+            fallback: qsTr("↺"),
+            label: qsTr("Reset all annotation positions")
         }
     ]
+    readonly property var presentationToolboxActions: [
+        {
+            actionId: "presentation.editName",
+            kind: "editName",
+            fallback: qsTr("Aa"),
+            label: qsTr("Edit name")
+        },
+        {
+            actionId: "arrange.fitToContent",
+            kind: "fit",
+            fallback: qsTr("Fit"),
+            label: qsTr("Fit to content")
+        },
+        {
+            actionId: "style.assignNamed",
+            kind: "style",
+            fallback: qsTr("Style"),
+            label: qsTr("Choose style")
+        },
+        {
+            actionId: "presentation.addIncomingRelatedTypes",
+            kind: "incoming",
+            fallback: qsTr("←+"),
+            label: qsTr("Add types that depend on this")
+        },
+        {
+            actionId: "presentation.addOutgoingRelatedTypes",
+            kind: "outgoing",
+            fallback: qsTr("+→"),
+            label: qsTr("Add types this depends on")
+        },
+        {
+            actionId: "presentation.wrapInNamespace",
+            kind: "wrap",
+            fallback: qsTr("Wrap"),
+            label: qsTr("Wrap in parent namespace")
+        }
+    ]
+
+    function configuredToolboxActions(toolboxId, descriptors) {
+        // Reading the property here makes every toolbox react immediately when
+        // Preferences is accepted, including diagram views in detached windows.
+        const configuration = applicationSettings.contextToolboxConfiguration
+        const entries = configuration[toolboxId] || []
+        const descriptorById = {}
+        for (let index = 0; index < descriptors.length; ++index)
+            descriptorById[descriptors[index].actionId] = descriptors[index]
+
+        const result = []
+        for (let index = 0; index < entries.length; ++index) {
+            const entry = entries[index]
+            const descriptor = descriptorById[entry.actionId]
+            if (entry.enabled && descriptor)
+                result.push(descriptor)
+        }
+        return result
+    }
+    readonly property var activeRelationshipToolboxActions:
+        configuredToolboxActions("relationship", relationshipToolboxActions)
+    readonly property var activeArrangementToolboxActions:
+        configuredToolboxActions("selection", arrangementToolboxActions)
+    readonly property var activeConnectorToolboxActions:
+        configuredToolboxActions("connector", connectorToolboxActions)
+    readonly property var activePresentationToolboxActions:
+        configuredToolboxActions("presentation", presentationToolboxActions)
+
+    function presentationToolboxHasApplicableAction() {
+        for (let index = 0;
+             index < activePresentationToolboxActions.length; ++index) {
+            const kind = activePresentationToolboxActions[index].kind
+            if (canvas.presentationToolboxKind === "node")
+                return true
+            if (kind !== "incoming" && kind !== "outgoing" && kind !== "wrap")
+                return true
+        }
+        return false
+    }
 
     function addElementsAt(elementIds, x, y) {
         canvas.addElementsAt(elementIds, x, y)
@@ -757,6 +934,7 @@ Item {
     ContextToolboxFrame {
         id: relationshipToolbox
         candidate: canvas.relationshipToolboxCandidate && !editor.visible
+                   && root.activeRelationshipToolboxActions.length > 0
         candidateKey: canvas.relationshipToolboxNodeId + ":"
                       + canvas.relationshipToolboxEdge
         anchor: canvas.relationshipToolboxViewAnchor
@@ -767,7 +945,7 @@ Item {
             spacing: 2
 
             Repeater {
-                model: root.relationshipToolboxActions
+                model: root.activeRelationshipToolboxActions
 
                 CatalogToolButton {
                     id: relationshipToolboxButton
@@ -859,6 +1037,7 @@ Item {
         candidate: canvas.arrangementToolboxCandidate
                    && canvas.selectedNodeCount >= 2
                    && !editor.visible
+                   && root.activeArrangementToolboxActions.length > 0
         candidateKey: canvas.arrangementToolboxNodeId
         anchor: canvas.arrangementToolboxViewAnchor
         placement: "top"
@@ -869,80 +1048,36 @@ Item {
             spacing: 2
 
             Repeater {
-                model: [
-                    { action: alignLeftAction, fallback: qsTr("L") },
-                    { action: alignHorizontalCenterAction,
-                      fallback: qsTr("HC") },
-                    { action: alignRightAction, fallback: qsTr("R") },
-                    { action: alignTopAction, fallback: qsTr("T") },
-                    { action: alignVerticalCenterAction,
-                      fallback: qsTr("VC") },
-                    { action: alignBottomAction, fallback: qsTr("B") },
-                    { action: matchWidthAction, fallback: qsTr("W") },
-                    { action: matchHeightAction, fallback: qsTr("H") },
-                    { action: matchSizeAction, fallback: qsTr("WH") },
-                    { action: distributeHorizontallyAction,
-                      fallback: qsTr("DH") },
-                    { action: distributeVerticallyAction,
-                      fallback: qsTr("DV") }
-                ]
+                model: root.activeArrangementToolboxActions
 
                 CatalogToolButton {
                     required property var modelData
-                    catalogId: modelData.action.catalogId
+                    catalogId: modelData.actionId
                     width: 32
                     height: 32
                     text: modelData.fallback
-                    enabled: modelData.action.enabled
+                    enabled: modelData.kind === "style"
+                             || modelData.action.enabled
                     display: icon.source.toString().length > 0
                              ? AbstractButton.IconOnly
                              : AbstractButton.TextOnly
-                    Accessible.name: modelData.action.text
+                    Accessible.name: modelData.kind === "style"
+                                     ? modelData.label
+                                     : modelData.action.text
                     ToolTip.visible: hovered
-                    ToolTip.text: modelData.action.text
+                    ToolTip.text: Accessible.name
                     onClicked: {
-                        modelData.action.trigger()
+                        if (modelData.kind === "style") {
+                            const menuPoint = mapToItem(root, 0, height)
+                            presentationStyleQuickMenu.x = menuPoint.x
+                            presentationStyleQuickMenu.y = menuPoint.y
+                            arrangementToolbox.dismiss()
+                            presentationStyleQuickMenu.open()
+                        } else {
+                            modelData.action.trigger()
+                        }
                         canvas.forceActiveFocus()
                     }
-                }
-            }
-
-            CatalogToolButton {
-                catalogId: "arrange.fitToContent"
-                width: 32
-                height: 32
-                text: qsTr("Fit")
-                enabled: fitSelectionAction.enabled
-                display: icon.source.toString().length > 0
-                         ? AbstractButton.IconOnly
-                         : AbstractButton.TextOnly
-                Accessible.name: fitSelectionAction.text
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: {
-                    fitSelectionAction.trigger()
-                    canvas.forceActiveFocus()
-                }
-            }
-
-            CatalogToolButton {
-                id: arrangementStyleButton
-                catalogId: "style.assignNamed"
-                width: 32
-                height: 32
-                text: qsTr("Style")
-                display: icon.source.toString().length > 0
-                         ? AbstractButton.IconOnly
-                         : AbstractButton.TextOnly
-                Accessible.name: qsTr("Choose style for selection")
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: {
-                    const menuPoint = mapToItem(root, 0, height)
-                    presentationStyleQuickMenu.x = menuPoint.x
-                    presentationStyleQuickMenu.y = menuPoint.y
-                    arrangementToolbox.dismiss()
-                    presentationStyleQuickMenu.open()
                 }
             }
         }
@@ -954,6 +1089,7 @@ Item {
         candidate: canvas.connectorToolboxCandidate
                    && canvas.connectorSelected
                    && !editor.visible
+                   && root.activeConnectorToolboxActions.length > 0
         candidateKey: canvas.connectorToolboxConnectorId
         anchor: canvas.connectorToolboxViewAnchor
         placement: "top"
@@ -962,87 +1098,39 @@ Item {
         Row {
             spacing: 2
 
-            CatalogToolButton {
-                catalogId: "connector.routeStraight"
-                width: 32
-                height: 32
-                text: qsTr("—")
-                checkable: true
-                checked: canvas.selectedConnectorRouting === "straight"
-                display: icon.source.toString().length > 0
-                         ? AbstractButton.IconOnly
-                         : AbstractButton.TextOnly
-                Accessible.name: qsTr("Use straight routing")
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: {
-                    canvas.setSelectedConnectorRouting("straight")
-                    canvas.forceActiveFocus()
-                }
-            }
-
-            CatalogToolButton {
-                catalogId: "connector.routeOrthogonal"
-                width: 32
-                height: 32
-                text: qsTr("⌞")
-                checkable: true
-                checked: canvas.selectedConnectorRouting === "orthogonal"
-                display: icon.source.toString().length > 0
-                         ? AbstractButton.IconOnly
-                         : AbstractButton.TextOnly
-                Accessible.name: qsTr("Use orthogonal routing")
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: {
-                    canvas.setSelectedConnectorRouting("orthogonal")
-                    canvas.forceActiveFocus()
-                }
-            }
-
-            Rectangle {
-                width: 1
-                height: 24
-                anchors.verticalCenter: parent.verticalCenter
-                color: uiTheme.overlayBorder
-            }
-
             Repeater {
-                model: root.connectorAnnotationActions
+                model: root.activeConnectorToolboxActions
 
-                ToolButton {
+                CatalogToolButton {
                     required property var modelData
+                    catalogId: modelData.actionId
                     width: 32
                     height: 32
                     text: modelData.fallback
+                    checkable: modelData.kind === "routing"
+                    checked: modelData.kind === "routing"
+                             && canvas.selectedConnectorRouting
+                                === modelData.value
+                    enabled: modelData.kind !== "reset"
+                             || canvas.selectedConnectorHasManualAnnotationPositions
+                    display: icon.source.toString().length > 0
+                             ? AbstractButton.IconOnly
+                             : AbstractButton.TextOnly
                     Accessible.name: modelData.label
                     ToolTip.visible: hovered
                     ToolTip.text: modelData.label
                     onClicked: {
-                        canvas.editSelectedConnectorAnnotation(modelData.field)
-                        connectorToolbox.dismiss()
+                        if (modelData.kind === "routing") {
+                            canvas.setSelectedConnectorRouting(modelData.value)
+                            canvas.forceActiveFocus()
+                        } else if (modelData.kind === "annotation") {
+                            canvas.editSelectedConnectorAnnotation(modelData.field)
+                            connectorToolbox.dismiss()
+                        } else {
+                            canvas.resetSelectedConnectorAnnotationPositions()
+                            canvas.forceActiveFocus()
+                        }
                     }
-                }
-            }
-
-            Rectangle {
-                width: 1
-                height: 24
-                anchors.verticalCenter: parent.verticalCenter
-                color: uiTheme.overlayBorder
-            }
-
-            ToolButton {
-                width: 32
-                height: 32
-                text: qsTr("↺")
-                enabled: canvas.selectedConnectorHasManualAnnotationPositions
-                Accessible.name: qsTr("Reset all annotation positions")
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: {
-                    canvas.resetSelectedConnectorAnnotationPositions()
-                    canvas.forceActiveFocus()
                 }
             }
         }
@@ -1053,6 +1141,7 @@ Item {
         objectName: "presentationToolbox"
         candidate: canvas.presentationToolboxCandidate
                    && !editor.visible
+                   && root.presentationToolboxHasApplicableAction()
         candidateKey: canvas.presentationToolboxKind + ":"
                       + canvas.presentationToolboxPresentationId
         anchor: canvas.presentationToolboxViewAnchor
@@ -1062,111 +1151,57 @@ Item {
         Row {
             spacing: 2
 
-            ToolButton {
-                width: 38
-                height: 32
-                text: qsTr("Aa")
-                Accessible.name: qsTr("Edit name")
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: {
-                    canvas.editSelectedPresentationName()
-                    presentationToolbox.dismiss()
-                }
-            }
+            Repeater {
+                model: root.activePresentationToolboxActions
 
-            CatalogToolButton {
-                catalogId: "arrange.fitToContent"
-                width: 38
-                height: 32
-                text: qsTr("Fit")
-                display: icon.source.toString().length > 0
-                         ? AbstractButton.IconOnly
-                         : AbstractButton.TextOnly
-                Accessible.name: fitSelectionAction.text
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: {
-                    fitSelectionAction.trigger()
-                    canvas.forceActiveFocus()
-                }
-            }
-
-            CatalogToolButton {
-                id: presentationStyleButton
-                catalogId: "style.assignNamed"
-                width: 38
-                height: 32
-                text: qsTr("Style")
-                display: icon.source.toString().length > 0
-                         ? AbstractButton.IconOnly
-                         : AbstractButton.TextOnly
-                Accessible.name: qsTr("Choose style")
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: {
-                    const menuPoint = mapToItem(root, 0, height)
-                    presentationStyleQuickMenu.x = menuPoint.x
-                    presentationStyleQuickMenu.y = menuPoint.y
-                    presentationToolbox.dismiss()
-                    presentationStyleQuickMenu.open()
-                }
-            }
-
-            CatalogToolButton {
-                catalogId: "presentation.addIncomingRelatedTypes"
-                visible: canvas.presentationToolboxKind === "node"
-                width: visible ? 38 : 0
-                height: 32
-                text: qsTr("←+")
-                enabled: canvas.incomingRelatedTypeCount > 0
-                display: icon.source.toString().length > 0
-                         ? AbstractButton.IconOnly
-                         : AbstractButton.TextOnly
-                Accessible.name: qsTr("Add types that depend on this")
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: {
-                    canvas.addRelatedTypes("incoming")
-                    canvas.forceActiveFocus()
-                }
-            }
-
-            CatalogToolButton {
-                catalogId: "presentation.addOutgoingRelatedTypes"
-                visible: canvas.presentationToolboxKind === "node"
-                width: visible ? 38 : 0
-                height: 32
-                text: qsTr("+→")
-                enabled: canvas.outgoingRelatedTypeCount > 0
-                display: icon.source.toString().length > 0
-                         ? AbstractButton.IconOnly
-                         : AbstractButton.TextOnly
-                Accessible.name: qsTr("Add types this depends on")
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: {
-                    canvas.addRelatedTypes("outgoing")
-                    canvas.forceActiveFocus()
-                }
-            }
-
-            CatalogToolButton {
-                catalogId: "presentation.wrapInNamespace"
-                visible: canvas.presentationToolboxKind === "node"
-                         && canvas.canWrapSelectionInPackage
-                width: visible ? 38 : 0
-                height: 32
-                text: qsTr("Wrap")
-                display: icon.source.toString().length > 0
-                         ? AbstractButton.IconOnly
-                         : AbstractButton.TextOnly
-                Accessible.name: qsTr("Wrap in parent namespace")
-                ToolTip.visible: hovered
-                ToolTip.text: Accessible.name
-                onClicked: {
-                    canvas.wrapSelectionInPackage()
-                    canvas.forceActiveFocus()
+                CatalogToolButton {
+                    required property var modelData
+                    readonly property bool nodeOnly:
+                        modelData.kind === "incoming"
+                        || modelData.kind === "outgoing"
+                        || modelData.kind === "wrap"
+                    catalogId: modelData.actionId
+                    visible: !nodeOnly
+                             || (canvas.presentationToolboxKind === "node"
+                                 && (modelData.kind !== "wrap"
+                                     || canvas.canWrapSelectionInPackage))
+                    width: visible ? 38 : 0
+                    height: 32
+                    text: modelData.fallback
+                    enabled: modelData.kind === "incoming"
+                             ? canvas.incomingRelatedTypeCount > 0
+                             : modelData.kind === "outgoing"
+                               ? canvas.outgoingRelatedTypeCount > 0 : true
+                    display: icon.source.toString().length > 0
+                             ? AbstractButton.IconOnly
+                             : AbstractButton.TextOnly
+                    Accessible.name: modelData.label
+                    ToolTip.visible: hovered
+                    ToolTip.text: Accessible.name
+                    onClicked: {
+                        if (modelData.kind === "editName") {
+                            canvas.editSelectedPresentationName()
+                            presentationToolbox.dismiss()
+                        } else if (modelData.kind === "fit") {
+                            fitSelectionAction.trigger()
+                            canvas.forceActiveFocus()
+                        } else if (modelData.kind === "style") {
+                            const menuPoint = mapToItem(root, 0, height)
+                            presentationStyleQuickMenu.x = menuPoint.x
+                            presentationStyleQuickMenu.y = menuPoint.y
+                            presentationToolbox.dismiss()
+                            presentationStyleQuickMenu.open()
+                        } else if (modelData.kind === "incoming") {
+                            canvas.addRelatedTypes("incoming")
+                            canvas.forceActiveFocus()
+                        } else if (modelData.kind === "outgoing") {
+                            canvas.addRelatedTypes("outgoing")
+                            canvas.forceActiveFocus()
+                        } else {
+                            canvas.wrapSelectionInPackage()
+                            canvas.forceActiveFocus()
+                        }
+                    }
                 }
             }
         }
