@@ -69,6 +69,26 @@ function Find-IfwBinDirectory {
     throw "Qt Installer Framework was not found. Install it or set QIFW_ROOT."
 }
 
+function Assert-IfwVersion {
+    param(
+        [string]$InstallerBase,
+        [version]$MinimumVersion
+    )
+
+    # IFW prints its version as part of the diagnostic output even though
+    # older releases treat --version as an unknown option.
+    $versionOutput = (& $InstallerBase --version 2>&1 | Out-String)
+    if ($versionOutput -notmatch
+        'IFW Version:\s*(?<version>[0-9]+(?:\.[0-9]+){1,3})') {
+        throw "Could not determine the Qt Installer Framework version."
+    }
+    $actualVersion = [version]$Matches.version
+    if ($actualVersion -lt $MinimumVersion) {
+        throw "Qt Installer Framework $MinimumVersion or newer is required; " +
+            "found $actualVersion."
+    }
+}
+
 function Expand-InstallerTemplate {
     param(
         [string]$TemplatePath,
@@ -108,6 +128,92 @@ function Assert-ArchiveChecksum {
     }
 }
 
+function Get-UumlUninstallEntries {
+    param([string]$InstallationRoot)
+
+    $normalizedRoot = [System.IO.Path]::GetFullPath(
+        $InstallationRoot).TrimEnd(
+            [System.IO.Path]::DirectorySeparatorChar,
+            [System.IO.Path]::AltDirectorySeparatorChar)
+    $registryRoots = @(
+        "HKCU:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+        "HKLM:\Software\Microsoft\Windows\CurrentVersion\Uninstall",
+        "HKLM:\Software\WOW6432Node\Microsoft\Windows\CurrentVersion\Uninstall"
+    )
+
+    foreach ($registryRoot in $registryRoots) {
+        if (-not (Test-Path -LiteralPath $registryRoot)) {
+            continue
+        }
+        foreach ($key in Get-ChildItem -LiteralPath $registryRoot) {
+            $entry = Get-ItemProperty -LiteralPath $key.PSPath
+            $installLocationProperty =
+                $entry.PSObject.Properties["InstallLocation"]
+            if (-not $installLocationProperty -or
+                [string]::IsNullOrWhiteSpace(
+                    $installLocationProperty.Value)) {
+                continue
+            }
+            $entryRoot = [System.IO.Path]::GetFullPath(
+                $installLocationProperty.Value).TrimEnd(
+                    [System.IO.Path]::DirectorySeparatorChar,
+                    [System.IO.Path]::AltDirectorySeparatorChar)
+            if ($entryRoot.Equals(
+                    $normalizedRoot,
+                    [System.StringComparison]::OrdinalIgnoreCase)) {
+                [pscustomobject]@{
+                    RegistryPath = $key.PSPath
+                    Properties = $entry
+                }
+            }
+        }
+    }
+}
+
+function Assert-WindowsUninstallEntry {
+    param([string]$InstallationRoot)
+
+    $entries = @(Get-UumlUninstallEntries -InstallationRoot $InstallationRoot)
+    if ($entries.Count -ne 1) {
+        throw "Expected one Windows uninstall entry for '$InstallationRoot', " +
+            "but found $($entries.Count)."
+    }
+    $properties = $entries[0].Properties
+    if ($properties.DisplayName -ne "uuml") {
+        throw "The Windows uninstall entry has an unexpected display name."
+    }
+    if ([int]$properties.NoModify -ne 1) {
+        throw "The Windows uninstall entry must disable unsupported Modify."
+    }
+    if ($properties.UninstallString -notmatch
+        '(?i)maintenancetool\.exe"\s+--start-uninstaller') {
+        throw "The Windows uninstall entry does not start uninstall mode."
+    }
+}
+
+function Invoke-InstallerVerificationInstall {
+    param(
+        [string]$InstallerPath,
+        [string]$InstallationRoot,
+        [switch]$ReplaceExisting
+    )
+
+    $arguments = @(
+        "--root", $InstallationRoot,
+        "--accept-messages",
+        "--accept-licenses",
+        "--confirm-command",
+        "install",
+        "io.github.uafua.yauml",
+        "UumlSkipShellIntegration=true"
+    )
+    & $InstallerPath @arguments
+    if ($LASTEXITCODE -ne 0) {
+        $action = $ReplaceExisting ? "replacement" : "installation"
+        throw "The generated installer's headless $action failed."
+    }
+}
+
 if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z.+-]*$') {
     throw "Installer version '$Version' is not safe for an artifact name."
 }
@@ -130,6 +236,7 @@ New-Item -ItemType Directory -Force -Path $resolvedOutputDirectory | Out-Null
 $ifwBinDirectory = Find-IfwBinDirectory -ExplicitRoot $IfwRoot
 $binaryCreator = Join-Path $ifwBinDirectory "binarycreator.exe"
 $installerBase = Join-Path $ifwBinDirectory "installerbase.exe"
+Assert-IfwVersion -InstallerBase $installerBase -MinimumVersion "4.11"
 $installerName = "yauml-$Version-windows-x64-installer.exe"
 $installerPath = Join-Path $resolvedOutputDirectory $installerName
 $checksumPath = "$installerPath.sha256"
@@ -202,22 +309,37 @@ try {
     }
 
     if ($Verify) {
-        & $installerPath `
-            --root $verificationRoot `
-            --accept-messages `
-            --accept-licenses `
-            --confirm-command `
-            install io.github.uafua.yauml `
-            UumlSkipShellIntegration=true
-        if ($LASTEXITCODE -ne 0) {
-            throw "The generated installer's headless installation failed."
-        }
+        Invoke-InstallerVerificationInstall `
+            -InstallerPath $installerPath `
+            -InstallationRoot $verificationRoot
+        Assert-WindowsUninstallEntry -InstallationRoot $verificationRoot
 
         $installedExecutable = Join-Path $verificationRoot "uuml.exe"
         & $installedExecutable validate `
             (Join-Path $repositoryRoot "examples\sample.uuml")
         if ($LASTEXITCODE -ne 0) {
             throw "The installed application's validation check failed."
+        }
+
+        # A second pass exercises the user-visible "install over existing"
+        # behavior. The marker proves that the old installation was removed
+        # instead of silently overlaying files and corrupting IFW metadata.
+        $upgradeMarker = Join-Path $verificationRoot `
+            ".uuml-replace-existing"
+        Set-Content -LiteralPath $upgradeMarker `
+            -Value "must be removed during replacement" -Encoding ascii
+        Invoke-InstallerVerificationInstall `
+            -InstallerPath $installerPath `
+            -InstallationRoot $verificationRoot `
+            -ReplaceExisting
+        if (Test-Path -LiteralPath $upgradeMarker) {
+            throw "The installer did not replace the existing installation."
+        }
+        Assert-WindowsUninstallEntry -InstallationRoot $verificationRoot
+        & $installedExecutable validate `
+            (Join-Path $repositoryRoot "examples\sample.uuml")
+        if ($LASTEXITCODE -ne 0) {
+            throw "The replaced application's validation check failed."
         }
 
         $maintenanceTool = Join-Path $verificationRoot "maintenancetool.exe"
@@ -231,12 +353,27 @@ try {
         if (Test-Path -LiteralPath $installedExecutable) {
             throw "The test installation still contains uuml.exe after purge."
         }
+        if (@(Get-UumlUninstallEntries `
+                -InstallationRoot $verificationRoot).Count -ne 0) {
+            throw "The uninstaller left its Windows registration behind."
+        }
     }
 
     $hash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash
     "$($hash.ToLowerInvariant())  $installerName" |
         Set-Content -LiteralPath $checksumPath -Encoding ascii
 } finally {
+    # If verification fails after an installation was created, let IFW undo
+    # its files and Windows registration before removing the temporary root.
+    $verificationMaintenanceTool =
+        Join-Path $verificationRoot "maintenancetool.exe"
+    if (Test-Path -LiteralPath $verificationMaintenanceTool -PathType Leaf) {
+        & $verificationMaintenanceTool `
+            --accept-messages `
+            --confirm-command `
+            purge
+    }
+
     $resolvedTemporaryRoot = [System.IO.Path]::GetFullPath($temporaryRoot)
     if ($resolvedTemporaryRoot.StartsWith(
             $temporaryBase,

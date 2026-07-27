@@ -127,6 +127,7 @@ private slots:
   void contextCreationUsesTheClickedDiagramAndPosition();
   void packageCreationUsesAContainerFrame();
   void fitToContentUsesMeasuredElementSizeAndIsUndoable();
+  void fitToContentUsesTheRenderedNamespaceRelativeName();
   void connectorBendPointCanBeAddedMovedAndRemoved();
   void relationshipEndAnnotationsAreEditable();
   void connectorAnnotationsMoveResetAndExposeStereotypes();
@@ -634,6 +635,75 @@ void DiagramCanvasTests::fitToContentUsesMeasuredElementSizeAndIsUndoable() {
   controller.undo();
   QCOMPARE(controller.data().diagrams.first().nodes.first().geometry,
            oversized);
+}
+
+void DiagramCanvasTests::fitToContentUsesTheRenderedNamespaceRelativeName() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString outerPackage = controller.addElement(QStringLiteral("package"));
+  const QString innerPackage = controller.addElement(QStringLiteral("package"));
+  const QString typeId = controller.addElement(QStringLiteral("class"));
+  const auto rename = [&](const QString &id, const QString &name) {
+    controller.selectObject(id, QStringLiteral("element"));
+    controller.setSelectedName(name);
+  };
+  rename(outerPackage, QStringLiteral("VeryLongOuterNamespaceName"));
+  rename(innerPackage, QStringLiteral("AnotherVeryLongNestedNamespaceName"));
+  rename(typeId, QStringLiteral("Compact"));
+
+  const auto itemJson = [](const QString &id) {
+    return QString::fromUtf8(
+        QJsonDocument(QJsonArray{QJsonObject{
+                          {QStringLiteral("kind"), QStringLiteral("element")},
+                          {QStringLiteral("id"), id}}})
+            .toJson(QJsonDocument::Compact));
+  };
+  QVERIFY(controller.moveBrowserItemsWithPackageReassignment(
+      itemJson(innerPackage), QStringLiteral("element"), outerPackage));
+  QVERIFY(controller.moveBrowserItemsWithPackageReassignment(
+      itemJson(typeId), QStringLiteral("element"), innerPackage));
+  controller.selectObject(outerPackage, QStringLiteral("element"));
+  controller.addSelectedToDiagram(diagramId);
+
+  const Diagram &initialDiagram = controller.data().diagrams.first();
+  const auto node =
+      std::find_if(initialDiagram.nodes.cbegin(), initialDiagram.nodes.cend(),
+                   [&](const NodePresentation &candidate) {
+                     return candidate.elementId == typeId;
+                   });
+  QVERIFY(node != initialDiagram.nodes.cend());
+  const QString nodeId = node->id;
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  canvas.rightClick(node->geometry.center() + QPointF(30.0, 30.0));
+  QCOMPARE(canvas.selectedNodeCount(), 1);
+  controller.updateNodeGeometry(diagramId, nodeId, node->geometry.x(),
+                                node->geometry.y(), 700.0, 280.0);
+
+  canvas.fitSelectionToContent();
+
+  const Diagram &fittedDiagram = controller.data().diagrams.first();
+  const auto *fitted = findNode(fittedDiagram, nodeId);
+  const auto *element = findElement(controller.data(), typeId);
+  QVERIFY(fitted);
+  QVERIFY(element);
+  QCOMPARE(
+      presentation_layout::containingPackageElementId(fittedDiagram, nodeId),
+      innerPackage);
+  QCOMPARE(fitted->geometry.size(),
+           presentation_layout::nodeContentSizeForDisplayName(
+               controller.data(), *element, QStringLiteral("Compact"),
+               fitted->showAttributes.value_or(fittedDiagram.showAttributes),
+               fitted->showOperations.value_or(fittedDiagram.showOperations)));
+  QVERIFY(fitted->geometry.width() <
+          presentation_layout::nodeContentSizeForDisplayName(
+              controller.data(), *element,
+              presentation_layout::fullyQualifiedElementName(controller.data(),
+                                                             *element),
+              fitted->showAttributes.value_or(fittedDiagram.showAttributes),
+              fitted->showOperations.value_or(fittedDiagram.showOperations))
+              .width());
 }
 
 void DiagramCanvasTests::connectorBendPointCanBeAddedMovedAndRemoved() {

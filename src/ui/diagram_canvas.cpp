@@ -4477,8 +4477,12 @@ void DiagramCanvas::fitSelectionToContent() {
     if (!node || !element)
       continue;
     QRectF fitted = node->geometry;
-    fitted.setSize(presentation_layout::nodeContentSize(
-        m_project->data(), *element,
+    const QString displayName =
+        presentation_layout::elementDisplayNameInPackage(
+            m_project->data(), *element,
+            presentation_layout::containingPackageElementId(*d, node->id));
+    fitted.setSize(presentation_layout::nodeContentSizeForDisplayName(
+        m_project->data(), *element, displayName,
         node->showAttributes.value_or(d->showAttributes),
         node->showOperations.value_or(d->showOperations)));
     appendGeometry(nodeId, fitted);

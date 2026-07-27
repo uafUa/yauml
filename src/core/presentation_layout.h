@@ -30,6 +30,13 @@ QSizeF nodeContentSize(const ModelElement &element);
 QSizeF nodeContentSize(const ProjectData &project, const ModelElement &element);
 QSizeF nodeContentSize(const ProjectData &project, const ModelElement &element,
                        bool showAttributes, bool showOperations);
+// Measures a node using the exact title rendered in its current diagram
+// context. This prevents a namespace frame's hidden prefix from inflating a
+// fitted presentation.
+QSizeF nodeContentSizeForDisplayName(const ProjectData &project,
+                                     const ModelElement &element,
+                                     const QString &displayName,
+                                     bool showAttributes, bool showOperations);
 QSizeF nodePlacementSize(const ModelElement &element,
                          const QString &sizingMode);
 QSizeF nodePlacementSize(const ProjectData &project,
@@ -48,6 +55,11 @@ QString fullyQualifiedElementName(const ProjectData &project,
 QString elementDisplayNameInPackage(const ProjectData &project,
                                     const ModelElement &element,
                                     const QString &packageElementId);
+
+// Finds the closest package frame containing a presentation, including
+// package frames reached through intervening folder/container frames.
+QString containingPackageElementId(const Diagram &diagram,
+                                   const QString &presentationId);
 
 QString containerDisplayName(const ProjectData &project,
                              const ContainerPresentation &container);

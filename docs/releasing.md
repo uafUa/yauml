@@ -67,18 +67,28 @@ To create the offline Windows installer from that verified archive:
   -Verify
 ```
 
-This requires Qt Installer Framework. The script finds `binarycreator.exe`
-through `QIFW_ROOT`, `PATH`, the GitHub Actions Qt tools directory, or a
-standard `C:\Qt\Tools\QtInstallerFramework` installation. It verifies the
-portable archive's checksum, builds an offline installer, performs a temporary
-headless installation without changing shell integration, validates the
-installed application, and exercises the uninstaller.
+This requires Qt Installer Framework 4.11 or newer. The script finds
+`binarycreator.exe` through `QIFW_ROOT`, `PATH`, the GitHub Actions Qt tools
+directory, or a standard `C:\Qt\Tools\QtInstallerFramework` installation. It
+verifies the portable archive's checksum, builds an offline installer, and
+then exercises the complete lifecycle in a temporary location: initial
+installation, Windows uninstall registration, replacement by the same
+installer, application validation, and removal.
 
 The interactive installer installs to the 64-bit Windows applications
 directory by default. The application component creates a Start-menu shortcut
 and associates `.uuml` projects with uuml. A separately selectable component
-controls the desktop shortcut. The installer is currently unsigned, so Windows
-may show an unknown-publisher warning until release code signing is introduced.
+controls the desktop shortcut.
+
+Running a newer uuml installer over an existing registered installation asks
+for confirmation, removes the old application files, and installs into the
+same directory. Projects stored outside that directory and user preferences
+are preserved. The Windows **Installed apps** entry opens the uninstaller
+directly; package modification is intentionally not offered because the
+offline distribution has no update repository.
+
+The installer is currently unsigned, so Windows may show an unknown-publisher
+warning until release code signing is introduced.
 
 When testing an undeployed Windows build tree manually, use `ctest` rather than
 starting the test executables directly. CTest supplies the configured Qt kit's

@@ -8,9 +8,11 @@
     <StartMenuDir>uuml</StartMenuDir>
     <TargetDir>@ApplicationsDirX64@/uuml</TargetDir>
     <MaintenanceToolName>maintenancetool</MaintenanceToolName>
+    <ControlScript>controlscript.qs</ControlScript>
     <RunProgram>@TargetDir@/uuml.exe</RunProgram>
     <RunProgramDescription>Start uuml</RunProgramDescription>
     <AllowNonAsciiCharacters>true</AllowNonAsciiCharacters>
     <AllowRepositoriesForOfflineInstaller>false</AllowRepositoriesForOfflineInstaller>
+    <SupportsModify>false</SupportsModify>
     <RemoveTargetDir>true</RemoveTargetDir>
 </Installer>

@@ -1,5 +1,8 @@
 function Component()
 {
+    // Make install, replacement, and removal explicitly handle a running
+    // application instead of failing later on locked binaries.
+    component.addStopProcessForUpdateRequest("uuml.exe");
 }
 
 Component.prototype.createOperations = function()

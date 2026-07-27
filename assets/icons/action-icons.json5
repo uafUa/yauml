@@ -360,12 +360,12 @@
       routeStraight: {
         label: "Use straight routing",
         contexts: ["relationship Routing menu"],
-        svg: "",
+        svg: "route-straight.svg",
       },
       routeOrthogonal: {
         label: "Use orthogonal routing",
         contexts: ["relationship Routing menu"],
-        svg: "",
+        svg: "route-orthogonal.svg",
       },
       deleteRelationship: {
         label: "Delete relationship",

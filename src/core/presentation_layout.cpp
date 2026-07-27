@@ -132,10 +132,12 @@ QString fullyQualifiedElementName(const ProjectData &project,
 } // namespace
 
 static QSizeF nodeContentSizeImpl(const ModelElement &element,
+                                  const QString &displayName,
                                   const QString &stereotypeText,
                                   bool showAttributes = true,
                                   bool showOperations = true) {
-  qreal widestLine = applicationTextWidth(element.name, true);
+  qreal widestLine = applicationTextWidth(
+      displayName.isEmpty() ? element.name : displayName, true);
   if (!stereotypeText.isEmpty())
     widestLine =
         std::max(widestLine, applicationTextWidth(stereotypeText, false));
@@ -154,19 +156,31 @@ static QSizeF nodeContentSizeImpl(const ModelElement &element,
 }
 
 QSizeF nodeContentSize(const ModelElement &element) {
-  return nodeContentSizeImpl(element, {});
+  return nodeContentSizeImpl(element, element.name, {});
 }
 
 QSizeF nodeContentSize(const ProjectData &project,
                        const ModelElement &element) {
   return nodeContentSizeImpl(
-      element, stereotype_catalog::displayText(project, element.stereotypeIds));
+      element, element.name,
+      stereotype_catalog::displayText(project, element.stereotypeIds));
 }
 
 QSizeF nodeContentSize(const ProjectData &project, const ModelElement &element,
                        bool showAttributes, bool showOperations) {
   return nodeContentSizeImpl(
-      element, stereotype_catalog::displayText(project, element.stereotypeIds),
+      element, element.name,
+      stereotype_catalog::displayText(project, element.stereotypeIds),
+      showAttributes, showOperations);
+}
+
+QSizeF nodeContentSizeForDisplayName(const ProjectData &project,
+                                     const ModelElement &element,
+                                     const QString &displayName,
+                                     bool showAttributes, bool showOperations) {
+  return nodeContentSizeImpl(
+      element, displayName,
+      stereotype_catalog::displayText(project, element.stereotypeIds),
       showAttributes, showOperations);
 }
 
@@ -207,6 +221,26 @@ QString elementDisplayNameInPackage(const ProjectData &project,
   const QString prefix = packageName + QStringLiteral("::");
   return qualifiedName.startsWith(prefix) ? qualifiedName.mid(prefix.size())
                                           : qualifiedName;
+}
+
+QString containingPackageElementId(const Diagram &diagram,
+                                   const QString &presentationId) {
+  QString currentId = presentationId;
+  QSet<QString> visited;
+  while (!currentId.isEmpty() && !visited.contains(currentId)) {
+    visited.insert(currentId);
+    const auto owner = std::find_if(
+        diagram.containers.cbegin(), diagram.containers.cend(),
+        [&](const ContainerPresentation &candidate) {
+          return candidate.childPresentationIds.contains(currentId);
+        });
+    if (owner == diagram.containers.cend())
+      return {};
+    if (owner->subjectKind == QStringLiteral("package"))
+      return owner->subjectId;
+    currentId = owner->id;
+  }
+  return {};
 }
 
 QString containerDisplayName(const ProjectData &project,

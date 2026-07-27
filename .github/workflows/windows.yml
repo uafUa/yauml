@@ -39,9 +39,9 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_64
-          tools: tools_ifw,qt.tools.ifw.47
+          tools: tools_ifw,qt.tools.ifw.411
           cache: true
-          cache-key-prefix: install-qt-action-ifw47
+          cache-key-prefix: install-qt-action-ifw411
 
       - name: Locate LLVM
         shell: pwsh

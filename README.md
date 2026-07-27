@@ -73,8 +73,10 @@ portable Windows ZIP and a conventional Windows installer in the run's
 tested distributions and their SHA-256 checksums as a GitHub Release.
 
 The package includes the Qt/QML runtime and `libclang.dll`, and is smoke-tested
-after deployment. The installer also provides clean removal, Start-menu
-integration, `.uuml` file association, and an optional desktop shortcut. See
+after deployment. The installer supports replacing an existing uuml
+installation in place and provides clean removal through Windows **Installed
+apps**, Start-menu integration, `.uuml` file association, and an optional
+desktop shortcut. See
 [`docs/releasing.md`](docs/releasing.md) for downloading development artifacts,
 creating releases, version rules, and local packaging.
 
