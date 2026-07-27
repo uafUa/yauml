@@ -343,14 +343,10 @@ Relationship sourceRelationship(const CppSourceRelationship &source,
   if (!existing)
     relationship.id = newId();
   relationship.type = source.relationshipType;
-  if (source.relationshipType == RelationshipType::Realization)
-    relationship.name = QStringLiteral("implements");
-  else if (source.relationshipType == RelationshipType::Generalization)
-    relationship.name = QStringLiteral("inherits");
-  else if (source.relationshipType == RelationshipType::Containment)
-    relationship.name = QStringLiteral("contains");
-  else
-    relationship.name.clear();
+  // The relationship type and its endpoint decoration already carry the UML
+  // semantics. A label is optional user content, not an import-generated
+  // restatement such as "implements" or "contains".
+  relationship.name.clear();
   relationship.sourceId = sourceElementId;
   relationship.targetId = targetElementId;
   relationship.sourceEnd.role = source.sourceRole;

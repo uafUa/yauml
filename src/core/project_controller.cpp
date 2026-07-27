@@ -3186,29 +3186,6 @@ QString ProjectController::createRelationshipImpl(
   Relationship relationship;
   relationship.id = newId();
   relationship.type = relationshipType;
-  switch (relationshipType) {
-  case RelationshipType::Dependency:
-    relationship.name = QStringLiteral("uses");
-    break;
-  case RelationshipType::Generalization:
-    relationship.name = QStringLiteral("inherits");
-    break;
-  case RelationshipType::Realization:
-    relationship.name = QStringLiteral("implements");
-    break;
-  case RelationshipType::Association:
-    relationship.name = QStringLiteral("associated with");
-    break;
-  case RelationshipType::Aggregation:
-    relationship.name = QStringLiteral("aggregates");
-    break;
-  case RelationshipType::Composition:
-    relationship.name = QStringLiteral("composes");
-    break;
-  case RelationshipType::Containment:
-    relationship.name = QStringLiteral("contains");
-    break;
-  }
   relationship.sourceId = sourceNode->elementId;
   relationship.targetId = targetNode->elementId;
   ConnectorPresentation connector;
@@ -3482,6 +3459,7 @@ void ProjectController::editText(const QString &objectId, const QString &field,
       property = RelationshipTextProperty::Name;
       before = relationship->name;
       description = QStringLiteral("Edit relationship name");
+      optional = true;
     } else if (field == QStringLiteral("sourceRole")) {
       property = RelationshipTextProperty::SourceRole;
       before = relationship->sourceEnd.role;

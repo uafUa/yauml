@@ -919,6 +919,8 @@ void DiagramCanvasTests::connectorAnnotationsMoveResetAndExposeStereotypes() {
   };
   QVERIFY(connector());
   const QString relationshipId = connector()->relationshipId;
+  controller.editText(relationshipId, QStringLiteral("name"), -1,
+                      QStringLiteral("associated with"));
 
   TestDiagramCanvas canvas;
   configureCanvas(canvas, controller);

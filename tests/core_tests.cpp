@@ -1554,7 +1554,7 @@ void CoreTests::cppImportCreatesNestedTypeContainment() {
                relationship.targetId == inner->id;
       });
   QVERIFY(importedRelationship != controller.data().relationships.cend());
-  QCOMPARE(importedRelationship->name, QStringLiteral("contains"));
+  QVERIFY(importedRelationship->name.isEmpty());
   QVERIFY(
       importedRelationship->extra.contains(QStringLiteral("sourceBinding")));
 
@@ -3085,6 +3085,11 @@ void CoreTests::connectorAnnotationPlacementsPersistAndAreUndoable() {
   const QString connectorId = controller.createRelationship(
       diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("association"));
   QVERIFY(!connectorId.isEmpty());
+  const auto *createdConnector =
+      findConnector(controller.data().diagrams.first(), connectorId);
+  QVERIFY(createdConnector);
+  controller.editText(createdConnector->relationshipId, QStringLiteral("name"),
+                      -1, QStringLiteral("named relationship"));
 
   const auto connector = [&]() {
     return findConnector(controller.data().diagrams.first(), connectorId);
@@ -3264,14 +3269,20 @@ void CoreTests::relationshipAndDiagramDeletionUndoRedo() {
       findConnector(controller.data().diagrams.first(), connectorId);
   QVERIFY(connector);
   const QString relationshipId = connector->relationshipId;
+  QVERIFY(findRelationship(controller.data(), relationshipId)->name.isEmpty());
 
   controller.editText(relationshipId, QStringLiteral("name"), -1,
                       QStringLiteral("owns"));
   QCOMPARE(findRelationship(controller.data(), relationshipId)->name,
            QStringLiteral("owns"));
+  controller.editText(relationshipId, QStringLiteral("name"), -1,
+                      QStringLiteral("   "));
+  QVERIFY(findRelationship(controller.data(), relationshipId)->name.isEmpty());
   controller.undo();
-  QVERIFY(findRelationship(controller.data(), relationshipId)->name !=
-          QStringLiteral("owns"));
+  QCOMPARE(findRelationship(controller.data(), relationshipId)->name,
+           QStringLiteral("owns"));
+  controller.undo();
+  QVERIFY(findRelationship(controller.data(), relationshipId)->name.isEmpty());
 
   const ProjectData beforeRelationshipDeletion = controller.data();
   controller.deleteRelationship(relationshipId);
@@ -3475,6 +3486,7 @@ void CoreTests::relationshipTypesAndPresentationRemoval() {
     QVERIFY(!connectorId.isEmpty());
     const auto &relationship = controller.data().relationships.constLast();
     QCOMPARE(toString(relationship.type), type);
+    QVERIFY(relationship.name.isEmpty());
     QCOMPARE(relationship.sourceId, sourceElement);
     QCOMPARE(relationship.targetId, targetElement);
     const auto *connector =
