@@ -33,6 +33,14 @@ class ProjectController final : public QObject {
                  setSelectedOperations NOTIFY selectionChanged)
   Q_PROPERTY(QString selectedLiterals READ selectedLiterals WRITE
                  setSelectedLiterals NOTIFY selectionChanged)
+  Q_PROPERTY(QString selectedSourceRole READ selectedSourceRole WRITE
+                 setSelectedSourceRole NOTIFY selectionChanged)
+  Q_PROPERTY(QString selectedSourceMultiplicity READ selectedSourceMultiplicity
+                 WRITE setSelectedSourceMultiplicity NOTIFY selectionChanged)
+  Q_PROPERTY(QString selectedTargetRole READ selectedTargetRole WRITE
+                 setSelectedTargetRole NOTIFY selectionChanged)
+  Q_PROPERTY(QString selectedTargetMultiplicity READ selectedTargetMultiplicity
+                 WRITE setSelectedTargetMultiplicity NOTIFY selectionChanged)
   Q_PROPERTY(bool canUndo READ canUndo NOTIFY undoStateChanged)
   Q_PROPERTY(bool canRedo READ canRedo NOTIFY undoStateChanged)
   Q_PROPERTY(QString undoText READ undoText NOTIFY undoStateChanged)
@@ -58,6 +66,10 @@ public:
   QString selectedAttributes() const;
   QString selectedOperations() const;
   QString selectedLiterals() const;
+  QString selectedSourceRole() const;
+  QString selectedSourceMultiplicity() const;
+  QString selectedTargetRole() const;
+  QString selectedTargetMultiplicity() const;
   bool canUndo() const;
   bool canRedo() const;
   QString undoText() const;
@@ -241,6 +253,10 @@ public slots:
   void setSelectedAttributes(const QString &value);
   void setSelectedOperations(const QString &value);
   void setSelectedLiterals(const QString &value);
+  void setSelectedSourceRole(const QString &value);
+  void setSelectedSourceMultiplicity(const QString &value);
+  void setSelectedTargetRole(const QString &value);
+  void setSelectedTargetMultiplicity(const QString &value);
 
 signals:
   void stateChanged();

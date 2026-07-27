@@ -3,11 +3,15 @@ import QtQuick.Controls
 import QtQuick.Dialogs
 import QtQuick.Layouts
 
-Dialog {
+CatalogDialog {
     id: root
 
     signal styleChosen(string styleId)
 
+    // Context-menu callers can assign the edited style to their current
+    // subject. The main-menu entry opens the same editor in management-only
+    // mode so it cannot accidentally reuse a stale context-menu target.
+    property bool assignmentEnabled: true
     property string assignedStyleId: ""
     property string editingStyleId: ""
     property string draftName: ""
@@ -110,6 +114,7 @@ Dialog {
     }
 
     function openFor(styleId) {
+        assignmentEnabled = true
         assignedStyleId = styleId
         if (styleId.length > 0) {
             editStyle(styleId)
@@ -118,6 +123,16 @@ Dialog {
         } else {
             beginNewStyle()
         }
+        open()
+    }
+
+    function openManager() {
+        assignmentEnabled = false
+        assignedStyleId = ""
+        if (projectController.diagramStyles.length > 0)
+            editStyle(projectController.diagramStyles[0].id)
+        else
+            beginNewStyle()
         open()
     }
 
@@ -173,7 +188,8 @@ Dialog {
                     onClicked: root.editStyle(modelData.id)
                 }
             }
-            Button {
+            CatalogButton {
+                catalogId: "style.create"
                 Layout.fillWidth: true
                 text: qsTr("New style")
                 onClicked: root.beginNewStyle()
@@ -232,7 +248,8 @@ Dialog {
                             Layout.preferredWidth: 120
                             text: parent.modelData.label
                         }
-                        Button {
+                        CatalogButton {
+                            catalogId: "style.chooseColor"
                             Layout.preferredWidth: 54
                             Layout.preferredHeight: 28
                             Accessible.name: qsTr("Choose %1 color").arg(
@@ -279,13 +296,16 @@ Dialog {
             Item { Layout.fillHeight: true }
             RowLayout {
                 Layout.fillWidth: true
-                Button {
+                CatalogButton {
+                    catalogId: "style.delete"
                     text: qsTr("Delete…")
                     enabled: root.editingStyleId.length > 0
                     onClicked: deleteStyleConfirmation.open()
                 }
                 Item { Layout.fillWidth: true }
-                Button {
+                CatalogButton {
+                    catalogId: "style.assignSelected"
+                    visible: root.assignmentEnabled
                     text: qsTr("Assign selected")
                     enabled: root.editingStyleId.length > 0
                     onClicked: {
@@ -293,12 +313,16 @@ Dialog {
                         root.close()
                     }
                 }
-                Button {
+                CatalogButton {
+                    catalogId: "style.save"
                     text: qsTr("Save")
                     enabled: root.draftValid
+                    highlighted: !root.assignmentEnabled
                     onClicked: root.saveDraft(false)
                 }
-                Button {
+                CatalogButton {
+                    catalogId: "style.saveAndAssign"
+                    visible: root.assignmentEnabled
                     text: qsTr("Save and assign")
                     enabled: root.draftValid
                     highlighted: true
@@ -316,8 +340,9 @@ Dialog {
                         uiTheme.colorText(selectedColor))
     }
 
-    Dialog {
+    CatalogDialog {
         id: deleteStyleConfirmation
+        yesCatalogId: "style.delete"
         parent: Overlay.overlay
         anchors.centerIn: parent
         width: Math.min(430, parent.width - 40)

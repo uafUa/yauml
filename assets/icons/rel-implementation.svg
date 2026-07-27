@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no"?>
+<svg
+   height="24px"
+   viewBox="0 -960 960 960"
+   width="24px"
+   fill="#1f1f1f"
+   version="1.1"
+   id="svg1"
+   sodipodi:docname="rel-implementation.svg"
+   inkscape:version="1.4.4 (dcaf3e7, 2026-05-05)"
+   xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape"
+   xmlns:sodipodi="http://sodipodi.sourceforge.net/DTD/sodipodi-0.dtd"
+   xmlns="http://www.w3.org/2000/svg"
+   xmlns:svg="http://www.w3.org/2000/svg">
+  <defs
+     id="defs1" />
+  <sodipodi:namedview
+     id="namedview1"
+     pagecolor="#ffffff"
+     bordercolor="#000000"
+     borderopacity="0.25"
+     inkscape:showpageshadow="2"
+     inkscape:pageopacity="0.0"
+     inkscape:pagecheckerboard="0"
+     inkscape:deskcolor="#d1d1d1"
+     inkscape:zoom="13.648634"
+     inkscape:cx="-28.427753"
+     inkscape:cy="56.965408"
+     inkscape:window-width="5120"
+     inkscape:window-height="2071"
+     inkscape:window-x="2391"
+     inkscape:window-y="-9"
+     inkscape:window-maximized="1"
+     inkscape:current-layer="svg1" />
+  <path
+     id="path1"
+     d="M 520 -760 L 80 -480 L 520 -200 L 520 -440 L 583.35938 -440 L 583.35938 -520 L 520 -520 L 520 -760 z M 440 -613.98438 L 440 -346.01562 L 228.98438 -480 L 440 -613.98438 z M 654.84375 -520 L 654.84375 -440 L 724.84375 -440 L 724.84375 -520 L 654.84375 -520 z M 796.32812 -520 L 796.32812 -440 L 880 -440 L 880 -520 L 796.32812 -520 z " />
+</svg>

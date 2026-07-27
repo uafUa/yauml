@@ -15,6 +15,7 @@
 #include "ui/ui_theme.h"
 
 #include <QFontInfo>
+#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QImage>
 #include <QKeyEvent>
@@ -91,6 +92,8 @@ struct RenderConnector {
   QVector<QPointF> points;
   QVector<int> bendPointRouteIndices;
   QString name;
+  RelationshipEnd sourceEnd;
+  RelationshipEnd targetEnd;
   RelationshipType type = RelationshipType::Dependency;
   bool selected = false;
   int selectedBendPoint = -1;
@@ -174,6 +177,103 @@ QPointF polylineMiddle(const QVector<QPointF> &points) {
   return points.last();
 }
 
+struct PolylineSample {
+  QPointF position;
+  QPointF tangent;
+};
+
+std::optional<PolylineSample> samplePolyline(const QVector<QPointF> &points,
+                                             qreal distanceFromStart) {
+  if (points.size() < 2)
+    return std::nullopt;
+
+  qreal totalLength = 0.0;
+  for (qsizetype index = 1; index < points.size(); ++index)
+    totalLength += QLineF(points.at(index - 1), points.at(index)).length();
+  if (qFuzzyIsNull(totalLength))
+    return std::nullopt;
+
+  const qreal requested = std::clamp(distanceFromStart, 0.0, totalLength);
+  qreal traversed = 0.0;
+  for (qsizetype index = 1; index < points.size(); ++index) {
+    const QPointF start = points.at(index - 1);
+    const QPointF end = points.at(index);
+    const qreal segmentLength = QLineF(start, end).length();
+    if (segmentLength <= 0.001)
+      continue;
+    if (traversed + segmentLength >= requested || index + 1 == points.size()) {
+      const qreal fraction =
+          std::clamp((requested - traversed) / segmentLength, 0.0, 1.0);
+      return PolylineSample{start + (end - start) * fraction,
+                            (end - start) / segmentLength};
+    }
+    traversed += segmentLength;
+  }
+  return std::nullopt;
+}
+
+qreal polylineLength(const QVector<QPointF> &points) {
+  qreal result = 0.0;
+  for (qsizetype index = 1; index < points.size(); ++index)
+    result += QLineF(points.at(index - 1), points.at(index)).length();
+  return result;
+}
+
+QRectF annotationTextRect(const QPointF &center, const QString &text,
+                          const QFont &font, qreal height = 20.0) {
+  const QFontMetricsF metrics(font);
+  const qreal width = std::max(24.0, metrics.horizontalAdvance(text) + 10.0);
+  return {center.x() - width / 2.0, center.y() - height / 2.0, width, height};
+}
+
+struct ConnectorAnnotationLayout {
+  QRectF name;
+  QRectF sourceRole;
+  QRectF sourceMultiplicity;
+  QRectF targetRole;
+  QRectF targetMultiplicity;
+};
+
+// Automatic endpoint labels are route-relative, not screen-relative. This
+// makes them follow straight, orthogonal, and manually bent connectors while
+// keeping the semantic data independent from a particular diagram. A later
+// slice can replace an individual rectangle with a persisted manual override.
+ConnectorAnnotationLayout
+connectorAnnotationLayout(const QVector<QPointF> &points, const QString &name,
+                          const RelationshipEnd &sourceEnd,
+                          const RelationshipEnd &targetEnd, const QFont &font) {
+  ConnectorAnnotationLayout layout;
+  if (points.size() < 2)
+    return layout;
+
+  if (!name.isEmpty())
+    layout.name = annotationTextRect(polylineMiddle(points), name, font, 24.0);
+
+  const qreal length = polylineLength(points);
+  if (qFuzzyIsNull(length))
+    return layout;
+  const qreal endpointInset = std::min(38.0, length * 0.25);
+  constexpr qreal kNormalOffset = 14.0;
+  const auto source = samplePolyline(points, endpointInset);
+  const auto target = samplePolyline(points, length - endpointInset);
+  const auto layoutEnd = [&](const std::optional<PolylineSample> &sample,
+                             const RelationshipEnd &end, QRectF &role,
+                             QRectF &multiplicity) {
+    if (!sample)
+      return;
+    const QPointF normal(-sample->tangent.y(), sample->tangent.x());
+    if (!end.role.isEmpty())
+      role = annotationTextRect(sample->position + normal * kNormalOffset,
+                                end.role, font);
+    if (!end.multiplicity.isEmpty())
+      multiplicity = annotationTextRect(
+          sample->position - normal * kNormalOffset, end.multiplicity, font);
+  };
+  layoutEnd(source, sourceEnd, layout.sourceRole, layout.sourceMultiplicity);
+  layoutEnd(target, targetEnd, layout.targetRole, layout.targetMultiplicity);
+  return layout;
+}
+
 QPointF edgePointToward(const QRectF &rect, const QPointF &target) {
   const QPointF center = rect.center();
   const QPointF direction = target - center;
@@ -231,6 +331,43 @@ ConnectorAnchor anchorAtPerimeterPoint(const QRectF &rect,
            (point.y() - rect.top()) / rect.height());
   anchor.offset = std::clamp(anchor.offset, 0.0, 1.0);
   return anchor;
+}
+
+ConnectorAnchor anchorOnPerimeterSide(const QRectF &rect, const QPointF &point,
+                                      ConnectorSide side) {
+  ConnectorAnchor anchor;
+  anchor.side = side;
+  switch (side) {
+  case ConnectorSide::Top:
+  case ConnectorSide::Bottom:
+    anchor.offset = (point.x() - rect.left()) / rect.width();
+    break;
+  case ConnectorSide::Left:
+  case ConnectorSide::Right:
+    anchor.offset = (point.y() - rect.top()) / rect.height();
+    break;
+  case ConnectorSide::Automatic:
+    return anchorAtPerimeterPoint(rect, point);
+  }
+  anchor.offset = std::clamp(anchor.offset, 0.0, 1.0);
+  return anchor;
+}
+
+qreal distanceToPerimeterSide(const QRectF &rect, const QPointF &point,
+                              ConnectorSide side) {
+  switch (side) {
+  case ConnectorSide::Top:
+    return std::abs(point.y() - rect.top());
+  case ConnectorSide::Right:
+    return std::abs(point.x() - rect.right());
+  case ConnectorSide::Bottom:
+    return std::abs(point.y() - rect.bottom());
+  case ConnectorSide::Left:
+    return std::abs(point.x() - rect.left());
+  case ConnectorSide::Automatic:
+    return std::numeric_limits<qreal>::max();
+  }
+  return std::numeric_limits<qreal>::max();
 }
 
 ConnectorAnchor snappedAnchorAtPerimeterPoint(const NodePresentation &node,
@@ -1305,13 +1442,25 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
   }
 
   for (const auto &connector : snapshot.connectors) {
-    if (detail != 2 || connector.name.isEmpty() || connector.points.size() < 2)
+    if (detail != 2 || connector.points.size() < 2)
       continue;
-    const QPointF middle = polylineMiddle(connector.points);
-    const QRectF target(middle.x() - 70, middle.y() - 12, 140, 24);
-    if (!coverage.isValid() || coverage.intersects(target))
-      appendVisibleText(target, target, connector.name, base, palette.bodyText,
-                        Qt::AlignCenter, allNodeRects);
+    const ConnectorAnnotationLayout layout = connectorAnnotationLayout(
+        connector.points, connector.name, connector.sourceEnd,
+        connector.targetEnd, base);
+    const auto appendAnnotation = [&](const QRectF &target,
+                                      const QString &text) {
+      if (!target.isEmpty() &&
+          (!coverage.isValid() || coverage.intersects(target)))
+        appendVisibleText(target, target, text, base, palette.bodyText,
+                          Qt::AlignCenter, allNodeRects);
+    };
+    appendAnnotation(layout.name, connector.name);
+    appendAnnotation(layout.sourceRole, connector.sourceEnd.role);
+    appendAnnotation(layout.sourceMultiplicity,
+                     connector.sourceEnd.multiplicity);
+    appendAnnotation(layout.targetRole, connector.targetEnd.role);
+    appendAnnotation(layout.targetMultiplicity,
+                     connector.targetEnd.multiplicity);
   }
 
   for (qsizetype nodeIndex = 0; nodeIndex < snapshot.nodes.size();
@@ -1387,11 +1536,15 @@ ProjectController *DiagramCanvas::project() const { return m_project; }
 void DiagramCanvas::setProject(ProjectController *project) {
   if (m_project == project)
     return;
+  clearRelationshipToolboxCandidate();
+  clearArrangementToolboxCandidate(true);
   if (m_project)
     disconnect(m_project, nullptr, this, nullptr);
   m_project = project;
   if (m_project) {
     connect(m_project, &ProjectController::stateChanged, this, [this] {
+      clearRelationshipToolboxCandidate();
+      refreshArrangementToolboxAnchor();
       m_sceneDirty = true;
       m_textDirty = true;
       if (!m_selectedNodes.isEmpty() || !m_selectedConnector.isEmpty() ||
@@ -1519,6 +1672,38 @@ void DiagramCanvas::setRelationshipGestureKeys(const QVariantMap &keys) {
     return;
   m_relationshipGestureKeys = std::move(normalized);
   emit relationshipGestureKeysChanged();
+}
+
+bool DiagramCanvas::relationshipToolboxCandidate() const {
+  return m_relationshipToolboxCandidate;
+}
+
+QString DiagramCanvas::relationshipToolboxNodeId() const {
+  return m_relationshipToolboxNodeId;
+}
+
+QString DiagramCanvas::relationshipToolboxEdge() const {
+  return m_relationshipToolboxEdge;
+}
+
+QPointF DiagramCanvas::relationshipToolboxViewAnchor() const {
+  return m_relationshipToolboxViewAnchor;
+}
+
+QPointF DiagramCanvas::relationshipToolboxSceneAnchor() const {
+  return m_relationshipToolboxSceneAnchor;
+}
+
+bool DiagramCanvas::arrangementToolboxCandidate() const {
+  return m_arrangementToolboxCandidate;
+}
+
+QString DiagramCanvas::arrangementToolboxNodeId() const {
+  return m_arrangementToolboxNodeId;
+}
+
+QPointF DiagramCanvas::arrangementToolboxViewAnchor() const {
+  return m_arrangementToolboxViewAnchor;
 }
 
 QString DiagramCanvas::connectorInteractionPrompt() const {
@@ -1991,6 +2176,193 @@ bool DiagramCanvas::startConnectorGesture(const QString &relationshipType) {
   return true;
 }
 
+bool DiagramCanvas::beginToolboxRelationship(const QString &relationshipType,
+                                             const QString &sourceNodeId,
+                                             qreal sourceSceneX,
+                                             qreal sourceSceneY) {
+  bool typeValid = false;
+  relationshipTypeFromString(relationshipType, &typeValid);
+  const auto *currentDiagram = diagram();
+  const auto *sourceNode =
+      currentDiagram ? findNode(*currentDiagram, sourceNodeId) : nullptr;
+  if (!m_project || !typeValid || m_interaction != Interaction::None ||
+      !sourceNode || !m_selectedNodes.contains(sourceNodeId))
+    return false;
+
+  const QPointF sourcePoint(sourceSceneX, sourceSceneY);
+  const QRectF sourceRect = nodeGeometry(*sourceNode);
+  constexpr qreal kEdgeHitTolerance = 9.0;
+  if (!nearRectanglePerimeter(sourceRect, sourcePoint,
+                              kEdgeHitTolerance / m_zoom))
+    return false;
+
+  m_connectorGestureSourceNode = sourceNodeId;
+  m_connectorGestureSourceAnchor = snappedAnchorAtPerimeterPoint(
+      *sourceNode, sourceRect, sourcePoint,
+      kPortSnapToleranceViewPixels / m_zoom, &m_connectorGestureSourceSnapped);
+  m_connectorGestureType = relationshipType;
+  m_interaction = Interaction::CreateConnector;
+  m_originalGeometry.clear();
+  m_previewGeometry.clear();
+  m_alignmentGuides.clear();
+  updateConnectorGesture(sourcePoint, false);
+  clearRelationshipToolboxCandidate();
+  m_sceneDirty = true;
+  emit canvasSelectionChanged();
+  update();
+  return true;
+}
+
+void DiagramCanvas::updateToolboxRelationship(qreal viewX, qreal viewY,
+                                              bool suppressSnapping) {
+  if (m_interaction != Interaction::CreateConnector ||
+      m_connectorGestureSourceNode.isEmpty())
+    return;
+  updateConnectorGesture(toScene({viewX, viewY}), suppressSnapping);
+}
+
+void DiagramCanvas::finishToolboxRelationship(qreal viewX, qreal viewY,
+                                              bool suppressSnapping) {
+  if (m_interaction != Interaction::CreateConnector ||
+      m_connectorGestureSourceNode.isEmpty())
+    return;
+  commitConnectorGesture(toScene({viewX, viewY}), suppressSnapping);
+}
+
+void DiagramCanvas::updateRelationshipToolboxCandidate(
+    const QPointF &viewPoint) {
+  if (m_interaction != Interaction::None || m_selectedNodes.isEmpty()) {
+    clearRelationshipToolboxCandidate();
+    return;
+  }
+
+  const QPointF scenePoint = toScene(viewPoint);
+  const auto *node = hitNode(scenePoint);
+  constexpr qreal kEdgeHitToleranceViewPixels = 9.0;
+  if (!node || !m_selectedNodes.contains(node->id) ||
+      !nearRectanglePerimeter(nodeGeometry(*node), scenePoint,
+                              kEdgeHitToleranceViewPixels / m_zoom)) {
+    clearRelationshipToolboxCandidate();
+    return;
+  }
+
+  const QRectF nodeRect = nodeGeometry(*node);
+  const QRectF resizeHandle(nodeRect.right() - 14 / m_zoom,
+                            nodeRect.bottom() - 14 / m_zoom, 14 / m_zoom,
+                            14 / m_zoom);
+  if (resizeHandle.contains(scenePoint)) {
+    clearRelationshipToolboxCandidate();
+    return;
+  }
+
+  ConnectorAnchor edgeAnchor = anchorAtPerimeterPoint(nodeRect, scenePoint);
+  if (m_relationshipToolboxCandidate &&
+      m_relationshipToolboxNodeId == node->id) {
+    bool validPreviousSide = false;
+    const ConnectorSide previousSide =
+        connectorSideFromString(m_relationshipToolboxEdge, &validPreviousSide);
+    // Once a side has produced a toolbox, retain it through the slightly wider
+    // corner zone. Without this hysteresis, one-pixel diagonal movements can
+    // alternate between (for example) Top and Right and relocate the toolbox
+    // while the pointer is travelling toward it.
+    constexpr qreal kEdgeRetentionToleranceViewPixels = 14.0;
+    if (validPreviousSide &&
+        distanceToPerimeterSide(nodeRect, scenePoint, previousSide) <=
+            kEdgeRetentionToleranceViewPixels / m_zoom) {
+      edgeAnchor = anchorOnPerimeterSide(nodeRect, scenePoint, previousSide);
+    }
+  }
+  const QPointF sceneAnchor =
+      connectorAnchorPoint(nodeRect, edgeAnchor, nodeRect.center());
+  const QPointF viewAnchor = toView(sceneAnchor);
+  const QString edge = toString(edgeAnchor.side);
+  if (m_relationshipToolboxCandidate &&
+      m_relationshipToolboxNodeId == node->id &&
+      m_relationshipToolboxEdge == edge &&
+      m_relationshipToolboxViewAnchor == viewAnchor &&
+      m_relationshipToolboxSceneAnchor == sceneAnchor)
+    return;
+
+  m_relationshipToolboxCandidate = true;
+  m_relationshipToolboxNodeId = node->id;
+  m_relationshipToolboxEdge = edge;
+  m_relationshipToolboxViewAnchor = viewAnchor;
+  m_relationshipToolboxSceneAnchor = sceneAnchor;
+  emit relationshipToolboxCandidateChanged();
+}
+
+void DiagramCanvas::clearRelationshipToolboxCandidate() {
+  if (!m_relationshipToolboxCandidate && m_relationshipToolboxNodeId.isEmpty())
+    return;
+  m_relationshipToolboxCandidate = false;
+  m_relationshipToolboxNodeId.clear();
+  m_relationshipToolboxEdge.clear();
+  m_relationshipToolboxViewAnchor = {};
+  m_relationshipToolboxSceneAnchor = {};
+  emit relationshipToolboxCandidateChanged();
+}
+
+void DiagramCanvas::updateArrangementToolboxCandidate(
+    const QPointF &viewPoint) {
+  if (m_interaction != Interaction::None || m_selectedNodes.size() < 2) {
+    clearArrangementToolboxCandidate(m_selectedNodes.size() < 2);
+    return;
+  }
+
+  const auto *node = hitNode(toScene(viewPoint));
+  if (!node || !m_selectedNodes.contains(node->id)) {
+    clearArrangementToolboxCandidate();
+    return;
+  }
+
+  const bool becameCandidate = !m_arrangementToolboxCandidate;
+  const bool targetChanged = m_arrangementToolboxNodeId != node->id;
+  const QPointF previousAnchor = m_arrangementToolboxViewAnchor;
+  m_arrangementToolboxCandidate = true;
+  m_arrangementToolboxNodeId = node->id;
+  refreshArrangementToolboxAnchor();
+  if ((becameCandidate || targetChanged) && m_arrangementToolboxCandidate &&
+      previousAnchor == m_arrangementToolboxViewAnchor)
+    emit arrangementToolboxCandidateChanged();
+}
+
+void DiagramCanvas::refreshArrangementToolboxAnchor() {
+  const auto *d = diagram();
+  if (!d || m_selectedNodes.size() < 2 ||
+      !m_selectedNodes.contains(m_arrangementToolboxNodeId)) {
+    clearArrangementToolboxCandidate(true);
+    return;
+  }
+
+  const auto *node = findNode(*d, m_arrangementToolboxNodeId);
+  const QRectF visibleGeometry = node ? visibleNodeGeometry(*node) : QRectF{};
+  if (visibleGeometry.isEmpty()) {
+    clearArrangementToolboxCandidate(true);
+    return;
+  }
+
+  const QRectF viewBounds = toView(visibleGeometry);
+  const QPointF nextAnchor(viewBounds.center().x(), viewBounds.top());
+  if (m_arrangementToolboxViewAnchor == nextAnchor)
+    return;
+  m_arrangementToolboxViewAnchor = nextAnchor;
+  emit arrangementToolboxCandidateChanged();
+}
+
+void DiagramCanvas::clearArrangementToolboxCandidate(bool clearAnchor) {
+  const bool changed =
+      m_arrangementToolboxCandidate ||
+      (clearAnchor && !m_arrangementToolboxViewAnchor.isNull());
+  if (!changed)
+    return;
+  m_arrangementToolboxCandidate = false;
+  if (clearAnchor) {
+    m_arrangementToolboxNodeId.clear();
+    m_arrangementToolboxViewAnchor = {};
+  }
+  emit arrangementToolboxCandidateChanged();
+}
+
 void DiagramCanvas::updateConnectorGesture(const QPointF &scenePoint,
                                            bool suppressSnapping) {
   m_connectorGestureTargetPoint = scenePoint;
@@ -2233,6 +2605,7 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
         }
         snapshot.connectors.append(
             {route.points, route.bendPointRouteIndices, (*relationship)->name,
+             (*relationship)->sourceEnd, (*relationship)->targetEnd,
              (*relationship)->type, connector.id == m_selectedConnector,
              connector.id == m_selectedConnector ? m_selectedBendPoint : -1});
       }
@@ -2266,6 +2639,8 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
                 m_connectorGestureSourceAnchor.side, targetSide);
             snapshot.connectors.append({route.points,
                                         route.bendPointRouteIndices,
+                                        {},
+                                        {},
                                         {},
                                         type,
                                         false,
@@ -2340,6 +2715,8 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
 void DiagramCanvas::geometryChange(const QRectF &newGeometry,
                                    const QRectF &oldGeometry) {
   QQuickItem::geometryChange(newGeometry, oldGeometry);
+  clearRelationshipToolboxCandidate();
+  clearArrangementToolboxCandidate(true);
   m_sceneDirty = true;
   update();
 }
@@ -2465,24 +2842,41 @@ DiagramCanvas::TextHit DiagramCanvas::hitText(const QPointF &scenePoint) const {
               true};
     }
   }
-  if (const auto *connector = hitConnector(scenePoint)) {
-    if (const auto *relationship =
-            findRelationship(m_project->data(), connector->relationshipId)) {
-      const ui::ConnectorRoute route = connectorRoute(*connector);
-      if (route.points.size() < 2)
-        return {};
-      const QPointF middle = polylineMiddle(route.points);
-      const QRectF label(middle.x() - 70, middle.y() - 12, 140, 24);
-      if (label.contains(scenePoint))
-        return {relationship->id, QStringLiteral("name"), -1,
-                relationship->name, label};
-    }
+  const QFont font = QGuiApplication::font();
+  for (auto connector = d->connectors.crbegin();
+       connector != d->connectors.crend(); ++connector) {
+    const auto *relationship =
+        findRelationship(m_project->data(), connector->relationshipId);
+    if (!relationship)
+      continue;
+    const ui::ConnectorRoute route = connectorRoute(*connector);
+    const ConnectorAnnotationLayout layout = connectorAnnotationLayout(
+        route.points, relationship->name, relationship->sourceEnd,
+        relationship->targetEnd, font);
+    if (layout.name.contains(scenePoint))
+      return {relationship->id, QStringLiteral("name"), -1, relationship->name,
+              layout.name};
+    if (layout.sourceRole.contains(scenePoint))
+      return {relationship->id, QStringLiteral("sourceRole"), -1,
+              relationship->sourceEnd.role, layout.sourceRole};
+    if (layout.sourceMultiplicity.contains(scenePoint))
+      return {relationship->id, QStringLiteral("sourceMultiplicity"), -1,
+              relationship->sourceEnd.multiplicity, layout.sourceMultiplicity};
+    if (layout.targetRole.contains(scenePoint))
+      return {relationship->id, QStringLiteral("targetRole"), -1,
+              relationship->targetEnd.role, layout.targetRole};
+    if (layout.targetMultiplicity.contains(scenePoint))
+      return {relationship->id, QStringLiteral("targetMultiplicity"), -1,
+              relationship->targetEnd.multiplicity, layout.targetMultiplicity};
   }
   return {};
 }
 
 void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
   forceActiveFocus();
+  emit contextToolboxesDismissRequested();
+  clearRelationshipToolboxCandidate();
+  clearArrangementToolboxCandidate(true);
   m_alignmentGuides.clear();
   m_pressView = event->position();
   m_pressScene = toScene(m_pressView);
@@ -2867,7 +3261,25 @@ void DiagramCanvas::mouseDoubleClickEvent(QMouseEvent *event) {
   }
 }
 
+void DiagramCanvas::hoverMoveEvent(QHoverEvent *event) {
+  m_lastPointerScene = toScene(event->position());
+  updateRelationshipToolboxCandidate(event->position());
+  if (m_relationshipToolboxCandidate)
+    clearArrangementToolboxCandidate();
+  else
+    updateArrangementToolboxCandidate(event->position());
+  event->accept();
+}
+
+void DiagramCanvas::hoverLeaveEvent(QHoverEvent *event) {
+  clearRelationshipToolboxCandidate();
+  clearArrangementToolboxCandidate();
+  event->accept();
+}
+
 void DiagramCanvas::wheelEvent(QWheelEvent *event) {
+  clearRelationshipToolboxCandidate();
+  clearArrangementToolboxCandidate(true);
   const QPointF before = toScene(event->position());
   const qreal factor = event->angleDelta().y() > 0 ? 1.12 : 1.0 / 1.12;
   m_zoom = std::clamp(m_zoom * factor, 0.2, 4.0);
@@ -3347,6 +3759,8 @@ void DiagramCanvas::clearCanvasSelection() {
   resetLassoState();
   if (!hadSelection)
     return;
+  clearRelationshipToolboxCandidate();
+  clearArrangementToolboxCandidate(true);
   m_selectedNodes.clear();
   m_selectedNodeOrder.clear();
   m_selectedContainer.clear();
@@ -3372,6 +3786,8 @@ void DiagramCanvas::clearCanvasSelection() {
 }
 
 void DiagramCanvas::selectNode(const QString &nodeId, bool toggle) {
+  clearRelationshipToolboxCandidate();
+  clearArrangementToolboxCandidate(true);
   m_selectedContainer.clear();
   if (toggle) {
     if (m_selectedNodes.contains(nodeId)) {
@@ -3398,6 +3814,8 @@ void DiagramCanvas::selectNode(const QString &nodeId, bool toggle) {
 
 void DiagramCanvas::selectConnector(const QString &connectorId,
                                     bool preserveNodes) {
+  clearRelationshipToolboxCandidate();
+  clearArrangementToolboxCandidate(true);
   m_selectedContainer.clear();
   m_selectedConnector = connectorId;
   m_selectedBendPoint = -1;

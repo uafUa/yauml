@@ -16,7 +16,7 @@ class ProjectController;
 class ProjectTreeModel final : public QAbstractItemModel {
   Q_OBJECT
 public:
-  enum Role { IdRole = Qt::UserRole + 1, KindRole, TypeRole };
+  enum Role { IdRole = Qt::UserRole + 1, KindRole, TypeRole, NestedRole };
   Q_ENUM(Role)
 
   explicit ProjectTreeModel(ProjectController *controller);

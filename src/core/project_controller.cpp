@@ -791,6 +791,34 @@ QString ProjectController::selectedLiterals() const {
   return element ? element->enumLiterals.join(u'\n') : QString();
 }
 
+QString ProjectController::selectedSourceRole() const {
+  const auto *relationship = m_selectedKind == QStringLiteral("relationship")
+                                 ? findRelationship(m_data, m_selectedId)
+                                 : nullptr;
+  return relationship ? relationship->sourceEnd.role : QString();
+}
+
+QString ProjectController::selectedSourceMultiplicity() const {
+  const auto *relationship = m_selectedKind == QStringLiteral("relationship")
+                                 ? findRelationship(m_data, m_selectedId)
+                                 : nullptr;
+  return relationship ? relationship->sourceEnd.multiplicity : QString();
+}
+
+QString ProjectController::selectedTargetRole() const {
+  const auto *relationship = m_selectedKind == QStringLiteral("relationship")
+                                 ? findRelationship(m_data, m_selectedId)
+                                 : nullptr;
+  return relationship ? relationship->targetEnd.role : QString();
+}
+
+QString ProjectController::selectedTargetMultiplicity() const {
+  const auto *relationship = m_selectedKind == QStringLiteral("relationship")
+                                 ? findRelationship(m_data, m_selectedId)
+                                 : nullptr;
+  return relationship ? relationship->targetEnd.multiplicity : QString();
+}
+
 bool ProjectController::canUndo() const { return m_undoStack.canUndo(); }
 bool ProjectController::canRedo() const { return m_undoStack.canRedo(); }
 QString ProjectController::undoText() const { return m_undoStack.undoText(); }
@@ -2760,6 +2788,50 @@ void ProjectController::updateConnectorBendPoints(
 void ProjectController::editText(const QString &objectId, const QString &field,
                                  int index, const QString &value) {
   const QString trimmed = value.trimmed();
+  if (const auto *relationship = findRelationship(m_data, objectId)) {
+    RelationshipTextProperty property;
+    QString before;
+    QString description;
+    bool optional = false;
+    if (field == QStringLiteral("name")) {
+      property = RelationshipTextProperty::Name;
+      before = relationship->name;
+      description = QStringLiteral("Edit relationship name");
+    } else if (field == QStringLiteral("sourceRole")) {
+      property = RelationshipTextProperty::SourceRole;
+      before = relationship->sourceEnd.role;
+      description = QStringLiteral("Edit source role");
+      optional = true;
+    } else if (field == QStringLiteral("sourceMultiplicity")) {
+      property = RelationshipTextProperty::SourceMultiplicity;
+      before = relationship->sourceEnd.multiplicity;
+      description = QStringLiteral("Edit source multiplicity");
+      optional = true;
+    } else if (field == QStringLiteral("targetRole")) {
+      property = RelationshipTextProperty::TargetRole;
+      before = relationship->targetEnd.role;
+      description = QStringLiteral("Edit target role");
+      optional = true;
+    } else if (field == QStringLiteral("targetMultiplicity")) {
+      property = RelationshipTextProperty::TargetMultiplicity;
+      before = relationship->targetEnd.multiplicity;
+      description = QStringLiteral("Edit target multiplicity");
+      optional = true;
+    } else {
+      return;
+    }
+    if (!optional && trimmed.isEmpty()) {
+      m_diagnostics.addError(QStringLiteral("validation"),
+                             QStringLiteral("Text values cannot be empty"),
+                             objectId);
+      emit selectionChanged();
+      return;
+    }
+    if (before != trimmed)
+      pushCommand(std::make_unique<EditRelationshipTextCommand>(
+          this, objectId, property, before, trimmed, description));
+    return;
+  }
   if (trimmed.isEmpty()) {
     m_diagnostics.addError(QStringLiteral("validation"),
                            QStringLiteral("Text values cannot be empty"),
@@ -2798,12 +2870,6 @@ void ProjectController::editText(const QString &objectId, const QString &field,
     if (field == QStringLiteral("name") && folder->name != trimmed)
       pushCommand(std::make_unique<RenameBrowserFolderCommand>(
           this, objectId, folder->name, trimmed));
-    return;
-  }
-  if (const auto *relationship = findRelationship(m_data, objectId)) {
-    if (field == QStringLiteral("name") && relationship->name != trimmed)
-      pushCommand(std::make_unique<RenameRelationshipCommand>(
-          this, objectId, relationship->name, trimmed));
     return;
   }
   if (const auto *diagram = findDiagram(m_data, objectId)) {
@@ -2853,6 +2919,26 @@ void ProjectController::setSelectedLiterals(const QString &value) {
     pushCommand(std::make_unique<SetElementListCommand>(
         this, element->id, ElementListProperty::Literals, element->enumLiterals,
         after, QStringLiteral("Edit enumeration literals")));
+}
+
+void ProjectController::setSelectedSourceRole(const QString &value) {
+  if (m_selectedKind == QStringLiteral("relationship"))
+    editText(m_selectedId, QStringLiteral("sourceRole"), -1, value);
+}
+
+void ProjectController::setSelectedSourceMultiplicity(const QString &value) {
+  if (m_selectedKind == QStringLiteral("relationship"))
+    editText(m_selectedId, QStringLiteral("sourceMultiplicity"), -1, value);
+}
+
+void ProjectController::setSelectedTargetRole(const QString &value) {
+  if (m_selectedKind == QStringLiteral("relationship"))
+    editText(m_selectedId, QStringLiteral("targetRole"), -1, value);
+}
+
+void ProjectController::setSelectedTargetMultiplicity(const QString &value) {
+  if (m_selectedKind == QStringLiteral("relationship"))
+    editText(m_selectedId, QStringLiteral("targetMultiplicity"), -1, value);
 }
 
 void ProjectController::pushCommand(std::unique_ptr<ProjectCommand> command) {

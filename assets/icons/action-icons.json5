@@ -1,0 +1,551 @@
+// u uml action and project-tree icon catalog.
+//
+// Fill `svg` with a path relative to this file, for example:
+//   svg: "project/save.svg"
+//
+// The same SVG may be reused by multiple entries. Keep every entry even when
+// it intentionally has no icon; an empty value gives the application an
+// explicit, deterministic "text only" choice.
+{
+  schemaVersion: 1,
+  resourcePrefix: "/icons",
+  defaultSize: 20,
+
+  actions: {
+    project: {
+      newProject: {
+        label: "New project",
+        contexts: ["File menu", "main toolbar"],
+        svg: "",
+      },
+      openProject: {
+        label: "Open project",
+        contexts: ["File menu", "main toolbar"],
+        svg: "",
+      },
+      openRecent: {
+        label: "Open recent project",
+        contexts: ["File > Open Recent"],
+        svg: "",
+      },
+      clearRecent: {
+        label: "Clear recent projects",
+        contexts: ["File > Open Recent"],
+        svg: "",
+      },
+      saveProject: {
+        label: "Save project",
+        contexts: ["File menu", "main toolbar", "unsaved-changes dialog"],
+        svg: "",
+      },
+      replaceProject: {
+        label: "Replace existing project",
+        contexts: ["save confirmation dialog"],
+        svg: "",
+      },
+      exit: {
+        label: "Exit application",
+        contexts: ["File menu"],
+        svg: "",
+      },
+      synchronizeCpp: {
+        label: "Synchronize C++",
+        contexts: ["File menu"],
+        svg: "",
+      },
+      configureCppSource: {
+        label: "Import or change C++ source",
+        contexts: ["File menu"],
+        svg: "",
+      },
+      applyCppSynchronization: {
+        label: "Apply C++ synchronization",
+        contexts: ["C++ synchronization preview"],
+        svg: "",
+      },
+    },
+
+    edit: {
+      undo: {
+        label: "Undo",
+        contexts: ["Edit menu", "main toolbar"],
+        svg: "undo.svg",
+      },
+      redo: {
+        label: "Redo",
+        contexts: ["Edit menu", "main toolbar"],
+        svg: "redo.svg",
+      },
+      preferences: {
+        label: "Preferences",
+        contexts: ["Edit menu"],
+        svg: "preferences.svg",
+      },
+      applyProperty: {
+        label: "Apply property edit",
+        contexts: ["element properties panel"],
+        svg: "",
+      },
+      revertProperty: {
+        label: "Revert property edit",
+        contexts: ["element properties panel"],
+        svg: "",
+      },
+    },
+
+    workspace: {
+      addDiagram: {
+        label: "Add diagram",
+        contexts: ["main toolbar"],
+        svg: "",
+      },
+      detachDiagram: {
+        label: "Detach diagram",
+        contexts: ["diagram tab button", "diagram tab menu"],
+        svg: "",
+      },
+      returnDiagramToMain: {
+        label: "Return diagram to main window",
+        contexts: ["diagram tab menu"],
+        svg: "",
+      },
+      deleteDiagram: {
+        label: "Delete diagram",
+        contexts: ["diagram tab menu"],
+        svg: "",
+      },
+      toggleProjectTree: {
+        label: "Show or hide project tree",
+        contexts: ["View menu", "main toolbar"],
+        svg: "",
+      },
+      toggleProperties: {
+        label: "Show or hide properties",
+        contexts: ["View menu", "main toolbar"],
+        svg: "",
+      },
+      showLog: {
+        label: "Show log",
+        contexts: ["View menu"],
+        svg: "",
+      },
+      clearLog: {
+        label: "Clear log",
+        contexts: ["log panel"],
+        svg: "",
+      },
+      closeLog: {
+        label: "Close log",
+        contexts: ["log panel"],
+        svg: "",
+      },
+    },
+
+    browser: {
+      createFolder: {
+        label: "Create project-tree folder",
+        contexts: ["project-tree header", "project-tree context menu"],
+        svg: "",
+      },
+      renameFolder: {
+        label: "Rename folder",
+        contexts: ["project-tree context menu"],
+        svg: "",
+      },
+      deleteSelection: {
+        label: "Delete project-tree selection",
+        contexts: ["project-tree context menu"],
+        svg: "",
+      },
+      moveUp: {
+        label: "Move project-tree item up",
+        contexts: ["project-tree context menu"],
+        svg: "",
+      },
+      moveDown: {
+        label: "Move project-tree item down",
+        contexts: ["project-tree context menu"],
+        svg: "",
+      },
+      addEmptyNamespace: {
+        label: "Add empty namespace to active diagram",
+        contexts: ["project-tree context menu"],
+        svg: "",
+      },
+    },
+
+    createElement: {
+      package: {
+        label: "Create package",
+        contexts: ["diagram context menu", "keyboard shortcut"],
+        svg: "",
+      },
+      class: {
+        label: "Create class",
+        contexts: ["diagram context menu", "keyboard shortcut"],
+        svg: "",
+      },
+      struct: {
+        label: "Create struct",
+        contexts: ["diagram context menu", "keyboard shortcut"],
+        svg: "",
+      },
+      enumeration: {
+        label: "Create enumeration",
+        contexts: ["diagram context menu", "keyboard shortcut"],
+        svg: "",
+      },
+    },
+
+    createRelationship: {
+      dependency: {
+        label: "Create dependency",
+        contexts: ["diagram context menu", "edge-drag gesture", "keyboard shortcut"],
+        svg: "rel-dependency.svg",
+      },
+      realization: {
+        label: "Create realization or implementation",
+        contexts: ["diagram context menu", "edge-drag gesture", "keyboard shortcut"],
+        svg: "rel-implementation.svg",
+      },
+      generalization: {
+        label: "Create generalization or inheritance",
+        contexts: ["diagram context menu", "edge-drag gesture", "keyboard shortcut"],
+        svg: "rel-inheritance.svg",
+      },
+      association: {
+        label: "Create navigable association",
+        contexts: ["diagram context menu", "edge-drag gesture", "keyboard shortcut"],
+        svg: "rel-association.svg",
+      },
+      aggregation: {
+        label: "Create aggregation",
+        contexts: ["diagram context menu", "edge-drag gesture", "keyboard shortcut"],
+        svg: "rel-aggregation.svg",
+      },
+      composition: {
+        label: "Create composition",
+        contexts: ["diagram context menu", "edge-drag gesture", "keyboard shortcut"],
+        svg: "rel-composition.svg",
+      },
+      containment: {
+        label: "Create containment or nesting",
+        contexts: ["diagram context menu", "edge-drag gesture", "keyboard shortcut"],
+        svg: "rel-nesting.svg",
+      },
+      cancel: {
+        label: "Cancel connector creation",
+        contexts: ["connector-creation prompt"],
+        svg: "",
+      },
+    },
+
+    arrange: {
+      fitDiagram: {
+        label: "Fit diagram",
+        contexts: ["diagram context menu", "keyboard shortcut"],
+        svg: "fit-view.svg",
+      },
+      fitToContent: {
+        label: "Fit selection to content",
+        contexts: ["element and container context menus"],
+        svg: "fit-to-size.svg",
+      },
+      alignLeft: {
+        label: "Align left edges",
+        contexts: ["diagram Arrange menu", "multi-selection toolbox"],
+        svg: "align-horizontal-left.svg",
+      },
+      alignHorizontalCenters: {
+        label: "Align horizontal centers",
+        contexts: ["diagram Arrange menu", "multi-selection toolbox"],
+        svg: "align-horizontal-center.svg",
+      },
+      alignRight: {
+        label: "Align right edges",
+        contexts: ["diagram Arrange menu", "multi-selection toolbox"],
+        svg: "align-horizontal-right.svg",
+      },
+      alignTop: {
+        label: "Align top edges",
+        contexts: ["diagram Arrange menu", "multi-selection toolbox"],
+        svg: "align-vertical-top.svg",
+      },
+      alignVerticalCenters: {
+        label: "Align vertical centers",
+        contexts: ["diagram Arrange menu", "multi-selection toolbox"],
+        svg: "align-vertical-center.svg",
+      },
+      alignBottom: {
+        label: "Align bottom edges",
+        contexts: ["diagram Arrange menu", "multi-selection toolbox"],
+        svg: "align-vertical-bottom.svg",
+      },
+      matchWidth: {
+        label: "Make same width",
+        contexts: ["diagram Arrange menu", "multi-selection toolbox"],
+        svg: "",
+      },
+      matchHeight: {
+        label: "Make same height",
+        contexts: ["diagram Arrange menu", "multi-selection toolbox"],
+        svg: "",
+      },
+      matchSize: {
+        label: "Make same width and height",
+        contexts: ["diagram Arrange menu", "multi-selection toolbox"],
+        svg: "",
+      },
+      distributeHorizontally: {
+        label: "Distribute horizontally",
+        contexts: ["diagram Arrange menu", "multi-selection toolbox"],
+        svg: "horizontal-distribute.svg",
+      },
+      distributeVertically: {
+        label: "Distribute vertically",
+        contexts: ["diagram Arrange menu", "multi-selection toolbox"],
+        svg: "vertical-distribute.svg",
+      },
+    },
+
+    presentation: {
+      wrapInNamespace: {
+        label: "Wrap in parent namespace",
+        contexts: ["element context menu"],
+        svg: "",
+      },
+      connectorSnapPoints: {
+        label: "Edit connector snap points",
+        contexts: ["element context menu"],
+        svg: "",
+      },
+      removeElement: {
+        label: "Remove element presentation from diagram",
+        contexts: ["element context menu", "Delete shortcut"],
+        svg: "",
+      },
+      removeFrame: {
+        label: "Remove container frame from diagram",
+        contexts: ["container context menu", "Delete shortcut"],
+        svg: "",
+      },
+    },
+
+    connector: {
+      addBendPoint: {
+        label: "Add bend point",
+        contexts: ["relationship context menu"],
+        svg: "",
+      },
+      removeBendPoint: {
+        label: "Remove bend point",
+        contexts: ["relationship context menu", "Delete shortcut"],
+        svg: "",
+      },
+      clearBendPoints: {
+        label: "Clear bend points",
+        contexts: ["relationship context menu"],
+        svg: "",
+      },
+      routeStraight: {
+        label: "Use straight routing",
+        contexts: ["relationship Routing menu"],
+        svg: "",
+      },
+      routeOrthogonal: {
+        label: "Use orthogonal routing",
+        contexts: ["relationship Routing menu"],
+        svg: "",
+      },
+      deleteRelationship: {
+        label: "Delete relationship",
+        contexts: ["relationship context menu", "Delete shortcut"],
+        svg: "",
+      },
+    },
+
+    style: {
+      inherit: {
+        label: "Inherit style",
+        contexts: ["project-tree and diagram Style menus"],
+        svg: "",
+      },
+      assignNamed: {
+        label: "Assign named style",
+        contexts: ["project-tree and diagram Style menus"],
+        note: "One dynamic menu item per project style; a color swatch may complement this shared icon.",
+        svg: "",
+      },
+      manage: {
+        label: "Manage project styles",
+        contexts: ["Edit menu", "project-tree and diagram Style menus"],
+        svg: "",
+      },
+      create: {
+        label: "Create project style",
+        contexts: ["project style dialog"],
+        svg: "",
+      },
+      chooseColor: {
+        label: "Choose style color",
+        contexts: ["project style dialog"],
+        svg: "",
+      },
+      delete: {
+        label: "Delete project style",
+        contexts: ["project style dialog"],
+        svg: "",
+      },
+      assignSelected: {
+        label: "Assign selected style",
+        contexts: ["project style dialog"],
+        svg: "",
+      },
+      save: {
+        label: "Save project style",
+        contexts: ["project style dialog"],
+        svg: "",
+      },
+      saveAndAssign: {
+        label: "Save and assign project style",
+        contexts: ["project style dialog"],
+        svg: "",
+      },
+    },
+
+    preferences: {
+      chooseThemeColor: {
+        label: "Choose application theme color",
+        contexts: ["Preferences > Colors"],
+        svg: "",
+      },
+      resetThemeColors: {
+        label: "Reset application theme colors",
+        contexts: ["Preferences > Colors"],
+        svg: "",
+      },
+    },
+
+    dialog: {
+      confirm: {
+        label: "Confirm or OK",
+        contexts: ["standard dialogs"],
+        note: "Shared Qt dialog role.",
+        svg: "",
+      },
+      cancel: {
+        label: "Cancel",
+        contexts: ["standard dialogs"],
+        note: "Shared Qt dialog role.",
+        svg: "",
+      },
+      close: {
+        label: "Close",
+        contexts: ["standard dialogs"],
+        note: "Shared Qt dialog role.",
+        svg: "",
+      },
+      apply: {
+        label: "Apply",
+        contexts: ["standard dialogs"],
+        note: "Shared Qt dialog role.",
+        svg: "",
+      },
+      save: {
+        label: "Save",
+        contexts: ["standard dialogs"],
+        note: "Shared Qt dialog role.",
+        svg: "",
+      },
+      discard: {
+        label: "Discard",
+        contexts: ["unsaved-changes dialog"],
+        note: "Shared Qt dialog role.",
+        svg: "",
+      },
+      yes: {
+        label: "Yes",
+        contexts: ["confirmation dialogs"],
+        note: "Shared Qt dialog role.",
+        svg: "",
+      },
+      no: {
+        label: "No",
+        contexts: ["confirmation dialogs"],
+        note: "Shared Qt dialog role.",
+        svg: "",
+      },
+    },
+  },
+
+  projectTreeNodes: {
+    modelRoot: {
+      label: "Model root",
+      match: { kind: "root", objectId: "model" },
+      svg: "",
+      expandedSvg: "",
+    },
+    diagramsRoot: {
+      label: "Diagrams root",
+      match: { kind: "root", objectId: "diagrams" },
+      svg: "",
+      expandedSvg: "",
+    },
+    namespace: {
+      label: "Synthetic or legacy namespace",
+      match: { kind: "namespace", objectType: "namespace" },
+      svg: "",
+      expandedSvg: "",
+    },
+    package: {
+      label: "UML package or materialized C++ namespace",
+      match: { kind: "element", objectType: "package" },
+      svg: "",
+      expandedSvg: "",
+    },
+    folder: {
+      label: "Custom project-tree folder",
+      match: { kind: "folder", objectType: "folder" },
+      svg: "",
+      expandedSvg: "",
+    },
+    class: {
+      label: "Class",
+      match: { kind: "element", objectType: "class" },
+      svg: "",
+    },
+    nestedClass: {
+      label: "Nested class",
+      match: { kind: "element", objectType: "class", nested: true },
+      note: "If empty, integration will fall back to projectTreeNodes.class.svg.",
+      svg: "",
+    },
+    struct: {
+      label: "Struct",
+      match: { kind: "element", objectType: "struct" },
+      svg: "",
+    },
+    nestedStruct: {
+      label: "Nested struct",
+      match: { kind: "element", objectType: "struct", nested: true },
+      note: "If empty, integration will fall back to projectTreeNodes.struct.svg.",
+      svg: "",
+    },
+    enumeration: {
+      label: "Enumeration",
+      match: { kind: "element", objectType: "enumeration" },
+      svg: "",
+    },
+    nestedEnumeration: {
+      label: "Nested enumeration",
+      match: { kind: "element", objectType: "enumeration", nested: true },
+      note: "If empty, integration will fall back to projectTreeNodes.enumeration.svg.",
+      svg: "",
+    },
+    classDiagram: {
+      label: "Class diagram",
+      match: { kind: "diagram", objectType: "class diagram" },
+      svg: "",
+    },
+  },
+}

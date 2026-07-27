@@ -90,12 +90,26 @@ struct BrowserFolder {
   bool operator==(const BrowserFolder &) const = default;
 };
 
+// Role and multiplicity belong to the semantic relationship end, so every
+// diagram presenting the same relationship shows the same UML meaning.
+// Presentation-specific annotation positions are intentionally stored on the
+// connector presentation instead.
+struct RelationshipEnd {
+  QString role;
+  QString multiplicity;
+  QJsonObject extra;
+
+  bool operator==(const RelationshipEnd &) const = default;
+};
+
 struct Relationship {
   QString id;
   RelationshipType type = RelationshipType::Dependency;
   QString name;
   QString sourceId;
   QString targetId;
+  RelationshipEnd sourceEnd;
+  RelationshipEnd targetEnd;
   QJsonObject extra;
 
   bool operator==(const Relationship &) const = default;

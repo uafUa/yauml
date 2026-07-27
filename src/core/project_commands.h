@@ -602,11 +602,20 @@ private:
   QStringList m_after;
 };
 
-class RenameRelationshipCommand final : public ProjectCommand {
+enum class RelationshipTextProperty {
+  Name,
+  SourceRole,
+  SourceMultiplicity,
+  TargetRole,
+  TargetMultiplicity
+};
+
+class EditRelationshipTextCommand final : public ProjectCommand {
 public:
-  RenameRelationshipCommand(ProjectController *controller,
-                            QString relationshipId, QString before,
-                            QString after);
+  EditRelationshipTextCommand(ProjectController *controller,
+                              QString relationshipId,
+                              RelationshipTextProperty property, QString before,
+                              QString after, const QString &description);
 
 private:
   void execute(ProjectData &project) override;
@@ -614,6 +623,7 @@ private:
   void apply(ProjectData &project, const QString &value);
 
   QString m_relationshipId;
+  RelationshipTextProperty m_property;
   QString m_before;
   QString m_after;
 };

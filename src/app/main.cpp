@@ -1,3 +1,4 @@
+#include "app/icon_registry.h"
 #include "core/application_settings.h"
 #include "core/cpp_import.h"
 #include "core/cpp_import_controller.h"
@@ -173,7 +174,10 @@ int main(int argc, char *argv[]) {
   uuml::ApplicationSettings applicationSettings;
   uuml::CppImportController cppImport(&project, &applicationSettings);
   uuml::WorkspaceController workspace(&project, true);
+  uuml::ui::IconRegistry iconRegistry;
   uuml::ui::UiTheme uiTheme;
+  for (const QString &error : iconRegistry.errors())
+    project.diagnostics()->addWarning(QStringLiteral("icons"), error);
   QObject::connect(&project, &uuml::ProjectController::projectOpened,
                    &applicationSettings,
                    &uuml::ApplicationSettings::addRecentProject);
@@ -194,11 +198,15 @@ int main(int argc, char *argv[]) {
   engine.rootContext()->setContextProperty(
       QStringLiteral("cppImportController"), &cppImport);
   engine.rootContext()->setContextProperty(QStringLiteral("uiTheme"), &uiTheme);
+  engine.rootContext()->setContextProperty(QStringLiteral("iconRegistry"),
+                                           &iconRegistry);
   QObject::connect(
       &engine, &QQmlApplicationEngine::objectCreationFailed, &application,
       [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
   engine.loadFromModule(QStringLiteral("Uuml"), QStringLiteral("Main"));
   if (application.arguments().contains(QStringLiteral("--smoke-test"))) {
+    if (!iconRegistry.isValid())
+      return 1;
     const bool supportsDetachedWindows =
         QGuiApplication::platformName() != QStringLiteral("offscreen") &&
         QGuiApplication::platformName() != QStringLiteral("minimal");
@@ -250,7 +258,8 @@ int main(int argc, char *argv[]) {
           if (!folderDialog ||
               !QMetaObject::invokeMethod(folderDialog, "open") ||
               !QMetaObject::invokeMethod(folderDialog, "close") ||
-              !styleDialog || !QMetaObject::invokeMethod(styleDialog, "open") ||
+              !styleDialog ||
+              !QMetaObject::invokeMethod(styleDialog, "openManager") ||
               !QMetaObject::invokeMethod(styleDialog, "close") ||
               !preferences || !tabs ||
               !QMetaObject::invokeMethod(preferences, "open")) {

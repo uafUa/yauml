@@ -6,6 +6,49 @@ import Uuml.Native
 Item {
     id: root
     required property string diagramId
+    property bool relationshipToolboxGestureActive: false
+    property string relationshipToolboxNodeId
+    property string relationshipToolboxEdge
+    property real relationshipToolboxSceneX: 0
+    property real relationshipToolboxSceneY: 0
+
+    readonly property var relationshipToolboxActions: [
+        {
+            type: "dependency",
+            actionId: "createRelationship.dependency",
+            label: qsTr("Dependency")
+        },
+        {
+            type: "realization",
+            actionId: "createRelationship.realization",
+            label: qsTr("Implementation")
+        },
+        {
+            type: "generalization",
+            actionId: "createRelationship.generalization",
+            label: qsTr("Inheritance")
+        },
+        {
+            type: "association",
+            actionId: "createRelationship.association",
+            label: qsTr("Association")
+        },
+        {
+            type: "aggregation",
+            actionId: "createRelationship.aggregation",
+            label: qsTr("Aggregation")
+        },
+        {
+            type: "composition",
+            actionId: "createRelationship.composition",
+            label: qsTr("Composition")
+        },
+        {
+            type: "containment",
+            actionId: "createRelationship.containment",
+            label: qsTr("Containment")
+        }
+    ]
 
     function addElementsAt(elementIds, x, y) {
         canvas.addElementsAt(elementIds, x, y)
@@ -13,6 +56,17 @@ Item {
 
     function addTreeItemsAt(elementIds, subjectsJson, x, y) {
         canvas.addTreeItemsAt(elementIds, subjectsJson, x, y)
+    }
+
+    function latchRelationshipToolboxCandidate() {
+        relationshipToolboxNodeId = canvas.relationshipToolboxNodeId
+        relationshipToolboxEdge = canvas.relationshipToolboxEdge
+        relationshipToolboxSceneX = canvas.relationshipToolboxSceneAnchor.x
+        relationshipToolboxSceneY = canvas.relationshipToolboxSceneAnchor.y
+    }
+
+    function dismissRelationshipToolbox() {
+        relationshipToolbox.dismiss()
     }
 
     DiagramCanvas {
@@ -70,7 +124,36 @@ Item {
         function onPaletteChanged() { canvas.refreshTheme() }
     }
 
-    Dialog {
+    Connections {
+        target: canvas
+
+        function onRelationshipToolboxCandidateChanged() {
+            if (root.relationshipToolboxGestureActive)
+                return
+            if (canvas.relationshipToolboxCandidate && !editor.visible)
+                root.latchRelationshipToolboxCandidate()
+        }
+
+        function onViewportChanged() {
+            root.dismissRelationshipToolbox()
+            arrangementToolbox.dismiss()
+        }
+
+        function onCanvasSelectionChanged() {
+            if (!root.relationshipToolboxGestureActive
+                    && canvas.connectorInteractionPrompt.length === 0)
+                root.dismissRelationshipToolbox()
+            if (canvas.selectedNodeCount < 2)
+                arrangementToolbox.dismiss()
+        }
+
+        function onContextToolboxesDismissRequested() {
+            root.dismissRelationshipToolbox()
+            arrangementToolbox.dismiss()
+        }
+    }
+
+    CatalogDialog {
         id: portSnapPointsDialog
         parent: Overlay.overlay
         anchors.centerIn: parent
@@ -146,13 +229,29 @@ Item {
         title: qsTr("Diagram")
         Menu {
             title: qsTr("New element")
-            MenuItem { text: qsTr("Package"); onTriggered: canvas.createElementAtContextPosition("package") }
-            MenuItem { text: qsTr("Class"); onTriggered: canvas.createElementAtContextPosition("class") }
-            MenuItem { text: qsTr("Struct"); onTriggered: canvas.createElementAtContextPosition("struct") }
-            MenuItem { text: qsTr("Enumeration"); onTriggered: canvas.createElementAtContextPosition("enumeration") }
+            CatalogMenuItem {
+                catalogId: "createElement.package"
+                text: qsTr("Package")
+                onTriggered: canvas.createElementAtContextPosition("package")
+            }
+            CatalogMenuItem {
+                catalogId: "createElement.class"
+                text: qsTr("Class")
+                onTriggered: canvas.createElementAtContextPosition("class")
+            }
+            CatalogMenuItem {
+                catalogId: "createElement.struct"
+                text: qsTr("Struct")
+                onTriggered: canvas.createElementAtContextPosition("struct")
+            }
+            CatalogMenuItem {
+                catalogId: "createElement.enumeration"
+                text: qsTr("Enumeration")
+                onTriggered: canvas.createElementAtContextPosition("enumeration")
+            }
         }
         MenuSeparator {}
-        MenuItem { text: qsTr("Fit diagram"); onTriggered: canvas.fitToContent() }
+        MenuItem { action: fitDiagramAction }
     }
 
     Menu {
@@ -162,18 +261,47 @@ Item {
         Menu {
             title: qsTr("Create relationship")
             enabled: canvas.selectedNodeCount === 2
-            MenuItem { text: qsTr("Dependency"); onTriggered: canvas.createRelationship("dependency") }
-            MenuItem { text: qsTr("Realization (implementation)"); onTriggered: canvas.createRelationship("realization") }
-            MenuItem { text: qsTr("Generalization (inheritance)"); onTriggered: canvas.createRelationship("generalization") }
+            CatalogMenuItem {
+                catalogId: "createRelationship.dependency"
+                text: qsTr("Dependency")
+                onTriggered: canvas.createRelationship("dependency")
+            }
+            CatalogMenuItem {
+                catalogId: "createRelationship.realization"
+                text: qsTr("Realization (implementation)")
+                onTriggered: canvas.createRelationship("realization")
+            }
+            CatalogMenuItem {
+                catalogId: "createRelationship.generalization"
+                text: qsTr("Generalization (inheritance)")
+                onTriggered: canvas.createRelationship("generalization")
+            }
             MenuSeparator {}
-            MenuItem { text: qsTr("Navigable association"); onTriggered: canvas.createRelationship("association") }
-            MenuItem { text: qsTr("Aggregation"); onTriggered: canvas.createRelationship("aggregation") }
-            MenuItem { text: qsTr("Composition"); onTriggered: canvas.createRelationship("composition") }
+            CatalogMenuItem {
+                catalogId: "createRelationship.association"
+                text: qsTr("Navigable association")
+                onTriggered: canvas.createRelationship("association")
+            }
+            CatalogMenuItem {
+                catalogId: "createRelationship.aggregation"
+                text: qsTr("Aggregation")
+                onTriggered: canvas.createRelationship("aggregation")
+            }
+            CatalogMenuItem {
+                catalogId: "createRelationship.composition"
+                text: qsTr("Composition")
+                onTriggered: canvas.createRelationship("composition")
+            }
             MenuSeparator {}
-            MenuItem { text: qsTr("Containment (nesting)"); onTriggered: canvas.createRelationship("containment") }
+            CatalogMenuItem {
+                catalogId: "createRelationship.containment"
+                text: qsTr("Containment (nesting)")
+                onTriggered: canvas.createRelationship("containment")
+            }
         }
         MenuSeparator {}
-        MenuItem {
+        CatalogMenuItem {
+            catalogId: "presentation.wrapInNamespace"
             visible: canvas.canWrapSelectionInPackage
             height: visible ? implicitHeight : 0
             text: qsTr("Wrap in parent namespace")
@@ -208,7 +336,8 @@ Item {
         }
         MenuSeparator {}
         MenuItem { action: fitSelectionAction }
-        MenuItem {
+        CatalogMenuItem {
+            catalogId: "presentation.connectorSnapPoints"
             text: qsTr("Connector snap points…")
             enabled: canvas.selectedNodeCount === 1
             onTriggered: {
@@ -228,7 +357,8 @@ Item {
                                    canvas.selectedStyleId)
         }
         MenuSeparator {}
-        MenuItem {
+        CatalogMenuItem {
+            catalogId: "presentation.removeElement"
             text: canvas.selectedNodeCount > 1
                   ? qsTr("Remove presentations from diagram")
                   : qsTr("Remove presentation from diagram")
@@ -239,13 +369,19 @@ Item {
     Menu {
         id: connectorMenu
         title: qsTr("Relationship")
-        MenuItem { text: qsTr("Add bend point here"); onTriggered: canvas.addBendPointAtContextPosition() }
-        MenuItem {
+        CatalogMenuItem {
+            catalogId: "connector.addBendPoint"
+            text: qsTr("Add bend point here")
+            onTriggered: canvas.addBendPointAtContextPosition()
+        }
+        CatalogMenuItem {
+            catalogId: "connector.removeBendPoint"
             text: qsTr("Remove bend point")
             enabled: canvas.bendPointSelected
             onTriggered: canvas.removeSelectedBendPoint()
         }
-        MenuItem {
+        CatalogMenuItem {
+            catalogId: "connector.clearBendPoints"
             text: qsTr("Clear bend points")
             enabled: canvas.selectedConnectorHasBendPoints
             onTriggered: canvas.clearSelectedConnectorBendPoints()
@@ -253,13 +389,15 @@ Item {
         MenuSeparator {}
         Menu {
             title: qsTr("Routing")
-            MenuItem {
+            CatalogMenuItem {
+                catalogId: "connector.routeStraight"
                 text: qsTr("Straight")
                 checkable: true
                 checked: canvas.selectedConnectorRouting === "straight"
                 onTriggered: canvas.setSelectedConnectorRouting("straight")
             }
-            MenuItem {
+            CatalogMenuItem {
+                catalogId: "connector.routeOrthogonal"
                 text: qsTr("Orthogonal")
                 checkable: true
                 checked: canvas.selectedConnectorRouting === "orthogonal"
@@ -267,7 +405,11 @@ Item {
             }
         }
         MenuSeparator {}
-        MenuItem { text: qsTr("Delete relationship"); onTriggered: canvas.deleteSelectedConnector() }
+        CatalogMenuItem {
+            catalogId: "connector.deleteRelationship"
+            text: qsTr("Delete relationship")
+            onTriggered: canvas.deleteSelectedConnector()
+        }
     }
 
     Menu {
@@ -283,14 +425,25 @@ Item {
                                    canvas.selectedStyleId)
         }
         MenuSeparator {}
-        MenuItem {
+        CatalogMenuItem {
+            catalogId: "presentation.removeFrame"
             text: qsTr("Remove frame from diagram")
             onTriggered: canvas.removeSelectedPresentations()
         }
     }
 
-    Action {
+    CatalogAction {
+        id: fitDiagramAction
+        catalogId: "arrange.fitDiagram"
+        text: qsTr("Fit diagram")
+        shortcut: "Ctrl+0"
+        enabled: root.visible
+        onTriggered: canvas.fitToContent()
+    }
+
+    CatalogAction {
         id: fitSelectionAction
+        catalogId: "arrange.fitToContent"
         text: qsTr("Fit to content")
         shortcut: "Ctrl+Shift+F"
         enabled: root.visible && !editor.visible
@@ -298,85 +451,95 @@ Item {
         onTriggered: canvas.fitSelectionToContent()
     }
 
-    Action {
+    CatalogAction {
         id: alignLeftAction
+        catalogId: "arrange.alignLeft"
         text: qsTr("Left")
         shortcut: "Ctrl+Shift+Left"
         enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignLeft")
     }
-    Action {
+    CatalogAction {
         id: alignHorizontalCenterAction
+        catalogId: "arrange.alignHorizontalCenters"
         text: qsTr("Horizontal centers")
         shortcut: "Ctrl+Shift+H"
         enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignHorizontalCenter")
     }
-    Action {
+    CatalogAction {
         id: alignRightAction
+        catalogId: "arrange.alignRight"
         text: qsTr("Right")
         shortcut: "Ctrl+Shift+Right"
         enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignRight")
     }
-    Action {
+    CatalogAction {
         id: alignTopAction
+        catalogId: "arrange.alignTop"
         text: qsTr("Top")
         shortcut: "Ctrl+Shift+Up"
         enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignTop")
     }
-    Action {
+    CatalogAction {
         id: alignVerticalCenterAction
+        catalogId: "arrange.alignVerticalCenters"
         text: qsTr("Vertical centers")
         shortcut: "Ctrl+Shift+V"
         enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignVerticalCenter")
     }
-    Action {
+    CatalogAction {
         id: alignBottomAction
+        catalogId: "arrange.alignBottom"
         text: qsTr("Bottom")
         shortcut: "Ctrl+Shift+Down"
         enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignBottom")
     }
-    Action {
+    CatalogAction {
         id: matchWidthAction
+        catalogId: "arrange.matchWidth"
         text: qsTr("Width")
         shortcut: "Ctrl+Alt+W"
         enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("matchWidth")
     }
-    Action {
+    CatalogAction {
         id: matchHeightAction
+        catalogId: "arrange.matchHeight"
         text: qsTr("Height")
         shortcut: "Ctrl+Alt+H"
         enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("matchHeight")
     }
-    Action {
+    CatalogAction {
         id: matchSizeAction
+        catalogId: "arrange.matchSize"
         text: qsTr("Width and height")
         shortcut: "Ctrl+Alt+E"
         enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("matchSize")
     }
-    Action {
+    CatalogAction {
         id: distributeHorizontallyAction
+        catalogId: "arrange.distributeHorizontally"
         text: qsTr("Distribute horizontally")
         shortcut: "Ctrl+Alt+Shift+H"
         enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 3
         onTriggered: canvas.arrangeSelection("distributeHorizontally")
     }
-    Action {
+    CatalogAction {
         id: distributeVerticallyAction
+        catalogId: "arrange.distributeVertically"
         text: qsTr("Distribute vertically")
         shortcut: "Ctrl+Alt+Shift+V"
         enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 3
         onTriggered: canvas.arrangeSelection("distributeVertically")
     }
 
-    Shortcut { sequences: ["Ctrl+0"]; context: Qt.WindowShortcut; enabled: root.visible; onActivated: canvas.fitToContent() }
     Shortcut { sequences: ["Ctrl+Shift+P"]; context: Qt.WindowShortcut; enabled: root.visible && !editor.visible; onActivated: canvas.createElementAtViewportCenter("package") }
     Shortcut { sequences: ["Ctrl+Shift+C"]; context: Qt.WindowShortcut; enabled: root.visible && !editor.visible; onActivated: canvas.createElementAtViewportCenter("class") }
     Shortcut { sequences: ["Ctrl+Shift+S"]; context: Qt.WindowShortcut; enabled: root.visible && !editor.visible; onActivated: canvas.createElementAtViewportCenter("struct") }
@@ -401,6 +564,161 @@ Item {
                      : canvas.removeSelectedPresentations()
     }
 
+    ContextToolboxFrame {
+        id: relationshipToolbox
+        candidate: canvas.relationshipToolboxCandidate && !editor.visible
+        candidateKey: canvas.relationshipToolboxNodeId + ":"
+                      + canvas.relationshipToolboxEdge
+        anchor: canvas.relationshipToolboxViewAnchor
+        placement: canvas.relationshipToolboxEdge
+        gestureActive: root.relationshipToolboxGestureActive
+
+        Row {
+            spacing: 2
+
+            Repeater {
+                model: root.relationshipToolboxActions
+
+                CatalogToolButton {
+                    id: relationshipToolboxButton
+                    required property var modelData
+                    catalogId: modelData.actionId
+                    readonly property string gestureKey:
+                        applicationSettings.relationshipGestureKeys[
+                            modelData.type] || ""
+
+                    width: 32
+                    height: 32
+                    text: gestureKey
+                    display: icon.source.toString().length > 0
+                             ? AbstractButton.IconOnly
+                             : AbstractButton.TextOnly
+                    Accessible.name: modelData.label
+
+                    ToolTip.visible: relationshipDragArea.containsMouse
+                                     && !relationshipDragArea.pressed
+                    ToolTip.text: qsTr("Drag to create %1").arg(
+                                      modelData.label)
+
+                    MouseArea {
+                        id: relationshipDragArea
+                        property bool relationshipStarted: false
+                        anchors.fill: parent
+                        hoverEnabled: true
+                        acceptedButtons: Qt.LeftButton
+                        preventStealing: true
+                        cursorShape: Qt.CrossCursor
+
+                        onPressed: function(mouse) {
+                            relationshipStarted =
+                                canvas.beginToolboxRelationship(
+                                    modelData.type,
+                                    root.relationshipToolboxNodeId,
+                                    root.relationshipToolboxSceneX,
+                                    root.relationshipToolboxSceneY)
+                            if (!relationshipStarted)
+                                return
+                            root.relationshipToolboxGestureActive = true
+                            const canvasPoint = mapToItem(
+                                canvas, mouse.x, mouse.y)
+                            canvas.updateToolboxRelationship(
+                                canvasPoint.x, canvasPoint.y,
+                                mouse.modifiers & Qt.AltModifier)
+                        }
+
+                        onPositionChanged: function(mouse) {
+                            if (!relationshipStarted)
+                                return
+                            const canvasPoint = mapToItem(
+                                canvas, mouse.x, mouse.y)
+                            canvas.updateToolboxRelationship(
+                                canvasPoint.x, canvasPoint.y,
+                                mouse.modifiers & Qt.AltModifier)
+                        }
+
+                        onReleased: function(mouse) {
+                            if (relationshipStarted) {
+                                const canvasPoint = mapToItem(
+                                    canvas, mouse.x, mouse.y)
+                                canvas.finishToolboxRelationship(
+                                    canvasPoint.x, canvasPoint.y,
+                                    mouse.modifiers & Qt.AltModifier)
+                            }
+                            relationshipStarted = false
+                            root.relationshipToolboxGestureActive = false
+                            root.dismissRelationshipToolbox()
+                            canvas.forceActiveFocus()
+                        }
+
+                        onCanceled: {
+                            if (relationshipStarted)
+                                canvas.cancelConnectorInteraction()
+                            relationshipStarted = false
+                            root.relationshipToolboxGestureActive = false
+                            root.dismissRelationshipToolbox()
+                            canvas.forceActiveFocus()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    ContextToolboxFrame {
+        id: arrangementToolbox
+        candidate: canvas.arrangementToolboxCandidate
+                   && canvas.selectedNodeCount >= 2
+                   && !editor.visible
+        candidateKey: canvas.arrangementToolboxNodeId
+        anchor: canvas.arrangementToolboxViewAnchor
+        placement: "top"
+        trackAnchorWhileShown: true
+
+        Grid {
+            columns: 6
+            spacing: 2
+
+            Repeater {
+                model: [
+                    { action: alignLeftAction, fallback: qsTr("L") },
+                    { action: alignHorizontalCenterAction,
+                      fallback: qsTr("HC") },
+                    { action: alignRightAction, fallback: qsTr("R") },
+                    { action: alignTopAction, fallback: qsTr("T") },
+                    { action: alignVerticalCenterAction,
+                      fallback: qsTr("VC") },
+                    { action: alignBottomAction, fallback: qsTr("B") },
+                    { action: matchWidthAction, fallback: qsTr("W") },
+                    { action: matchHeightAction, fallback: qsTr("H") },
+                    { action: matchSizeAction, fallback: qsTr("WH") },
+                    { action: distributeHorizontallyAction,
+                      fallback: qsTr("DH") },
+                    { action: distributeVerticallyAction,
+                      fallback: qsTr("DV") }
+                ]
+
+                CatalogToolButton {
+                    required property var modelData
+                    catalogId: modelData.action.catalogId
+                    width: 32
+                    height: 32
+                    text: modelData.fallback
+                    enabled: modelData.action.enabled
+                    display: icon.source.toString().length > 0
+                             ? AbstractButton.IconOnly
+                             : AbstractButton.TextOnly
+                    Accessible.name: modelData.action.text
+                    ToolTip.visible: hovered
+                    ToolTip.text: modelData.action.text
+                    onClicked: {
+                        modelData.action.trigger()
+                        canvas.forceActiveFocus()
+                    }
+                }
+            }
+        }
+    }
+
     Rectangle {
         anchors.horizontalCenter: parent.horizontalCenter
         anchors.top: parent.top
@@ -418,8 +736,9 @@ Item {
             anchors.leftMargin: 10
             anchors.rightMargin: 4
             Label { id: interactionMessage; text: canvas.connectorInteractionPrompt }
-            ToolButton {
+            CatalogToolButton {
                 id: cancelInteraction
+                catalogId: "createRelationship.cancel"
                 text: qsTr("Cancel")
                 onClicked: canvas.cancelConnectorInteraction()
             }

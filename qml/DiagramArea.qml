@@ -154,8 +154,9 @@ Rectangle {
                                            || workspaceController.activeDiagramId === tab.diagramId
                             }
 
-                            ToolButton {
+                            CatalogToolButton {
                                 id: detachButton
+                                catalogId: "workspace.detachDiagram"
                                 anchors.right: parent.right
                                 anchors.verticalCenter: parent.verticalCenter
                                 width: 32
@@ -207,7 +208,8 @@ Rectangle {
 
                             Menu {
                                 id: tabMenu
-                                MenuItem {
+                                CatalogMenuItem {
+                                    catalogId: "workspace.detachDiagram"
                                     text: qsTr("Detach to new window")
                                     enabled: root.hostId === workspaceController.mainHostId
                                              || root.diagramIds.length > 1
@@ -219,13 +221,15 @@ Rectangle {
                                                                           point.y)
                                     }
                                 }
-                                MenuItem {
+                                CatalogMenuItem {
+                                    catalogId: "workspace.returnDiagramToMain"
                                     text: qsTr("Return to main window")
                                     visible: root.hostId !== workspaceController.mainHostId
                                     onTriggered: workspaceController.returnDiagramToMain(tab.diagramId)
                                 }
                                 MenuSeparator {}
-                                MenuItem {
+                                CatalogMenuItem {
+                                    catalogId: "workspace.deleteDiagram"
                                     text: qsTr("Delete diagram")
                                     onTriggered: projectController.deleteDiagram(tab.diagramId)
                                 }

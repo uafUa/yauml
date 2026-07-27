@@ -128,17 +128,28 @@ ApplicationWindow {
     menuBar: MenuBar {
         Menu {
             title: qsTr("&File")
-            Action { text: qsTr("&New"); shortcut: StandardKey.New; onTriggered: root.requestDocumentAction("new") }
-            Action { text: qsTr("&Open…"); shortcut: StandardKey.Open; onTriggered: root.requestDocumentAction("open") }
+            CatalogAction {
+                catalogId: "project.newProject"
+                text: qsTr("&New")
+                shortcut: StandardKey.New
+                onTriggered: root.requestDocumentAction("new")
+            }
+            CatalogAction {
+                catalogId: "project.openProject"
+                text: qsTr("&Open…")
+                shortcut: StandardKey.Open
+                onTriggered: root.requestDocumentAction("open")
+            }
             Menu {
                 id: recentProjectsMenu
                 title: qsTr("Open &Recent…")
 
                 Instantiator {
                     model: applicationSettings.recentProjects
-                    delegate: MenuItem {
+                    delegate: CatalogMenuItem {
                         required property int index
                         required property var modelData
+                        catalogId: "project.openRecent"
                         text: qsTr("%1. %2 — %3")
                               .arg(index + 1)
                               .arg(modelData.name)
@@ -162,21 +173,24 @@ ApplicationWindow {
                     visible: applicationSettings.recentProjects.length > 0
                     height: visible ? implicitHeight : 0
                 }
-                MenuItem {
+                CatalogMenuItem {
+                    catalogId: "project.clearRecent"
                     visible: applicationSettings.recentProjects.length > 0
                     height: visible ? implicitHeight : 0
                     text: qsTr("Clear Recent Projects")
                     onTriggered: applicationSettings.clearRecentProjects()
                 }
             }
-            Action {
+            CatalogAction {
+                catalogId: "project.saveProject"
                 text: qsTr("&Save")
                 shortcut: StandardKey.Save
                 onTriggered: projectController.projectPath.length > 0
                              ? projectController.saveProject() : saveDialog.open()
             }
             MenuSeparator {}
-            Action {
+            CatalogAction {
+                catalogId: "project.synchronizeCpp"
                 text: qsTr("Synchronize C++")
                 enabled: cppImportController.canSynchronize
                 onTriggered: {
@@ -184,7 +198,8 @@ ApplicationWindow {
                     cppImportController.synchronize()
                 }
             }
-            Action {
+            CatalogAction {
+                catalogId: "project.configureCppSource"
                 text: cppImportController.configuredSourceRoot.length > 0
                       ? qsTr("Change C++ source…")
                       : qsTr("Import C++…")
@@ -192,14 +207,37 @@ ApplicationWindow {
                 onTriggered: cppImportFolderDialog.open()
             }
             MenuSeparator {}
-            Action { text: qsTr("E&xit"); shortcut: StandardKey.Quit; onTriggered: root.close() }
+            CatalogAction {
+                catalogId: "project.exit"
+                text: qsTr("E&xit")
+                shortcut: StandardKey.Quit
+                onTriggered: root.close()
+            }
         }
         Menu {
             title: qsTr("&Edit")
-            Action { text: qsTr("&Undo"); shortcut: StandardKey.Undo; enabled: projectController.canUndo; onTriggered: projectController.undo() }
-            Action { text: qsTr("&Redo"); shortcut: StandardKey.Redo; enabled: projectController.canRedo; onTriggered: projectController.redo() }
+            CatalogAction {
+                catalogId: "edit.undo"
+                text: qsTr("&Undo")
+                shortcut: StandardKey.Undo
+                enabled: projectController.canUndo
+                onTriggered: projectController.undo()
+            }
+            CatalogAction {
+                catalogId: "edit.redo"
+                text: qsTr("&Redo")
+                shortcut: StandardKey.Redo
+                enabled: projectController.canRedo
+                onTriggered: projectController.redo()
+            }
             MenuSeparator {}
-            Action {
+            CatalogAction {
+                catalogId: "style.manage"
+                text: qsTr("Project diagram &styles…")
+                onTriggered: browserStyleDialog.openManager()
+            }
+            CatalogAction {
+                catalogId: "edit.preferences"
                 text: qsTr("&Preferences…")
                 shortcut: "Ctrl+,"
                 onTriggered: preferencesDialog.open()
@@ -207,9 +245,25 @@ ApplicationWindow {
         }
         Menu {
             title: qsTr("&View")
-            Action { text: qsTr("Project tree"); checkable: true; checked: root.leftPanelVisible; onTriggered: root.leftPanelVisible = checked }
-            Action { text: qsTr("Properties"); checkable: true; checked: root.rightPanelVisible; onTriggered: root.rightPanelVisible = checked }
-            Action { text: qsTr("Log"); onTriggered: logPopup.open() }
+            CatalogAction {
+                catalogId: "workspace.toggleProjectTree"
+                text: qsTr("Project tree")
+                checkable: true
+                checked: root.leftPanelVisible
+                onTriggered: root.leftPanelVisible = checked
+            }
+            CatalogAction {
+                catalogId: "workspace.toggleProperties"
+                text: qsTr("Properties")
+                checkable: true
+                checked: root.rightPanelVisible
+                onTriggered: root.rightPanelVisible = checked
+            }
+            CatalogAction {
+                catalogId: "workspace.showLog"
+                text: qsTr("Log")
+                onTriggered: logPopup.open()
+            }
         }
     }
 
@@ -219,18 +273,38 @@ ApplicationWindow {
             anchors.leftMargin: 8
             anchors.rightMargin: 8
 
-            ToolButton { text: qsTr("New"); onClicked: root.requestDocumentAction("new") }
-            ToolButton { text: qsTr("Open"); onClicked: root.requestDocumentAction("open") }
-            ToolButton {
+            CatalogToolButton {
+                catalogId: "project.newProject"
+                text: qsTr("New")
+                onClicked: root.requestDocumentAction("new")
+            }
+            CatalogToolButton {
+                catalogId: "project.openProject"
+                text: qsTr("Open")
+                onClicked: root.requestDocumentAction("open")
+            }
+            CatalogToolButton {
+                catalogId: "project.saveProject"
                 text: qsTr("Save")
                 onClicked: projectController.projectPath.length > 0
                            ? projectController.saveProject() : saveDialog.open()
             }
             ToolSeparator {}
-            ToolButton { text: qsTr("Undo"); enabled: projectController.canUndo; onClicked: projectController.undo() }
-            ToolButton { text: qsTr("Redo"); enabled: projectController.canRedo; onClicked: projectController.redo() }
+            CatalogToolButton {
+                catalogId: "edit.undo"
+                text: qsTr("Undo")
+                enabled: projectController.canUndo
+                onClicked: projectController.undo()
+            }
+            CatalogToolButton {
+                catalogId: "edit.redo"
+                text: qsTr("Redo")
+                enabled: projectController.canRedo
+                onClicked: projectController.redo()
+            }
             ToolSeparator {}
-            ToolButton {
+            CatalogToolButton {
+                catalogId: "workspace.addDiagram"
                 text: qsTr("+ Diagram")
                 onClicked: {
                     const id = projectController.addDiagram()
@@ -238,8 +312,16 @@ ApplicationWindow {
                 }
             }
             Item { Layout.fillWidth: true }
-            ToolButton { text: root.leftPanelVisible ? "◀" : "▶"; onClicked: root.leftPanelVisible = !root.leftPanelVisible }
-            ToolButton { text: root.rightPanelVisible ? "▶" : "◀"; onClicked: root.rightPanelVisible = !root.rightPanelVisible }
+            CatalogToolButton {
+                catalogId: "workspace.toggleProjectTree"
+                text: root.leftPanelVisible ? "◀" : "▶"
+                onClicked: root.leftPanelVisible = !root.leftPanelVisible
+            }
+            CatalogToolButton {
+                catalogId: "workspace.toggleProperties"
+                text: root.rightPanelVisible ? "▶" : "◀"
+                onClicked: root.rightPanelVisible = !root.rightPanelVisible
+            }
         }
     }
 
@@ -274,7 +356,8 @@ ApplicationWindow {
                             text: qsTr("Project")
                             font.bold: true
                         }
-                        ToolButton {
+                        CatalogToolButton {
+                            catalogId: "browser.createFolder"
                             text: qsTr("+ Folder")
                             onClicked: root.createFolderAt("model", "")
                             ToolTip.visible: hovered
@@ -397,12 +480,18 @@ ApplicationWindow {
                         required property string objectId
                         required property string kind
                         required property string objectType
+                        required property bool nested
                         property bool browserDropActive: false
                         property int browserInsertionEdge: 0
                         highlighted: kind !== "root" && (
                                          kind === "diagram"
                                          ? objectId === workspaceController.activeDiagramId
                                          : selected)
+                        icon.source: iconRegistry.projectTreeIcon(
+                                         kind, objectType, objectId,
+                                         nested, expanded)
+                        icon.width: iconRegistry.defaultSize
+                        icon.height: iconRegistry.defaultSize
                         background: Rectangle {
                             color: treeDelegate.highlighted ? uiTheme.accent
                                  : treeDelegate.browserDropActive ? uiTheme.hoverBackground
@@ -658,7 +747,7 @@ ApplicationWindow {
                     Label {
                         Layout.fillWidth: true
                         padding: 10
-                        text: qsTr("Selected element properties")
+                        text: qsTr("Selected item properties")
                         font.bold: true
                         background: Rectangle { color: uiTheme.panelHeader }
                     }
@@ -680,6 +769,82 @@ ApplicationWindow {
                                 projectController.selectedName = text
                         }
                     }
+                    Label {
+                        Layout.leftMargin: 10
+                        text: qsTr("Source end")
+                        font.bold: true
+                        visible: projectController.selectedKind === "relationship"
+                    }
+                    GridLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 10
+                        Layout.rightMargin: 10
+                        columns: 2
+                        columnSpacing: 8
+                        rowSpacing: 6
+                        visible: projectController.selectedKind === "relationship"
+
+                        Label { text: qsTr("Role") }
+                        TextField {
+                            id: sourceRoleEditor
+                            Layout.fillWidth: true
+                            placeholderText: qsTr("Optional")
+                            text: projectController.selectedSourceRole
+                            onEditingFinished: {
+                                if (text !== projectController.selectedSourceRole)
+                                    projectController.selectedSourceRole = text
+                            }
+                        }
+                        Label { text: qsTr("Multiplicity") }
+                        TextField {
+                            id: sourceMultiplicityEditor
+                            Layout.fillWidth: true
+                            placeholderText: qsTr("For example: 0..*")
+                            text: projectController.selectedSourceMultiplicity
+                            onEditingFinished: {
+                                if (text !== projectController.selectedSourceMultiplicity)
+                                    projectController.selectedSourceMultiplicity = text
+                            }
+                        }
+                    }
+                    Label {
+                        Layout.leftMargin: 10
+                        text: qsTr("Target end")
+                        font.bold: true
+                        visible: projectController.selectedKind === "relationship"
+                    }
+                    GridLayout {
+                        Layout.fillWidth: true
+                        Layout.leftMargin: 10
+                        Layout.rightMargin: 10
+                        columns: 2
+                        columnSpacing: 8
+                        rowSpacing: 6
+                        visible: projectController.selectedKind === "relationship"
+
+                        Label { text: qsTr("Role") }
+                        TextField {
+                            id: targetRoleEditor
+                            Layout.fillWidth: true
+                            placeholderText: qsTr("Optional")
+                            text: projectController.selectedTargetRole
+                            onEditingFinished: {
+                                if (text !== projectController.selectedTargetRole)
+                                    projectController.selectedTargetRole = text
+                            }
+                        }
+                        Label { text: qsTr("Multiplicity") }
+                        TextField {
+                            id: targetMultiplicityEditor
+                            Layout.fillWidth: true
+                            placeholderText: qsTr("For example: 1")
+                            text: projectController.selectedTargetMultiplicity
+                            onEditingFinished: {
+                                if (text !== projectController.selectedTargetMultiplicity)
+                                    projectController.selectedTargetMultiplicity = text
+                            }
+                        }
+                    }
                     Label { Layout.leftMargin: 10; text: qsTr("Attributes — one per line"); visible: projectController.selectedKind === "element" && (projectController.selectedType === "class" || projectController.selectedType === "struct") }
                     TextArea {
                         id: attributesEditor
@@ -696,12 +861,14 @@ ApplicationWindow {
                         Layout.alignment: Qt.AlignRight
                         Layout.rightMargin: 10
                         visible: attributesEditor.visible
-                        Button {
+                        CatalogButton {
+                            catalogId: "edit.applyProperty"
                             text: qsTr("Apply")
                             enabled: attributesEditor.text !== projectController.selectedAttributes
                             onClicked: projectController.selectedAttributes = attributesEditor.text
                         }
-                        Button {
+                        CatalogButton {
+                            catalogId: "edit.revertProperty"
                             text: qsTr("Revert")
                             enabled: attributesEditor.text !== projectController.selectedAttributes
                             onClicked: attributesEditor.text = projectController.selectedAttributes
@@ -723,12 +890,14 @@ ApplicationWindow {
                         Layout.alignment: Qt.AlignRight
                         Layout.rightMargin: 10
                         visible: operationsEditor.visible
-                        Button {
+                        CatalogButton {
+                            catalogId: "edit.applyProperty"
                             text: qsTr("Apply")
                             enabled: operationsEditor.text !== projectController.selectedOperations
                             onClicked: projectController.selectedOperations = operationsEditor.text
                         }
-                        Button {
+                        CatalogButton {
+                            catalogId: "edit.revertProperty"
                             text: qsTr("Revert")
                             enabled: operationsEditor.text !== projectController.selectedOperations
                             onClicked: operationsEditor.text = projectController.selectedOperations
@@ -750,12 +919,14 @@ ApplicationWindow {
                         Layout.alignment: Qt.AlignRight
                         Layout.rightMargin: 10
                         visible: literalsEditor.visible
-                        Button {
+                        CatalogButton {
+                            catalogId: "edit.applyProperty"
                             text: qsTr("Apply")
                             enabled: literalsEditor.text !== projectController.selectedLiterals
                             onClicked: projectController.selectedLiterals = literalsEditor.text
                         }
-                        Button {
+                        CatalogButton {
+                            catalogId: "edit.revertProperty"
                             text: qsTr("Revert")
                             enabled: literalsEditor.text !== projectController.selectedLiterals
                             onClicked: literalsEditor.text = projectController.selectedLiterals
@@ -774,6 +945,14 @@ ApplicationWindow {
                                 operationsEditor.text = projectController.selectedOperations
                             if (!literalsEditor.activeFocus)
                                 literalsEditor.text = projectController.selectedLiterals
+                            if (!sourceRoleEditor.activeFocus)
+                                sourceRoleEditor.text = projectController.selectedSourceRole
+                            if (!sourceMultiplicityEditor.activeFocus)
+                                sourceMultiplicityEditor.text = projectController.selectedSourceMultiplicity
+                            if (!targetRoleEditor.activeFocus)
+                                targetRoleEditor.text = projectController.selectedTargetRole
+                            if (!targetMultiplicityEditor.activeFocus)
+                                targetMultiplicityEditor.text = projectController.selectedTargetMultiplicity
                         }
                     }
                     Item { Layout.fillHeight: true; Layout.minimumHeight: 20 }
@@ -792,7 +971,8 @@ ApplicationWindow {
         property string selectedItemsJson: "[]"
         property int selectedItemCount: 0
 
-        MenuItem {
+        CatalogMenuItem {
+            catalogId: "browser.createFolder"
             visible: treeContextMenu.targetKind === "folder"
                      || treeContextMenu.targetKind === "element"
                      || (treeContextMenu.targetKind === "root"
@@ -811,7 +991,8 @@ ApplicationWindow {
                      || treeContextMenu.targetKind === "diagram"
             height: visible ? implicitHeight : 0
         }
-        MenuItem {
+        CatalogMenuItem {
+            catalogId: "browser.addEmptyNamespace"
             visible: treeContextMenu.targetKind === "element"
                      && treeContextMenu.targetType === "package"
             height: visible ? implicitHeight : 0
@@ -821,7 +1002,8 @@ ApplicationWindow {
                              workspaceController.activeDiagramId,
                              treeContextMenu.targetId)
         }
-        MenuItem {
+        CatalogMenuItem {
+            catalogId: "browser.renameFolder"
             visible: treeContextMenu.targetKind === "folder"
             height: visible ? implicitHeight : 0
             text: qsTr("Rename folder…")
@@ -842,7 +1024,8 @@ ApplicationWindow {
             onManageRequested: browserStyleDialog.openFor(
                                    treeContextMenu.targetStyleId)
         }
-        MenuItem {
+        CatalogMenuItem {
+            catalogId: "browser.deleteSelection"
             visible: treeContextMenu.selectedItemCount > 0
             height: visible ? implicitHeight : 0
             text: treeContextMenu.selectedItemCount === 1
@@ -858,7 +1041,8 @@ ApplicationWindow {
                          || treeContextMenu.targetKind === "element")
             height: visible ? implicitHeight : 0
         }
-        MenuItem {
+        CatalogMenuItem {
+            catalogId: "browser.moveUp"
             visible: treeContextMenu.selectedItemCount === 1
                      && (treeContextMenu.targetKind === "folder"
                          || treeContextMenu.targetKind === "element")
@@ -871,7 +1055,8 @@ ApplicationWindow {
                              treeContextMenu.targetKind,
                              treeContextMenu.targetId, -1)
         }
-        MenuItem {
+        CatalogMenuItem {
+            catalogId: "browser.moveDown"
             visible: treeContextMenu.selectedItemCount === 1
                      && (treeContextMenu.targetKind === "folder"
                          || treeContextMenu.targetKind === "element")
@@ -897,7 +1082,7 @@ ApplicationWindow {
         }
     }
 
-    Dialog {
+    CatalogDialog {
         id: folderNameDialog
         objectName: "folderNameDialog"
         parent: Overlay.overlay
@@ -947,7 +1132,7 @@ ApplicationWindow {
         }
     }
 
-    Dialog {
+    CatalogDialog {
         id: packageMoveConfirmation
         objectName: "packageMoveConfirmation"
         parent: Overlay.overlay
@@ -972,7 +1157,7 @@ ApplicationWindow {
         }
     }
 
-    Dialog {
+    CatalogDialog {
         id: preferencesDialog
         objectName: "preferencesDialog"
         parent: Overlay.overlay
@@ -1438,7 +1623,8 @@ ApplicationWindow {
                                         text: displayName
                                         elide: Text.ElideRight
                                     }
-                                    Button {
+                                    CatalogButton {
+                                        catalogId: "preferences.chooseThemeColor"
                                         Layout.preferredWidth: 54
                                         Layout.preferredHeight: 28
                                         Accessible.name: qsTr("Choose %1 color").arg(displayName)
@@ -1475,7 +1661,8 @@ ApplicationWindow {
                         RowLayout {
                             Layout.fillWidth: true
                             Item { Layout.fillWidth: true }
-                            Button {
+                            CatalogButton {
+                                catalogId: "preferences.resetThemeColors"
                                 text: qsTr("Reset colors")
                                 onClicked: {
                                     for (let index = 0; index < colorPreferencesModel.count; ++index) {
@@ -1507,8 +1694,9 @@ ApplicationWindow {
         onRejected: modelIndex = -1
     }
 
-    Dialog {
+    CatalogDialog {
         id: unsavedChangesDialog
+        saveCatalogId: "project.saveProject"
         parent: Overlay.overlay
         anchors.centerIn: parent
         width: Math.min(460, parent.width - 40)
@@ -1517,9 +1705,9 @@ ApplicationWindow {
         title: qsTr("Unsaved changes")
         standardButtons: Dialog.Save | Dialog.Discard | Dialog.Cancel
 
-        Label {
-            width: parent.width
+        contentItem: Label {
             wrapMode: Text.Wrap
+            padding: 16
             text: pendingDocumentAction === "close"
                   ? qsTr("Save changes to %1 before closing?").arg(projectController.projectName)
                   : qsTr("Save changes to %1 before continuing?").arg(projectController.projectName)
@@ -1530,19 +1718,25 @@ ApplicationWindow {
         onRejected: root.cancelPendingDocumentAction()
     }
 
-    Dialog {
+    CatalogDialog {
         id: replaceProjectDialog
+        yesCatalogId: "project.replaceProject"
         parent: Overlay.overlay
         anchors.centerIn: parent
         width: Math.min(500, parent.width - 40)
+        // Fusion's Dialog style derives implicitHeight from a wrapped content
+        // label whose laid-out height, in turn, depends on the popup geometry.
+        // This compact confirmation has bounded content, so an explicit
+        // implicit height breaks that startup-time cycle deterministically.
+        implicitHeight: 180
         modal: true
         focus: true
         title: qsTr("Replace existing project?")
         standardButtons: Dialog.Yes | Dialog.Cancel
 
-        Label {
-            width: parent.width
+        contentItem: Label {
             wrapMode: Text.Wrap
+            padding: 16
             text: qsTr("The selected folder already contains a u uml project. "
                        + "Saving here will replace its manifest, model, and "
                        + "diagram files. Continue?")
@@ -1560,8 +1754,9 @@ ApplicationWindow {
         }
     }
 
-    Dialog {
+    CatalogDialog {
         id: cppImportDialog
+        applyCatalogId: "project.applyCppSynchronization"
         parent: Overlay.overlay
         anchors.centerIn: parent
         width: Math.min(780, parent.width - 40)
@@ -1694,8 +1889,16 @@ ApplicationWindow {
                 Layout.leftMargin: 10
                 Label { text: qsTr("Log"); font.bold: true }
                 Item { Layout.fillWidth: true }
-                ToolButton { text: qsTr("Clear"); onClicked: projectController.diagnostics.clear() }
-                ToolButton { text: "×"; onClicked: logPopup.close() }
+                CatalogToolButton {
+                    catalogId: "workspace.clearLog"
+                    text: qsTr("Clear")
+                    onClicked: projectController.diagnostics.clear()
+                }
+                CatalogToolButton {
+                    catalogId: "workspace.closeLog"
+                    text: "×"
+                    onClicked: logPopup.close()
+                }
             }
             ListView {
                 id: logList

@@ -12,7 +12,8 @@ Menu {
 
     title: qsTr("Style")
 
-    MenuItem {
+    CatalogMenuItem {
+        catalogId: "style.inherit"
         text: qsTr("Inherit")
         checkable: true
         checked: root.assignedStyleId.length === 0
@@ -23,8 +24,9 @@ Menu {
     Instantiator {
         model: projectController.diagramStyles
 
-        delegate: MenuItem {
+        delegate: CatalogMenuItem {
             required property var modelData
+            catalogId: "style.assignNamed"
             text: modelData.name
             checkable: true
             checked: root.assignedStyleId === modelData.id
@@ -42,7 +44,8 @@ Menu {
     }
 
     MenuSeparator {}
-    MenuItem {
+    CatalogMenuItem {
+        catalogId: "style.manage"
         text: qsTr("Manage styles…")
         onTriggered: root.manageRequested()
     }

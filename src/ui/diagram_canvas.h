@@ -4,6 +4,7 @@
 #include "ui/connector_routing.h"
 
 #include <QHash>
+#include <QHoverEvent>
 #include <QKeyEvent>
 #include <QLineF>
 #include <QQuickItem>
@@ -63,6 +64,25 @@ class DiagramCanvas : public QQuickItem {
   Q_PROPERTY(
       QVariantMap relationshipGestureKeys READ relationshipGestureKeys WRITE
           setRelationshipGestureKeys NOTIFY relationshipGestureKeysChanged)
+  Q_PROPERTY(bool relationshipToolboxCandidate READ relationshipToolboxCandidate
+                 NOTIFY relationshipToolboxCandidateChanged)
+  Q_PROPERTY(QString relationshipToolboxNodeId READ relationshipToolboxNodeId
+                 NOTIFY relationshipToolboxCandidateChanged)
+  Q_PROPERTY(QString relationshipToolboxEdge READ relationshipToolboxEdge NOTIFY
+                 relationshipToolboxCandidateChanged)
+  Q_PROPERTY(
+      QPointF relationshipToolboxViewAnchor READ relationshipToolboxViewAnchor
+          NOTIFY relationshipToolboxCandidateChanged)
+  Q_PROPERTY(
+      QPointF relationshipToolboxSceneAnchor READ relationshipToolboxSceneAnchor
+          NOTIFY relationshipToolboxCandidateChanged)
+  Q_PROPERTY(bool arrangementToolboxCandidate READ arrangementToolboxCandidate
+                 NOTIFY arrangementToolboxCandidateChanged)
+  Q_PROPERTY(QString arrangementToolboxNodeId READ arrangementToolboxNodeId
+                 NOTIFY arrangementToolboxCandidateChanged)
+  Q_PROPERTY(
+      QPointF arrangementToolboxViewAnchor READ arrangementToolboxViewAnchor
+          NOTIFY arrangementToolboxCandidateChanged)
 
 public:
   explicit DiagramCanvas(QQuickItem *parent = nullptr);
@@ -97,6 +117,14 @@ public:
   QString selectedStyleId() const;
   QVariantMap relationshipGestureKeys() const;
   void setRelationshipGestureKeys(const QVariantMap &keys);
+  bool relationshipToolboxCandidate() const;
+  QString relationshipToolboxNodeId() const;
+  QString relationshipToolboxEdge() const;
+  QPointF relationshipToolboxViewAnchor() const;
+  QPointF relationshipToolboxSceneAnchor() const;
+  bool arrangementToolboxCandidate() const;
+  QString arrangementToolboxNodeId() const;
+  QPointF arrangementToolboxViewAnchor() const;
 
   Q_INVOKABLE void fitToContent();
   Q_INVOKABLE void addElementsAt(const QStringList &elementIds, qreal x,
@@ -123,6 +151,14 @@ public:
   Q_INVOKABLE void deleteSelectedConnector();
   Q_INVOKABLE void clearCanvasSelection();
   Q_INVOKABLE void refreshTheme();
+  Q_INVOKABLE bool beginToolboxRelationship(const QString &relationshipType,
+                                            const QString &sourceNodeId,
+                                            qreal sourceSceneX,
+                                            qreal sourceSceneY);
+  Q_INVOKABLE void updateToolboxRelationship(qreal viewX, qreal viewY,
+                                             bool suppressSnapping = false);
+  Q_INVOKABLE void finishToolboxRelationship(qreal viewX, qreal viewY,
+                                             bool suppressSnapping = false);
 
 signals:
   void projectChanged();
@@ -136,6 +172,12 @@ signals:
   void diagramItemSizingModeChanged();
   void defaultConnectorRoutingChanged();
   void relationshipGestureKeysChanged();
+  void relationshipToolboxCandidateChanged();
+  void arrangementToolboxCandidateChanged();
+  // Actual pointer/selection interactions dismiss every contextual surface.
+  // Model state changes deliberately do not: a toolbox remains usable for a
+  // sequence of compact commands while the selection stays unchanged.
+  void contextToolboxesDismissRequested();
   void contextMenuRequested(const QString &target, qreal x, qreal y);
   void editRequested(const QString &objectId, const QString &field, int index,
                      const QString &text, qreal x, qreal y, qreal width,
@@ -150,6 +192,8 @@ protected:
   void mouseMoveEvent(QMouseEvent *event) override;
   void mouseReleaseEvent(QMouseEvent *event) override;
   void mouseDoubleClickEvent(QMouseEvent *event) override;
+  void hoverMoveEvent(QHoverEvent *event) override;
+  void hoverLeaveEvent(QHoverEvent *event) override;
   void wheelEvent(QWheelEvent *event) override;
   void keyPressEvent(QKeyEvent *event) override;
 
@@ -219,6 +263,11 @@ private:
   void updateBendPointPreview(const QPointF &scenePoint);
   void commitBendPointPreview();
   bool startConnectorGesture(const QString &relationshipType);
+  void updateRelationshipToolboxCandidate(const QPointF &viewPoint);
+  void clearRelationshipToolboxCandidate();
+  void updateArrangementToolboxCandidate(const QPointF &viewPoint);
+  void refreshArrangementToolboxAnchor();
+  void clearArrangementToolboxCandidate(bool clearAnchor = false);
   void updateConnectorGesture(const QPointF &scenePoint, bool suppressSnapping);
   void commitConnectorGesture(const QPointF &scenePoint, bool suppressSnapping);
   void cancelConnectorGesture();
@@ -294,6 +343,14 @@ private:
   QString m_diagramItemSizingMode = QStringLiteral("content");
   ConnectorRouting m_defaultConnectorRouting;
   QVariantMap m_relationshipGestureKeys;
+  bool m_relationshipToolboxCandidate = false;
+  QString m_relationshipToolboxNodeId;
+  QString m_relationshipToolboxEdge;
+  QPointF m_relationshipToolboxViewAnchor;
+  QPointF m_relationshipToolboxSceneAnchor;
+  bool m_arrangementToolboxCandidate = false;
+  QString m_arrangementToolboxNodeId;
+  QPointF m_arrangementToolboxViewAnchor;
   QVector<QLineF> m_alignmentGuides;
   quint64 m_themeRevision = 0;
 };

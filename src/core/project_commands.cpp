@@ -1252,25 +1252,44 @@ void SetElementListCommand::apply(ProjectData &project,
   }
 }
 
-RenameRelationshipCommand::RenameRelationshipCommand(
-    ProjectController *controller, QString relationshipId, QString before,
-    QString after)
-    : ProjectCommand(controller, QStringLiteral("Edit name")),
-      m_relationshipId(std::move(relationshipId)), m_before(std::move(before)),
-      m_after(std::move(after)) {}
+EditRelationshipTextCommand::EditRelationshipTextCommand(
+    ProjectController *controller, QString relationshipId,
+    RelationshipTextProperty property, QString before, QString after,
+    const QString &description)
+    : ProjectCommand(controller, description),
+      m_relationshipId(std::move(relationshipId)), m_property(property),
+      m_before(std::move(before)), m_after(std::move(after)) {}
 
-void RenameRelationshipCommand::execute(ProjectData &project) {
+void EditRelationshipTextCommand::execute(ProjectData &project) {
   apply(project, m_after);
 }
 
-void RenameRelationshipCommand::revert(ProjectData &project) {
+void EditRelationshipTextCommand::revert(ProjectData &project) {
   apply(project, m_before);
 }
 
-void RenameRelationshipCommand::apply(ProjectData &project,
-                                      const QString &value) {
-  if (auto *relationship = findRelationship(project, m_relationshipId))
+void EditRelationshipTextCommand::apply(ProjectData &project,
+                                        const QString &value) {
+  auto *relationship = findRelationship(project, m_relationshipId);
+  if (!relationship)
+    return;
+  switch (m_property) {
+  case RelationshipTextProperty::Name:
     relationship->name = value;
+    break;
+  case RelationshipTextProperty::SourceRole:
+    relationship->sourceEnd.role = value;
+    break;
+  case RelationshipTextProperty::SourceMultiplicity:
+    relationship->sourceEnd.multiplicity = value;
+    break;
+  case RelationshipTextProperty::TargetRole:
+    relationship->targetEnd.role = value;
+    break;
+  case RelationshipTextProperty::TargetMultiplicity:
+    relationship->targetEnd.multiplicity = value;
+    break;
+  }
 }
 
 RenameDiagramCommand::RenameDiagramCommand(ProjectController *controller,

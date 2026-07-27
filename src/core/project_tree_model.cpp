@@ -29,6 +29,7 @@ struct ProjectTreeModel::TreeNode {
   QString kind;
   QString objectType;
   QString qualifiedPath;
+  bool nested = false;
   TreeNode *parent = nullptr;
   std::vector<TreeNode *> children;
 };
@@ -101,6 +102,7 @@ void ProjectTreeModel::rebuildTree() {
     node->kind = QStringLiteral("element");
     node->objectType = toString(element.type);
     node->qualifiedPath = element.name;
+    node->nested = !element.enclosingTypeId.isEmpty();
     m_elementNodes.insert(element.id, node);
     elementOrder.push_back(node);
     // Duplicate display names are legal user data. The first matching element
@@ -328,6 +330,8 @@ QVariant ProjectTreeModel::data(const QModelIndex &item, int role) const {
     return node->kind;
   if (role == TypeRole)
     return node->objectType;
+  if (role == NestedRole)
+    return node->nested;
   return {};
 }
 
@@ -336,6 +340,7 @@ QHash<int, QByteArray> ProjectTreeModel::roleNames() const {
   roles.insert(IdRole, "objectId");
   roles.insert(KindRole, "kind");
   roles.insert(TypeRole, "objectType");
+  roles.insert(NestedRole, "nested");
   return roles;
 }
 

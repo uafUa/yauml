@@ -13,6 +13,7 @@
 
 #include <QDir>
 #include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -81,6 +82,7 @@ class CoreTests final : public QObject {
 private slots:
   void json5Profile();
   void json5SerializationUsesReadableKeys();
+  void actionIconCatalogIsValid();
   void deterministicRoundTrip();
   void projectDiagramStylesPersistResolveAndUndo();
   void cppSynchronizationSourcePersistsAndIsUndoable();
@@ -110,6 +112,7 @@ private slots:
   void deleteElementCommandRestoresCascade();
   void reconnectRelationshipCommandUndoRedo();
   void textCommandsUndoRedo();
+  void relationshipEndMetadataPersistsAndIsUndoable();
   void relationshipAndDiagramDeletionUndoRedo();
   void relationshipTypesAndPresentationRemoval();
   void connectorAnchorUndoRedo();
@@ -166,6 +169,76 @@ void CoreTests::json5SerializationUsesReadableKeys() {
   QCOMPARE(parsed.document.object(), object);
 }
 
+void CoreTests::actionIconCatalogIsValid() {
+  const QString catalogPath =
+      QFINDTESTDATA("../assets/icons/action-icons.json5");
+  QVERIFY2(!catalogPath.isEmpty(), "Action icon catalog was not found");
+  QFile catalog(catalogPath);
+  QVERIFY2(catalog.open(QIODevice::ReadOnly),
+           qPrintable(catalog.errorString()));
+  const auto parsed = Json5::parse(catalog.readAll());
+  QVERIFY2(parsed, qPrintable(parsed.error));
+
+  const QJsonObject root = parsed.document.object();
+  QCOMPARE(root.value(QStringLiteral("schemaVersion")).toInt(), 1);
+
+  const QString mainQmlPath = QFINDTESTDATA("../qml/Main.qml");
+  QVERIFY2(!mainQmlPath.isEmpty(), "Main.qml was not found");
+  const QDir qmlDirectory = QFileInfo(mainQmlPath).dir();
+  QByteArray qmlSources;
+  for (const QString &qmlFile :
+       qmlDirectory.entryList({QStringLiteral("*.qml")}, QDir::Files)) {
+    QFile source(qmlDirectory.filePath(qmlFile));
+    QVERIFY2(source.open(QIODevice::ReadOnly),
+             qPrintable(source.errorString()));
+    qmlSources += source.readAll();
+    qmlSources += '\n';
+  }
+
+  const QJsonObject actions = root.value(QStringLiteral("actions")).toObject();
+  QVERIFY(!actions.isEmpty());
+  int actionCount = 0;
+  for (auto category = actions.begin(); category != actions.end(); ++category) {
+    const QJsonObject entries = category.value().toObject();
+    QVERIFY2(!entries.isEmpty(), qPrintable(category.key()));
+    for (auto action = entries.begin(); action != entries.end(); ++action) {
+      const QJsonObject entry = action.value().toObject();
+      const QString id = category.key() + u'.' + action.key();
+      QVERIFY2(!entry.value(QStringLiteral("label")).toString().isEmpty(),
+               qPrintable(id + QStringLiteral(" needs a label")));
+      QVERIFY2(entry.value(QStringLiteral("contexts")).isArray(),
+               qPrintable(id + QStringLiteral(" needs contexts")));
+      QVERIFY2(entry.value(QStringLiteral("svg")).isString(),
+               qPrintable(id + QStringLiteral(" needs an svg field")));
+      const QByteArray quotedId =
+          QByteArray("\"") + id.toUtf8() + QByteArray("\"");
+      QVERIFY2(qmlSources.contains(quotedId),
+               qPrintable(
+                   id + QStringLiteral(" is not connected to a QML command")));
+      const QString svg = entry.value(QStringLiteral("svg")).toString();
+      if (!svg.isEmpty()) {
+        QVERIFY2(QFileInfo::exists(QFileInfo(catalogPath).dir().filePath(svg)),
+                 qPrintable(id + QStringLiteral(" references missing ") + svg));
+      }
+      ++actionCount;
+    }
+  }
+  QVERIFY(actionCount >= 60);
+
+  const QJsonObject treeNodes =
+      root.value(QStringLiteral("projectTreeNodes")).toObject();
+  QVERIFY(treeNodes.size() >= 10);
+  for (auto node = treeNodes.begin(); node != treeNodes.end(); ++node) {
+    const QJsonObject entry = node.value().toObject();
+    QVERIFY2(!entry.value(QStringLiteral("label")).toString().isEmpty(),
+             qPrintable(node.key() + QStringLiteral(" needs a label")));
+    QVERIFY2(entry.value(QStringLiteral("match")).isObject(),
+             qPrintable(node.key() + QStringLiteral(" needs match rules")));
+    QVERIFY2(entry.value(QStringLiteral("svg")).isString(),
+             qPrintable(node.key() + QStringLiteral(" needs an svg field")));
+  }
+}
+
 void CoreTests::deterministicRoundTrip() {
   QTemporaryDir temporary;
   QVERIFY(temporary.isValid());
@@ -194,6 +267,11 @@ void CoreTests::deterministicRoundTrip() {
   relationship.name = QStringLiteral("self reference");
   relationship.sourceId = element.id;
   relationship.targetId = element.id;
+  relationship.sourceEnd.role = QStringLiteral("owner");
+  relationship.sourceEnd.multiplicity = QStringLiteral("1");
+  relationship.sourceEnd.extra.insert(QStringLiteral("futureEndField"), true);
+  relationship.targetEnd.role = QStringLiteral("items");
+  relationship.targetEnd.multiplicity = QStringLiteral("0..*");
   project.relationships.append(relationship);
   ConnectorPresentation connector;
   connector.id = newId();
@@ -232,6 +310,26 @@ void CoreTests::deterministicRoundTrip() {
                .extra.value(QStringLiteral("futureField"))
                .toInt(),
            42);
+
+  // Shape/type errors remain visible to the same load path used by the
+  // headless validator instead of being silently coerced to empty text.
+  const QString modelPath =
+      QDir(temporary.path()).filePath(QStringLiteral("model/model.json5"));
+  QFile modelFile(modelPath);
+  QVERIFY(modelFile.open(QIODevice::ReadOnly));
+  QByteArray malformedModel = modelFile.readAll();
+  modelFile.close();
+  QVERIFY(malformedModel.contains("role: \"owner\""));
+  malformedModel.replace("role: \"owner\"", "role: 42");
+  writeTestFile(modelPath, malformedModel);
+  const auto malformed = ProjectSerializer::load(temporary.path());
+  QVERIFY(!malformed.ok);
+  QVERIFY(std::any_of(malformed.diagnostics.cbegin(),
+                      malformed.diagnostics.cend(),
+                      [](const Diagnostic &diagnostic) {
+                        return diagnostic.message.contains(
+                            QStringLiteral("sourceEnd role must be a string"));
+                      }));
 }
 
 void CoreTests::projectDiagramStylesPersistResolveAndUndo() {
@@ -2134,6 +2232,79 @@ void CoreTests::textCommandsUndoRedo() {
            QStringLiteral("Renamed diagram"));
   controller.undo();
   QCOMPARE(controller.diagramName(diagramId), originalDiagramName);
+}
+
+void CoreTests::relationshipEndMetadataPersistsAndIsUndoable() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString sourceElement =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const QString targetElement =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const auto &nodes = controller.data().diagrams.first().nodes;
+  const auto sourceNode =
+      std::find_if(nodes.cbegin(), nodes.cend(),
+                   [&sourceElement](const NodePresentation &node) {
+                     return node.elementId == sourceElement;
+                   });
+  const auto targetNode =
+      std::find_if(nodes.cbegin(), nodes.cend(),
+                   [&targetElement](const NodePresentation &node) {
+                     return node.elementId == targetElement;
+                   });
+  QVERIFY(sourceNode != nodes.cend());
+  QVERIFY(targetNode != nodes.cend());
+  const QString connectorId = controller.createRelationship(
+      diagramId, sourceNode->id, targetNode->id, QStringLiteral("association"));
+  const auto *connector =
+      findConnector(controller.data().diagrams.first(), connectorId);
+  QVERIFY(connector);
+  const QString relationshipId = connector->relationshipId;
+
+  controller.editText(relationshipId, QStringLiteral("sourceRole"), -1,
+                      QStringLiteral("owner"));
+  controller.editText(relationshipId, QStringLiteral("sourceMultiplicity"), -1,
+                      QStringLiteral("1"));
+  controller.editText(relationshipId, QStringLiteral("targetRole"), -1,
+                      QStringLiteral("items"));
+  controller.editText(relationshipId, QStringLiteral("targetMultiplicity"), -1,
+                      QStringLiteral("0..*"));
+  const auto relationship = [&]() {
+    return findRelationship(controller.data(), relationshipId);
+  };
+  QCOMPARE(relationship()->sourceEnd.role, QStringLiteral("owner"));
+  QCOMPARE(relationship()->sourceEnd.multiplicity, QStringLiteral("1"));
+  QCOMPARE(relationship()->targetEnd.role, QStringLiteral("items"));
+  QCOMPARE(relationship()->targetEnd.multiplicity, QStringLiteral("0..*"));
+  QCOMPARE(controller.undoText(), QStringLiteral("Edit target multiplicity"));
+
+  controller.undo();
+  QVERIFY(relationship()->targetEnd.multiplicity.isEmpty());
+  controller.redo();
+  QCOMPARE(relationship()->targetEnd.multiplicity, QStringLiteral("0..*"));
+
+  // End values are optional: clearing one is a compact command and undo
+  // restores only that field.
+  controller.editText(relationshipId, QStringLiteral("sourceRole"), -1, {});
+  QVERIFY(relationship()->sourceEnd.role.isEmpty());
+  controller.undo();
+  QCOMPARE(relationship()->sourceEnd.role, QStringLiteral("owner"));
+
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  const auto saved =
+      ProjectSerializer::save(temporary.path(), controller.data());
+  QVERIFY2(saved.ok, qPrintable(saved.diagnostics.isEmpty()
+                                    ? QString()
+                                    : saved.diagnostics.first().message));
+  const auto loaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(loaded.ok);
+  const auto *loadedRelationship =
+      findRelationship(loaded.project, relationshipId);
+  QVERIFY(loadedRelationship);
+  QCOMPARE(loadedRelationship->sourceEnd, relationship()->sourceEnd);
+  QCOMPARE(loadedRelationship->targetEnd, relationship()->targetEnd);
+  QVERIFY(ProjectSerializer::validate(loaded.project).isEmpty());
 }
 
 void CoreTests::relationshipAndDiagramDeletionUndoRedo() {

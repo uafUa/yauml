@@ -248,6 +248,51 @@ QJsonObject browserFolderToJson(const BrowserFolder &folder) {
   return object;
 }
 
+QJsonObject relationshipEndToJson(const RelationshipEnd &end) {
+  QJsonObject object = end.extra;
+  if (!end.role.isEmpty())
+    object.insert(QStringLiteral("role"), end.role);
+  else
+    object.remove(QStringLiteral("role"));
+  if (!end.multiplicity.isEmpty())
+    object.insert(QStringLiteral("multiplicity"), end.multiplicity);
+  else
+    object.remove(QStringLiteral("multiplicity"));
+  return object;
+}
+
+RelationshipEnd relationshipEndFromJson(const QJsonValue &value,
+                                        const QString &endName,
+                                        const QString &relationshipId,
+                                        QList<Diagnostic> &diagnostics) {
+  RelationshipEnd end;
+  if (value.isUndefined())
+    return end;
+  if (!value.isObject()) {
+    diagnostics.append(
+        error(QStringLiteral("validation"),
+              QStringLiteral("Relationship %1 must be an object").arg(endName),
+              relationshipId));
+    return end;
+  }
+  const QJsonObject object = value.toObject();
+  const auto readOptionalText = [&](const QString &key) {
+    const QJsonValue text = object.value(key);
+    if (!text.isUndefined() && !text.isString())
+      diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral("Relationship %1 %2 must be a string")
+                    .arg(endName, key),
+                relationshipId));
+    return text.toString();
+  };
+  end.role = readOptionalText(QStringLiteral("role"));
+  end.multiplicity = readOptionalText(QStringLiteral("multiplicity"));
+  end.extra = withoutKeys(
+      object, {QStringLiteral("role"), QStringLiteral("multiplicity")});
+  return end;
+}
+
 QJsonObject relationshipToJson(const Relationship &relationship) {
   QJsonObject object = relationship.extra;
   object.insert(QStringLiteral("id"), relationship.id);
@@ -255,6 +300,16 @@ QJsonObject relationshipToJson(const Relationship &relationship) {
   object.insert(QStringLiteral("name"), relationship.name);
   object.insert(QStringLiteral("sourceId"), relationship.sourceId);
   object.insert(QStringLiteral("targetId"), relationship.targetId);
+  const QJsonObject sourceEnd = relationshipEndToJson(relationship.sourceEnd);
+  if (!sourceEnd.isEmpty())
+    object.insert(QStringLiteral("sourceEnd"), sourceEnd);
+  else
+    object.remove(QStringLiteral("sourceEnd"));
+  const QJsonObject targetEnd = relationshipEndToJson(relationship.targetEnd);
+  if (!targetEnd.isEmpty())
+    object.insert(QStringLiteral("targetEnd"), targetEnd);
+  else
+    object.remove(QStringLiteral("targetEnd"));
   return object;
 }
 
@@ -678,10 +733,17 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
     relationship.name = object.value(QStringLiteral("name")).toString();
     relationship.sourceId = object.value(QStringLiteral("sourceId")).toString();
     relationship.targetId = object.value(QStringLiteral("targetId")).toString();
-    relationship.extra =
-        withoutKeys(object, {QStringLiteral("id"), QStringLiteral("type"),
-                             QStringLiteral("name"), QStringLiteral("sourceId"),
-                             QStringLiteral("targetId")});
+    relationship.sourceEnd = relationshipEndFromJson(
+        object.value(QStringLiteral("sourceEnd")), QStringLiteral("sourceEnd"),
+        relationship.id, outcome.diagnostics);
+    relationship.targetEnd = relationshipEndFromJson(
+        object.value(QStringLiteral("targetEnd")), QStringLiteral("targetEnd"),
+        relationship.id, outcome.diagnostics);
+    relationship.extra = withoutKeys(
+        object,
+        {QStringLiteral("id"), QStringLiteral("type"), QStringLiteral("name"),
+         QStringLiteral("sourceId"), QStringLiteral("targetId"),
+         QStringLiteral("sourceEnd"), QStringLiteral("targetEnd")});
     project.relationships.append(relationship);
   }
 

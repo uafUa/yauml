@@ -70,6 +70,16 @@ public:
                       Qt::LeftButton, Qt::LeftButton, Qt::NoModifier);
     mouseDoubleClickEvent(&event);
   }
+
+  void hover(const QPointF &position, const QPointF &oldPosition = {}) {
+    QHoverEvent event(QEvent::HoverMove, position, position, oldPosition);
+    hoverMoveEvent(&event);
+  }
+
+  void leave(const QPointF &position = {}) {
+    QHoverEvent event(QEvent::HoverLeave, position, position, position);
+    hoverLeaveEvent(&event);
+  }
 };
 
 void populate(ProjectController &controller, int count) {
@@ -118,7 +128,10 @@ private slots:
   void packageCreationUsesAContainerFrame();
   void fitToContentUsesMeasuredElementSizeAndIsUndoable();
   void connectorBendPointCanBeAddedMovedAndRemoved();
+  void relationshipEndAnnotationsAreEditable();
   void edgeGestureCreatesCancelsAndSupportsSelfConnections();
+  void relationshipToolboxRequiresSelectedEdgeAndCreatesConnector();
+  void multiSelectionToolboxTracksArrangementCommands();
   void connectorEndpointsDragToReattachAndCancel();
   void connectorPortsSnapAndRemainFreelyPlaceable();
   void liveDragSnappingIsUndoableAndAltSuppressesIt();
@@ -668,6 +681,49 @@ void DiagramCanvasTests::connectorBendPointCanBeAddedMovedAndRemoved() {
   QCOMPARE(connector()->bendPoints.first().position, QPointF(285.0, 170.0));
 }
 
+void DiagramCanvasTests::relationshipEndAnnotationsAreEditable() {
+  ProjectController controller;
+  populate(controller, 2);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+  controller.updateNodeGeometry(diagramId, nodes.at(0).id, 50.0, 50.0, 220.0,
+                                120.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(1).id, 500.0, 50.0, 220.0,
+                                120.0);
+  const QString connectorId = controller.createRelationship(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("association"));
+  const auto *connector =
+      findConnector(controller.data().diagrams.first(), connectorId);
+  QVERIFY(connector);
+  const QString relationshipId = connector->relationshipId;
+  controller.editText(relationshipId, QStringLiteral("sourceRole"), -1,
+                      QStringLiteral("owner"));
+  controller.editText(relationshipId, QStringLiteral("sourceMultiplicity"), -1,
+                      QStringLiteral("1"));
+  controller.editText(relationshipId, QStringLiteral("targetRole"), -1,
+                      QStringLiteral("items"));
+  controller.editText(relationshipId, QStringLiteral("targetMultiplicity"), -1,
+                      QStringLiteral("0..*"));
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  QSignalSpy edits(&canvas, &DiagramCanvas::editRequested);
+
+  // The route runs from scene (270, 110) to (500, 110). Automatic end labels
+  // are inset 38 scene pixels and offset 14 pixels from the line. The default
+  // canvas pan contributes another (30, 30) in view coordinates.
+  const QList<QPair<QPointF, QString>> expectedHits = {
+      {{338.0, 154.0}, QStringLiteral("sourceRole")},
+      {{338.0, 126.0}, QStringLiteral("sourceMultiplicity")},
+      {{492.0, 154.0}, QStringLiteral("targetRole")},
+      {{492.0, 126.0}, QStringLiteral("targetMultiplicity")}};
+  for (const auto &[position, field] : expectedHits) {
+    canvas.doubleClick(position);
+    QCOMPARE(edits.count(), 1);
+    QCOMPARE(edits.takeFirst().at(1).toString(), field);
+  }
+}
+
 void DiagramCanvasTests::edgeGestureCreatesCancelsAndSupportsSelfConnections() {
   ProjectController controller;
   populate(controller, 2);
@@ -742,6 +798,111 @@ void DiagramCanvasTests::edgeGestureCreatesCancelsAndSupportsSelfConnections() {
   QCOMPARE(controller.data().relationships.size(), 3);
   QVERIFY(controller.data().relationships.constLast().type ==
           RelationshipType::Realization);
+}
+
+void DiagramCanvasTests::
+    relationshipToolboxRequiresSelectedEdgeAndCreatesConnector() {
+  ProjectController controller;
+  populate(controller, 2);
+  useStandardInteractionGeometry(controller);
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  const auto nodes = controller.data().diagrams.first().nodes;
+
+  // Hover alone is intentionally insufficient: a toolbox candidate exists
+  // only on the perimeter of a presentation that is already selected.
+  canvas.hover({300.0, 140.0});
+  QVERIFY(!canvas.relationshipToolboxCandidate());
+
+  canvas.press({190.0, 140.0});
+  canvas.release({190.0, 140.0});
+  QCOMPARE(canvas.selectedNodeCount(), 1);
+  canvas.hover({190.0, 140.0});
+  QVERIFY(!canvas.relationshipToolboxCandidate());
+  canvas.hover({300.0, 140.0}, {190.0, 140.0});
+  QVERIFY(canvas.relationshipToolboxCandidate());
+  QCOMPARE(canvas.relationshipToolboxNodeId(), nodes.at(0).id);
+  QCOMPARE(canvas.relationshipToolboxEdge(), QStringLiteral("right"));
+  QCOMPARE(canvas.relationshipToolboxSceneAnchor(), QPointF(270.0, 110.0));
+
+  // Retain the chosen side while travelling through a corner. This prevents
+  // tiny diagonal movements from closing and reopening the toolbox on the
+  // adjacent side.
+  canvas.hover({190.0, 83.0}, {300.0, 140.0});
+  QCOMPARE(canvas.relationshipToolboxEdge(), QStringLiteral("top"));
+  canvas.hover({294.0, 83.0}, {190.0, 83.0});
+  QCOMPARE(canvas.relationshipToolboxEdge(), QStringLiteral("top"));
+  canvas.hover({298.0, 84.0}, {294.0, 83.0});
+  QCOMPARE(canvas.relationshipToolboxEdge(), QStringLiteral("top"));
+  canvas.hover({298.0, 110.0}, {298.0, 84.0});
+  QCOMPARE(canvas.relationshipToolboxEdge(), QStringLiteral("right"));
+
+  // The QML toolbar forwards its press-drag-release coordinates to these
+  // methods. Creation still uses the ordinary command-backed relationship
+  // path and the same snapped perimeter anchors as keyboard edge gestures.
+  QVERIFY(canvas.beginToolboxRelationship(
+      QStringLiteral("realization"), canvas.relationshipToolboxNodeId(),
+      canvas.relationshipToolboxSceneAnchor().x(),
+      canvas.relationshipToolboxSceneAnchor().y()));
+  canvas.updateToolboxRelationship(330.0, 140.0);
+  canvas.finishToolboxRelationship(330.0, 140.0);
+  QCOMPARE(controller.data().relationships.size(), 1);
+  QVERIFY(controller.data().relationships.first().type ==
+          RelationshipType::Realization);
+  const auto &connector = controller.data().diagrams.first().connectors.first();
+  QVERIFY(connector.sourceAnchor.side == ConnectorSide::Right);
+  QVERIFY(connector.targetAnchor.side == ConnectorSide::Left);
+}
+
+void DiagramCanvasTests::multiSelectionToolboxTracksArrangementCommands() {
+  ProjectController controller;
+  populate(controller, 2);
+  useStandardInteractionGeometry(controller);
+  const auto nodes = controller.data().diagrams.first().nodes;
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+
+  canvas.press({190.0, 140.0});
+  canvas.release({190.0, 140.0});
+  canvas.press({440.0, 140.0}, Qt::ControlModifier);
+  canvas.release({440.0, 140.0}, Qt::ControlModifier);
+  QCOMPARE(canvas.selectedNodeCount(), 2);
+
+  // The arrangement surface is contextual: it appears over the selected
+  // group, not merely because several nodes happen to be selected.
+  canvas.hover({700.0, 400.0});
+  QVERIFY(!canvas.arrangementToolboxCandidate());
+  canvas.hover({190.0, 140.0});
+  QVERIFY(canvas.arrangementToolboxCandidate());
+  QCOMPARE(canvas.arrangementToolboxNodeId(), nodes.at(0).id);
+  QCOMPARE(canvas.arrangementToolboxViewAnchor(), QPointF(190.0, 80.0));
+  canvas.hover({440.0, 140.0}, {190.0, 140.0});
+  QCOMPARE(canvas.arrangementToolboxNodeId(), nodes.at(1).id);
+  QCOMPARE(canvas.arrangementToolboxViewAnchor(), QPointF(440.0, 80.0));
+
+  // Selected edges still belong to the relationship toolbox. Moving back to
+  // the body restores the mutually exclusive arrangement candidate.
+  canvas.hover({300.0, 140.0}, {440.0, 140.0});
+  QVERIFY(canvas.relationshipToolboxCandidate());
+  QVERIFY(!canvas.arrangementToolboxCandidate());
+  canvas.hover({440.0, 140.0}, {300.0, 140.0});
+  QVERIFY(!canvas.relationshipToolboxCandidate());
+  QVERIFY(canvas.arrangementToolboxCandidate());
+  QCOMPARE(canvas.arrangementToolboxNodeId(), nodes.at(1).id);
+
+  // The QML buttons invoke the existing command-backed arrangement actions.
+  // The anchor follows the hovered item through committed geometry changes so
+  // several operations can be performed without reselecting the group.
+  canvas.arrangeSelection(QStringLiteral("alignLeft"));
+  QCOMPARE(canvas.arrangementToolboxViewAnchor(), QPointF(190.0, 80.0));
+  QVERIFY(controller.canUndo());
+  controller.undo();
+  QCOMPARE(canvas.arrangementToolboxViewAnchor(), QPointF(440.0, 80.0));
+
+  canvas.clearCanvasSelection();
+  QVERIFY(!canvas.arrangementToolboxCandidate());
+  QVERIFY(canvas.arrangementToolboxNodeId().isEmpty());
+  QVERIFY(canvas.arrangementToolboxViewAnchor().isNull());
 }
 
 void DiagramCanvasTests::connectorEndpointsDragToReattachAndCancel() {

@@ -1,8 +1,9 @@
 # uuml Productization Plan
 
-Status: command foundation and Phase 3 implemented; Phase 4 source import and
-relationship inference are implemented, with synchronization hardening in
-progress
+Status: command foundation and the Phase 3 core are implemented; contextual
+toolbox expansion and relationship annotations are planned. Phase 4 source
+import and relationship inference are implemented, with synchronization
+hardening in progress
 
 The product owner accepted the MVP on 2026-07-21. This plan turns the broader
 architecture roadmap into bounded, testable delivery tranches. MVP audit notes
@@ -233,12 +234,101 @@ history memory grow with total project size rather than the size of each edit.
 - Styles can be assigned from project-tree and diagram context menus. The
   effective style resolves in the order presentation override, semantic/browser
   subject override, nearest styled project-browser ancestor, then the
-  application palette. Package elements store namespace styles; legacy
-  synthetic namespace rows retain assignments by qualified path.
+  application palette. The project style registry can also be opened directly
+  from the main Edit menu without requiring a selected element. Package
+  elements store namespace styles; legacy synthetic namespace rows retain
+  assignments by qualified path.
 - Creating, editing, assigning, deleting, and clearing styles are undoable.
   Deletion confirms its assignment count and clears references so affected
   presentations resume inheritance. The registry and every assignment persist
   in project JSON5 rather than application preferences.
+
+### 3.8 Contextual hover toolboxes — relationship and multi-selection
+toolboxes implemented, expansion planned
+
+- Keep contextual toolboxes task-specific instead of building one universal
+  floating toolbar. The implemented selected-edge toolbox remains dedicated to
+  starting relationships. Later providers cover a selected node or container,
+  a multi-selection, and a selected connector, each exposing only commands
+  applicable to that target and selection state.
+- Reuse the centralized command/action catalog so toolbox buttons, context
+  menus, keyboard commands, accessible names, and SVG icons invoke the same
+  command definitions. Do not duplicate mutation logic in QML.
+- The first expansion slice is implemented. Hovering any member of a
+  multi-selection exposes all alignment, distribution, and equal-sizing
+  commands in a compact palette anchored to the particular selected
+  presentation under the pointer. Hovering a selected rectangle edge still
+  gives relationship creation priority. The palette invokes the existing
+  command-backed actions and follows its hovered presentation as repeated
+  arrangement commands change the geometry.
+- The next expansions add connector routing and annotation controls, followed
+  by high-frequency node/container commands such as edit name, fit to content,
+  style, and wrap in parent namespace. Destructive and modal commands remain in
+  context menus until usage proves that placing them in a hover surface is
+  beneficial.
+- Use one shared visibility state machine: the toolbox appears only for the
+  currently selected target, remains open while the pointer crosses a
+  hover-safe bridge to the toolbox, stays open during a drag gesture, and
+  dismisses on Escape, selection change, diagram deactivation, or a short
+  pointer-leave delay. Keyboard focus and touch/pen invocation must not depend
+  on hover.
+- Implement the remaining providers in this order: connector
+  annotations/routing, node/container commands, then user customization. Each
+  slice includes multi-window focus, zoom, clipping, accessibility, and command
+  undo/redo tests.
+
+### 3.9 Relationship ends, movable annotations, and stereotypes — in progress
+
+- Explicit semantic source and target relationship-end records are implemented
+  and persisted with unknown-field retention. Each end
+  has optional `role` and `multiplicity` text; the UI describes multiplicity as
+  UML cardinality and accepts conventional values such as `1`, `0..1`, `*`, and
+  `1..*` without restricting projects to those examples. These values belong
+  to the relationship and therefore appear consistently on every diagram.
+- Relationship names, both roles, and both multiplicities are rendered as
+  sharp scene-graph text using deterministic route-relative automatic
+  placement for straight, orthogonal, and manually bent connectors. They are
+  editable in the selected-relationship property panel and in place on the
+  diagram. Edits—including clearing optional values—use field-sized undo
+  commands. The future relationship stereotype joins these annotations.
+- Treat the relationship name, stereotype, both roles, and both
+  multiplicities as connector annotations. Their text is semantic model data,
+  while their position is a per-diagram `ConnectorPresentation` concern.
+  Empty annotations are neither rendered nor serialized as presentation
+  placements.
+- Persist annotation positions relative to the routed connector rather than as
+  fragile absolute scene coordinates. A placement records normalized distance
+  along the route plus tangent and normal offsets. Default placements put
+  roles and multiplicities near their corresponding ends and the stereotype
+  and name near the route midpoint. Dragging an annotation creates one compact
+  presentation command; **Reset position** returns an annotation, or all
+  annotations, to automatic layout. Re-routing projects existing placements
+  onto the new path so manual layout remains visually stable.
+- Add a stereotype catalog with stable identifiers. Read-only common UML
+  stereotypes are supplied by the application; project-specific definitions
+  and their applicability live in project JSON5. Semantic elements—packages,
+  classes, structs, enumerations, and nested types—and relationships can
+  reference zero or more catalog entries. Custom project-browser folders remain
+  organizational rather than UML entities and do not acquire semantic
+  stereotypes.
+- Render stereotypes conventionally as `«name»`. Element stereotypes appear
+  above the element name; relationship stereotypes are movable connector
+  annotations. The properties panel and in-place editor expose assignments,
+  while a project stereotype manager supports create, rename, applicability,
+  and delete-with-usage-confirmation workflows.
+- Implement edits with field-sized polymorphic commands:
+  relationship-metadata commands retain only the changed endpoint values,
+  stereotype commands retain assignment IDs, and annotation-move commands
+  retain only the before/after placement. Source synchronization keeps manual
+  roles, multiplicities, and stereotype assignments user-authoritative unless
+  a later import rule explicitly owns one of those fields.
+- The first two slices—semantic endpoint data/persistence and automatic
+  rendering/property editing—are implemented. Next deliver drag/reset
+  annotation placement, then the common/project stereotype catalog and
+  assignments. Cover JSON5
+  round trips with unknown-field retention, multiple presentations of one
+  relationship, straight and orthogonal routes, self-connections, undo/redo,
+  and headless validation.
 
 ## Phase 4: C++ import and synchronization — in progress
 
