@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/project_schema_version.h"
+
 #include <QHash>
 #include <QJsonObject>
 #include <QList>
@@ -193,7 +195,7 @@ struct CppImportConfiguration {
 };
 
 struct ProjectData {
-  int schemaVersion = 1;
+  int schemaVersion = kCurrentProjectSchemaVersion;
   QString id;
   QString name;
   CppImportConfiguration cppImport;

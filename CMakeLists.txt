@@ -70,6 +70,9 @@ add_library(uuml_core STATIC
     src/core/project_controller.h
     src/core/project_data.cpp
     src/core/project_data.h
+    src/core/project_schema.cpp
+    src/core/project_schema.h
+    src/core/project_schema_version.h
     src/core/project_serializer.cpp
     src/core/project_serializer.h
     src/core/project_style.cpp

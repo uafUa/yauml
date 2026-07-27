@@ -1,9 +1,9 @@
 # uuml Productization Plan
 
 Status: command foundation and the Phase 3 core are implemented; contextual
-toolbox expansion and relationship annotations are planned. Phase 4 source
+toolbox expansion and relationship annotations are in progress. Phase 4 source
 import and relationship inference are implemented, with synchronization
-hardening in progress
+hardening in progress. Phase 5 release and persistence hardening is underway
 
 The product owner accepted the MVP on 2026-07-21. This plan turns the broader
 architecture roadmap into bounded, testable delivery tranches. MVP audit notes
@@ -378,8 +378,14 @@ toolboxes implemented, expansion planned
 
 ## Phase 5: scale and hardening
 
-- Incremental loading/indexing, schema migrations, merge diagnostics, and
-  expanded recovery testing.
+- The schema-migration foundation is implemented. The persisted schema has a
+  version independent from the application, and one shared pre-deserialization
+  pipeline can migrate the manifest, model, and diagrams documents together.
+  Unversioned POC projects migrate to version 1 in memory, an explicit save
+  persists the upgrade, unknown fields survive, and malformed or future
+  versions produce actionable diagnostics in both GUI and headless workflows.
+- Incremental loading/indexing, merge diagnostics, and expanded recovery
+  testing remain.
 - Performance benchmarks and rendered-image regression coverage.
 - Windows CI and packaging automation is implemented. Every main-branch update
   and pull request performs a clean MSVC Release build with Qt and libclang,

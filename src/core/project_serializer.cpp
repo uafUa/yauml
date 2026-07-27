@@ -2,6 +2,8 @@
 
 #include "core/connector_port_layout.h"
 #include "core/json5.h"
+#include "core/project_schema.h"
+#include "core/project_schema_version.h"
 
 #include <QColor>
 #include <QDir>
@@ -608,12 +610,12 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
   const auto manifestResult = readJson5(manifestPath, outcome.diagnostics);
   if (!manifestResult || !manifestResult.document.isObject())
     return outcome;
-  const QJsonObject manifest = manifestResult.document.object();
+  const QJsonObject sourceManifest = manifestResult.document.object();
 
-  const QString modelRelative = manifest.value(QStringLiteral("model"))
+  const QString modelRelative = sourceManifest.value(QStringLiteral("model"))
                                     .toString(QString::fromLatin1(kModelName));
   const QString diagramsRelative =
-      manifest.value(QStringLiteral("diagrams"))
+      sourceManifest.value(QStringLiteral("diagrams"))
           .toString(QString::fromLatin1(kDiagramsName));
   const auto modelResult =
       readJson5(QDir(root).filePath(modelRelative), outcome.diagnostics);
@@ -623,6 +625,15 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
       !diagramsResult.document.isObject())
     return outcome;
 
+  auto migration = ProjectSchemaMigrator::migrate(
+      {sourceManifest, modelResult.document.object(),
+       diagramsResult.document.object()});
+  outcome.diagnostics.append(migration.diagnostics);
+  if (!migration.ok)
+    return outcome;
+  outcome.migrated = migration.migrated;
+
+  const QJsonObject &manifest = migration.documents.manifest;
   ProjectData project;
   project.schemaVersion =
       manifest.value(QStringLiteral("schemaVersion")).toInt();
@@ -639,7 +650,7 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
                  QStringLiteral("name"), QStringLiteral("model"),
                  QStringLiteral("diagrams"), QStringLiteral("cppImport")});
 
-  const QJsonObject model = modelResult.document.object();
+  const QJsonObject &model = migration.documents.model;
   project.modelExtra = withoutKeys(
       model, {QStringLiteral("styles"), QStringLiteral("namespaceStyles"),
               QStringLiteral("elements"), QStringLiteral("browserFolders"),
@@ -747,7 +758,7 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
     project.relationships.append(relationship);
   }
 
-  const QJsonObject diagramRoot = diagramsResult.document.object();
+  const QJsonObject &diagramRoot = migration.documents.diagrams;
   project.diagramsExtra =
       withoutKeys(diagramRoot, {QStringLiteral("diagrams")});
   for (const auto &value :
@@ -965,7 +976,7 @@ SaveOutcome ProjectSerializer::save(const QString &projectPath,
 
 QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
   QList<Diagnostic> diagnostics;
-  if (project.schemaVersion != 1)
+  if (project.schemaVersion != kCurrentProjectSchemaVersion)
     diagnostics.append(error(QStringLiteral("validation"),
                              QStringLiteral("Unsupported schema version %1")
                                  .arg(project.schemaVersion)));

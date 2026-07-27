@@ -84,6 +84,8 @@ private slots:
   void json5SerializationUsesReadableKeys();
   void actionIconCatalogIsValid();
   void deterministicRoundTrip();
+  void unversionedProjectMigrates();
+  void invalidProjectSchemaVersionsAreRejected();
   void projectDiagramStylesPersistResolveAndUndo();
   void cppSynchronizationSourcePersistsAndIsUndoable();
   void saveAsRequiresExplicitProjectReplacement();
@@ -330,6 +332,109 @@ void CoreTests::deterministicRoundTrip() {
                         return diagnostic.message.contains(
                             QStringLiteral("sourceEnd role must be a string"));
                       }));
+}
+
+void CoreTests::unversionedProjectMigrates() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  const ProjectData original =
+      createStarterProject(QStringLiteral("Legacy project"));
+  QVERIFY(ProjectSerializer::save(temporary.path(), original).ok);
+
+  const QString manifestPath =
+      QDir(temporary.path()).filePath(QStringLiteral("manifest.json5"));
+  QFile manifestFile(manifestPath);
+  QVERIFY(manifestFile.open(QIODevice::ReadOnly));
+  const auto parsedManifest = Json5::parse(manifestFile.readAll());
+  manifestFile.close();
+  QVERIFY2(parsedManifest, qPrintable(parsedManifest.error));
+
+  QJsonObject legacyManifest = parsedManifest.document.object();
+  legacyManifest.remove(QStringLiteral("schemaVersion"));
+  legacyManifest.insert(QStringLiteral("legacyExtension"), true);
+  writeTestFile(manifestPath,
+                Json5::serialize(QJsonDocument(std::move(legacyManifest))));
+
+  const LoadOutcome migrated = ProjectSerializer::load(temporary.path());
+  QVERIFY2(migrated.ok, qPrintable(migrated.diagnostics.isEmpty()
+                                       ? QString{}
+                                       : migrated.diagnostics.first().message));
+  QVERIFY(migrated.migrated);
+  QCOMPARE(migrated.project.schemaVersion, kCurrentProjectSchemaVersion);
+  QVERIFY(
+      migrated.project.manifestExtra.value(QStringLiteral("legacyExtension"))
+          .toBool());
+  QVERIFY(
+      std::any_of(migrated.diagnostics.cbegin(), migrated.diagnostics.cend(),
+                  [](const Diagnostic &diagnostic) {
+                    return diagnostic.severity == DiagnosticSeverity::Info &&
+                           diagnostic.category == QStringLiteral("migration") &&
+                           diagnostic.message.contains(
+                               QStringLiteral("legacy version 0 to 1"));
+                  }));
+
+  // Migration is deliberately in-memory until an explicit save. Once saved,
+  // the canonical schema marker is persisted and no migration repeats.
+  QVERIFY(ProjectSerializer::save(temporary.path(), migrated.project).ok);
+  const LoadOutcome canonical = ProjectSerializer::load(temporary.path());
+  QVERIFY(canonical.ok);
+  QVERIFY(!canonical.migrated);
+  QCOMPARE(canonical.project, migrated.project);
+}
+
+void CoreTests::invalidProjectSchemaVersionsAreRejected() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(
+              temporary.path(),
+              createStarterProject(QStringLiteral("Schema validation")))
+              .ok);
+
+  const QString manifestPath =
+      QDir(temporary.path()).filePath(QStringLiteral("manifest.json5"));
+  QFile manifestFile(manifestPath);
+  QVERIFY(manifestFile.open(QIODevice::ReadOnly));
+  const auto parsedManifest = Json5::parse(manifestFile.readAll());
+  manifestFile.close();
+  QVERIFY2(parsedManifest, qPrintable(parsedManifest.error));
+  const QJsonObject canonicalManifest = parsedManifest.document.object();
+
+  const QList<QJsonValue> malformedVersions = {QJsonValue(QStringLiteral("1")),
+                                               QJsonValue(QJsonValue::Null),
+                                               QJsonValue(1.5), QJsonValue(-1)};
+  for (const QJsonValue &version : malformedVersions) {
+    QJsonObject malformedManifest = canonicalManifest;
+    malformedManifest.insert(QStringLiteral("schemaVersion"), version);
+    writeTestFile(manifestPath, Json5::serialize(QJsonDocument(
+                                    std::move(malformedManifest))));
+
+    const LoadOutcome malformed = ProjectSerializer::load(temporary.path());
+    QVERIFY(!malformed.ok);
+    QVERIFY(!malformed.migrated);
+    QVERIFY(std::any_of(
+        malformed.diagnostics.cbegin(), malformed.diagnostics.cend(),
+        [](const Diagnostic &diagnostic) {
+          return diagnostic.category == QStringLiteral("schema") &&
+                 diagnostic.message.contains(
+                     QStringLiteral("non-negative integer"));
+        }));
+  }
+
+  QJsonObject futureManifest = canonicalManifest;
+  futureManifest.insert(QStringLiteral("schemaVersion"),
+                        kCurrentProjectSchemaVersion + 1);
+  writeTestFile(manifestPath,
+                Json5::serialize(QJsonDocument(std::move(futureManifest))));
+  const LoadOutcome future = ProjectSerializer::load(temporary.path());
+  QVERIFY(!future.ok);
+  QVERIFY(!future.migrated);
+  QVERIFY(std::any_of(
+      future.diagnostics.cbegin(), future.diagnostics.cend(),
+      [](const Diagnostic &diagnostic) {
+        return diagnostic.category == QStringLiteral("schema") &&
+               diagnostic.message.contains(QStringLiteral("newer")) &&
+               diagnostic.message.contains(QStringLiteral("update uuml"));
+      }));
 }
 
 void CoreTests::projectDiagramStylesPersistResolveAndUndo() {

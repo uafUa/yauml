@@ -10,6 +10,7 @@ struct LoadOutcome {
   QList<Diagnostic> diagnostics;
   bool ok = false;
   bool recovered = false;
+  bool migrated = false;
 };
 
 struct SaveOutcome {
