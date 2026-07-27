@@ -1,6 +1,6 @@
 #pragma once
 
-#include "core/project_data.h"
+#include "core/cpp_import.h"
 
 #include <QObject>
 #include <QStringList>
@@ -31,10 +31,8 @@ class ApplicationSettings final : public QObject {
                  NOTIFY relationshipGestureKeysChanged)
   Q_PROPERTY(QString cppInterfacePattern READ cppInterfacePattern NOTIFY
                  cppInterfacePatternChanged)
-  Q_PROPERTY(QStringList cppOwningPointerTypes READ cppOwningPointerTypes NOTIFY
-                 cppPointerTypesChanged)
-  Q_PROPERTY(QStringList cppSharedPointerTypes READ cppSharedPointerTypes NOTIFY
-                 cppPointerTypesChanged)
+  Q_PROPERTY(QVariantList cppMemberTypeRules READ cppMemberTypeRules NOTIFY
+                 cppMemberTypeRulesChanged)
   Q_PROPERTY(
       QString packageReassignmentPolicy READ packageReassignmentPolicy WRITE
           setPackageReassignmentPolicy NOTIFY packageReassignmentPolicyChanged)
@@ -57,8 +55,7 @@ public:
 
   static QVariantMap defaultRelationshipGestureKeys();
   static QString defaultCppInterfacePattern();
-  static QStringList defaultCppOwningPointerTypes();
-  static QStringList defaultCppSharedPointerTypes();
+  static QVariantList defaultCppMemberTypeRules();
   static QString defaultPackageReassignmentPolicy();
 
   explicit ApplicationSettings(QObject *parent = nullptr);
@@ -80,10 +77,9 @@ public:
   QString cppInterfacePattern() const;
   Q_INVOKABLE bool setCppInterfacePattern(const QString &pattern);
   Q_INVOKABLE bool isValidCppInterfacePattern(const QString &pattern) const;
-  QStringList cppOwningPointerTypes() const;
-  QStringList cppSharedPointerTypes() const;
-  Q_INVOKABLE void setCppPointerTypes(const QStringList &owningTypes,
-                                      const QStringList &sharedTypes);
+  QVariantList cppMemberTypeRules() const;
+  QList<CppMemberTypeRule> cppMemberTypeRuleValues() const;
+  Q_INVOKABLE bool setCppMemberTypeRules(const QVariantList &rules);
   QString packageReassignmentPolicy() const;
   void setPackageReassignmentPolicy(const QString &policy);
   QVariantList recentProjects() const;
@@ -100,7 +96,7 @@ signals:
   void defaultConnectorRoutingChanged();
   void relationshipGestureKeysChanged();
   void cppInterfacePatternChanged();
-  void cppPointerTypesChanged();
+  void cppMemberTypeRulesChanged();
   void packageReassignmentPolicyChanged();
   void recentProjectsChanged();
 
@@ -119,8 +115,7 @@ private:
   ConnectorRouting m_defaultConnectorRouting = kDefaultConnectorRouting;
   QVariantMap m_relationshipGestureKeys;
   QString m_cppInterfacePattern;
-  QStringList m_cppOwningPointerTypes;
-  QStringList m_cppSharedPointerTypes;
+  QList<CppMemberTypeRule> m_cppMemberTypeRules;
   QString m_packageReassignmentPolicy = QStringLiteral("ask");
   QStringList m_recentProjectPaths;
 };

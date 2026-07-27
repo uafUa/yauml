@@ -214,6 +214,9 @@ QJsonObject relationshipSnapshot(const Relationship &relationship) {
   snapshot.insert(QStringLiteral("name"), relationship.name);
   snapshot.insert(QStringLiteral("sourceId"), relationship.sourceId);
   snapshot.insert(QStringLiteral("targetId"), relationship.targetId);
+  snapshot.insert(QStringLiteral("sourceRole"), relationship.sourceEnd.role);
+  snapshot.insert(QStringLiteral("sourceMultiplicity"),
+                  relationship.sourceEnd.multiplicity);
   return snapshot;
 }
 
@@ -227,13 +230,19 @@ Relationship relationshipFromSnapshot(const QJsonObject &snapshot) {
   relationship.name = snapshot.value(QStringLiteral("name")).toString();
   relationship.sourceId = snapshot.value(QStringLiteral("sourceId")).toString();
   relationship.targetId = snapshot.value(QStringLiteral("targetId")).toString();
+  relationship.sourceEnd.role =
+      snapshot.value(QStringLiteral("sourceRole")).toString();
+  relationship.sourceEnd.multiplicity =
+      snapshot.value(QStringLiteral("sourceMultiplicity")).toString();
   return relationship;
 }
 
 bool sourceOwnedStateEquals(const Relationship &left,
                             const Relationship &right) {
   return left.type == right.type && left.name == right.name &&
-         left.sourceId == right.sourceId && left.targetId == right.targetId;
+         left.sourceId == right.sourceId && left.targetId == right.targetId &&
+         left.sourceEnd.role == right.sourceEnd.role &&
+         left.sourceEnd.multiplicity == right.sourceEnd.multiplicity;
 }
 
 QJsonObject sourceBinding(const ModelElement &element) {
@@ -344,6 +353,8 @@ Relationship sourceRelationship(const CppSourceRelationship &source,
     relationship.name.clear();
   relationship.sourceId = sourceElementId;
   relationship.targetId = targetElementId;
+  relationship.sourceEnd.role = source.sourceRole;
+  relationship.sourceEnd.multiplicity = source.sourceMultiplicity;
 
   QJsonObject binding;
   binding.insert(QStringLiteral("version"), kBindingVersion);
@@ -935,10 +946,15 @@ enum class TypeUseContext {
 struct DiscoveredTypeUse {
   QString sourceSymbolId;
   QString targetSymbolId;
+  QString memberSymbolId;
   TypeUseContext context = TypeUseContext::Signature;
   QString memberName;
   QStringList wrapperTypes;
-  bool pointerOrReference = false;
+  QList<QStringList> wrapperArguments;
+  QList<int> templateArgumentPath;
+  QStringList structuralMultiplicities;
+  bool rawPointer = false;
+  bool reference = false;
   QString filePath;
   int line = 0;
 };
@@ -946,7 +962,20 @@ struct DiscoveredTypeUse {
 struct TypeTarget {
   QString symbolId;
   QStringList wrapperTypes;
-  bool pointerOrReference = false;
+  QList<QStringList> wrapperArguments;
+  QList<int> templateArgumentPath;
+  QStringList structuralMultiplicities;
+  bool rawPointer = false;
+  bool reference = false;
+};
+
+struct TypeTraversal {
+  QStringList wrapperTypes;
+  QList<QStringList> wrapperArguments;
+  QList<int> templateArgumentPath;
+  QStringList structuralMultiplicities;
+  bool rawPointer = false;
+  bool reference = false;
 };
 
 QString normalizedTemplateName(QString name) {
@@ -981,7 +1010,36 @@ QString templateName(CXType type) {
   return normalizedTemplateName(typeSpelling(type));
 }
 
-void collectTypeTargets(CXType type, QStringList wrappers, bool indirect,
+QStringList templateArgumentSpellings(const QString &spelling) {
+  const qsizetype opening = spelling.indexOf(u'<');
+  const qsizetype closing = spelling.lastIndexOf(u'>');
+  if (opening < 0 || closing <= opening)
+    return {};
+
+  QStringList arguments;
+  qsizetype start = opening + 1;
+  int angleDepth = 0;
+  int groupingDepth = 0;
+  for (qsizetype index = start; index < closing; ++index) {
+    const QChar character = spelling.at(index);
+    if (character == u'<')
+      ++angleDepth;
+    else if (character == u'>')
+      --angleDepth;
+    else if (character == u'(' || character == u'[' || character == u'{')
+      ++groupingDepth;
+    else if (character == u')' || character == u']' || character == u'}')
+      --groupingDepth;
+    else if (character == u',' && angleDepth == 0 && groupingDepth == 0) {
+      arguments.append(spelling.mid(start, index - start).trimmed());
+      start = index + 1;
+    }
+  }
+  arguments.append(spelling.mid(start, closing - start).trimmed());
+  return arguments;
+}
+
+void collectTypeTargets(CXType type, TypeTraversal traversal,
                         QList<TypeTarget> &targets, int depth = 0) {
   if (depth > 12 || type.kind == CXType_Invalid)
     return;
@@ -989,19 +1047,28 @@ void collectTypeTargets(CXType type, QStringList wrappers, bool indirect,
   const CXType canonical = clang_getCanonicalType(type);
   switch (canonical.kind) {
   case CXType_Pointer:
+  case CXType_MemberPointer:
+    traversal.rawPointer = true;
+    collectTypeTargets(clang_getPointeeType(canonical), std::move(traversal),
+                       targets, depth + 1);
+    return;
   case CXType_LValueReference:
   case CXType_RValueReference:
-  case CXType_MemberPointer:
-    collectTypeTargets(clang_getPointeeType(canonical), std::move(wrappers),
-                       true, targets, depth + 1);
+    traversal.reference = true;
+    collectTypeTargets(clang_getPointeeType(canonical), std::move(traversal),
+                       targets, depth + 1);
     return;
   case CXType_ConstantArray:
   case CXType_IncompleteArray:
   case CXType_VariableArray:
-  case CXType_DependentSizedArray:
+  case CXType_DependentSizedArray: {
+    const long long size = clang_getArraySize(canonical);
+    traversal.structuralMultiplicities.append(
+        size >= 0 ? QString::number(size) : QStringLiteral("0..*"));
     collectTypeTargets(clang_getArrayElementType(canonical),
-                       std::move(wrappers), indirect, targets, depth + 1);
+                       std::move(traversal), targets, depth + 1);
     return;
+  }
   default:
     break;
   }
@@ -1014,12 +1081,18 @@ void collectTypeTargets(CXType type, QStringList wrappers, bool indirect,
   }
   if (templateArgumentCount >= 0) {
     const QString wrapper = templateName(templateType);
-    if (!wrapper.isEmpty() && !wrappers.contains(wrapper))
-      wrappers.append(wrapper);
+    const QStringList argumentSpellings =
+        templateArgumentSpellings(typeSpelling(templateType));
     for (int index = 0; index < templateArgumentCount; ++index) {
+      TypeTraversal nested = traversal;
+      if (!wrapper.isEmpty()) {
+        nested.wrapperTypes.append(wrapper);
+        nested.wrapperArguments.append(argumentSpellings);
+        nested.templateArgumentPath.append(index + 1);
+      }
       collectTypeTargets(
-          clang_Type_getTemplateArgumentAsType(templateType, index), wrappers,
-          indirect, targets, depth + 1);
+          clang_Type_getTemplateArgumentAsType(templateType, index),
+          std::move(nested), targets, depth + 1);
     }
     return;
   }
@@ -1036,7 +1109,16 @@ void collectTypeTargets(CXType type, QStringList wrappers, bool indirect,
   const QString symbolId = takeString(clang_getCursorUSR(declaration));
   if (symbolId.isEmpty())
     return;
-  targets.append({symbolId, std::move(wrappers), indirect});
+  TypeTarget target;
+  target.symbolId = symbolId;
+  target.wrapperTypes = std::move(traversal.wrapperTypes);
+  target.wrapperArguments = std::move(traversal.wrapperArguments);
+  target.templateArgumentPath = std::move(traversal.templateArgumentPath);
+  target.structuralMultiplicities =
+      std::move(traversal.structuralMultiplicities);
+  target.rawPointer = traversal.rawPointer;
+  target.reference = traversal.reference;
+  targets.append(std::move(target));
 }
 
 void appendTypeUses(CXCursor declaration, CXType type,
@@ -1044,17 +1126,26 @@ void appendTypeUses(CXCursor declaration, CXType type,
                     const CppSourceSymbol &source,
                     QList<DiscoveredTypeUse> &uses) {
   QList<TypeTarget> targets;
-  collectTypeTargets(type, {}, false, targets);
+  collectTypeTargets(type, {}, targets);
   int line = 0;
   const QString filePath = cursorFilePath(declaration, &line);
+  const QString memberSymbolId =
+      useContext == TypeUseContext::Member
+          ? takeString(clang_getCursorUSR(declaration))
+          : QString{};
   for (auto &target : targets) {
     DiscoveredTypeUse use;
     use.sourceSymbolId = source.symbolId;
     use.targetSymbolId = std::move(target.symbolId);
+    use.memberSymbolId = memberSymbolId;
     use.context = useContext;
     use.memberName = memberName;
     use.wrapperTypes = std::move(target.wrapperTypes);
-    use.pointerOrReference = target.pointerOrReference;
+    use.wrapperArguments = std::move(target.wrapperArguments);
+    use.templateArgumentPath = std::move(target.templateArgumentPath);
+    use.structuralMultiplicities = std::move(target.structuralMultiplicities);
+    use.rawPointer = target.rawPointer;
+    use.reference = target.reference;
     use.filePath = filePath;
     use.line = line;
     uses.append(std::move(use));
@@ -1784,43 +1875,118 @@ CppImportPreview discover(const QStringList &searchPaths,
     preview.relationships.append(std::move(containment));
   }
 
-  auto normalizedTypeSet = [](const QStringList &types) {
-    QSet<QString> normalized;
-    for (const QString &type : types) {
-      const QString name = normalizedTemplateName(type);
-      if (!name.isEmpty())
-        normalized.insert(name);
+  QList<CppMemberTypeRule> memberTypeRules;
+  for (CppMemberTypeRule rule : options.memberTypeRules) {
+    rule.typeName = normalizedTemplateName(rule.typeName);
+    if (!rule.typeName.isEmpty())
+      memberTypeRules.append(std::move(rule));
+  }
+  const auto matchingRule =
+      [&](const QString &wrapper) -> const CppMemberTypeRule * {
+    for (const auto &rule : memberTypeRules) {
+      if (wrapper == rule.typeName ||
+          (!rule.typeName.contains(QStringLiteral("::")) &&
+           wrapper.section(QStringLiteral("::"), -1) == rule.typeName))
+        return &rule;
     }
-    return normalized;
+    return nullptr;
   };
-  const QSet<QString> owningPointerTypes =
-      normalizedTypeSet(options.owningPointerTypes);
-  const QSet<QString> sharedPointerTypes =
-      normalizedTypeSet(options.sharedPointerTypes);
-  const auto matchingWrapper = [](const QStringList &wrappers,
-                                  const QSet<QString> &configured) {
-    for (const QString &wrapper : wrappers) {
-      for (const QString &candidate : configured) {
-        if (wrapper == candidate ||
-            (!candidate.contains(QStringLiteral("::")) &&
-             wrapper.section(QStringLiteral("::"), -1) == candidate))
-          return wrapper;
+  const auto resolvedRuleMultiplicity = [](QString multiplicity,
+                                           const QStringList &arguments) {
+    static const QRegularExpression placeholder(
+        QStringLiteral("\\{([1-9][0-9]*)\\}"));
+    for (QRegularExpressionMatch match = placeholder.match(multiplicity);
+         match.hasMatch(); match = placeholder.match(multiplicity)) {
+      const int argument = match.captured(1).toInt();
+      QString replacement;
+      if (argument <= arguments.size()) {
+        const QRegularExpressionMatch integer =
+            QRegularExpression(QStringLiteral("^\\s*([0-9]+)"))
+                .match(arguments.at(argument - 1));
+        if (integer.hasMatch())
+          replacement = integer.captured(1);
       }
+      if (replacement.isEmpty())
+        replacement = QStringLiteral("0..*");
+      multiplicity.replace(match.capturedStart(), match.capturedLength(),
+                           replacement);
     }
-    return QString{};
+    return multiplicity.trimmed();
+  };
+  struct MultiplicityRange {
+    qint64 minimum = 1;
+    qint64 maximum = 1;
+    bool unbounded = false;
+    bool valid = true;
+  };
+  const auto parseMultiplicity = [](const QString &value) {
+    MultiplicityRange result;
+    const QString trimmed = value.trimmed();
+    if (trimmed.isEmpty() || trimmed == QStringLiteral("1"))
+      return result;
+    const QRegularExpressionMatch single =
+        QRegularExpression(QStringLiteral("^([0-9]+)$")).match(trimmed);
+    if (single.hasMatch()) {
+      result.minimum = result.maximum = single.captured(1).toLongLong();
+      return result;
+    }
+    const QRegularExpressionMatch range =
+        QRegularExpression(QStringLiteral("^([0-9]+)\\.\\.([0-9]+|\\*)$"))
+            .match(trimmed);
+    if (!range.hasMatch()) {
+      result.valid = false;
+      return result;
+    }
+    result.minimum = range.captured(1).toLongLong();
+    result.unbounded = range.captured(2) == QStringLiteral("*");
+    if (!result.unbounded)
+      result.maximum = range.captured(2).toLongLong();
+    return result;
+  };
+  const auto combinedMultiplicity = [&](const QStringList &parts) -> QString {
+    MultiplicityRange combined;
+    QString firstUnparsed;
+    for (const QString &part : parts) {
+      const MultiplicityRange parsed = parseMultiplicity(part);
+      if (!parsed.valid) {
+        if (firstUnparsed.isEmpty())
+          firstUnparsed = part.trimmed();
+        continue;
+      }
+      combined.minimum *= parsed.minimum;
+      combined.unbounded = combined.unbounded || parsed.unbounded;
+      if (!combined.unbounded)
+        combined.maximum *= parsed.maximum;
+    }
+    if (!firstUnparsed.isEmpty())
+      return firstUnparsed;
+    if (combined.unbounded)
+      return QStringLiteral("%1..*").arg(combined.minimum);
+    if (combined.minimum == combined.maximum)
+      return QString::number(combined.minimum);
+    return QStringLiteral("%1..%2").arg(combined.minimum).arg(combined.maximum);
   };
   const auto pairKey = [](const QString &sourceId, const QString &targetId) {
     return sourceId + u'\x1f' + targetId;
+  };
+  const auto memberIdentity = [](const DiscoveredTypeUse &use) {
+    if (!use.memberSymbolId.isEmpty())
+      return use.memberSymbolId;
+    return QStringLiteral("%1|%2|%3|%4")
+        .arg(use.sourceSymbolId, use.filePath, QString::number(use.line),
+             use.memberName);
   };
 
   struct InferredRelationship {
     DiscoveredTypeUse use;
     RelationshipType type = RelationshipType::Dependency;
+    QString multiplicity;
     QString reason;
     int strength = 0;
   };
   QHash<QString, InferredRelationship> memberRelationships;
   QHash<QString, InferredRelationship> signatureRelationships;
+  QSet<QString> memberPairs;
   QSet<QString> inheritedPairs;
   for (const auto &relationship : std::as_const(preview.relationships)) {
     if (relationship.evidenceKind == QStringLiteral("inheritance"))
@@ -1833,8 +1999,9 @@ CppImportPreview discover(const QStringList &searchPaths,
         !symbols.contains(use.sourceSymbolId) ||
         !symbols.contains(use.targetSymbolId))
       continue;
-    const QString key = pairKey(use.sourceSymbolId, use.targetSymbolId);
-    if (inheritedPairs.contains(key))
+    const QString endpointPair =
+        pairKey(use.sourceSymbolId, use.targetSymbolId);
+    if (inheritedPairs.contains(endpointPair))
       continue;
 
     InferredRelationship candidate;
@@ -1844,32 +2011,56 @@ CppImportPreview discover(const QStringList &searchPaths,
       candidate.strength = 1;
       candidate.reason =
           QStringLiteral("Referenced by an operation parameter or return type");
-      signatureRelationships.tryInsert(key, std::move(candidate));
+      signatureRelationships.tryInsert(endpointPair, std::move(candidate));
       continue;
     }
 
-    const QString owningWrapper =
-        matchingWrapper(use.wrapperTypes, owningPointerTypes);
-    const QString sharedWrapper =
-        matchingWrapper(use.wrapperTypes, sharedPointerTypes);
-    if (!owningWrapper.isEmpty()) {
-      candidate.type = RelationshipType::Composition;
-      candidate.strength = 4;
-      candidate.reason =
-          QStringLiteral("Member %1 uses configured owning pointer type %2")
-              .arg(use.memberName, owningWrapper);
-    } else if (!sharedWrapper.isEmpty()) {
+    bool selectedTarget = true;
+    bool matchedConfiguredRule = false;
+    QStringList matchedWrappers;
+    QStringList multiplicityParts = use.structuralMultiplicities;
+    for (qsizetype wrapperIndex = 0; wrapperIndex < use.wrapperTypes.size();
+         ++wrapperIndex) {
+      const CppMemberTypeRule *rule =
+          matchingRule(use.wrapperTypes.at(wrapperIndex));
+      if (!rule)
+        continue;
+      matchedConfiguredRule = true;
+      if (use.templateArgumentPath.value(wrapperIndex, 1) !=
+          rule->targetArgument) {
+        selectedTarget = false;
+        break;
+      }
+      candidate.type = rule->relationshipType;
+      candidate.strength =
+          rule->relationshipType == RelationshipType::Composition ? 4 : 3;
+      matchedWrappers.append(use.wrapperTypes.at(wrapperIndex));
+      const QString multiplicity = resolvedRuleMultiplicity(
+          rule->multiplicity, use.wrapperArguments.value(wrapperIndex));
+      if (!multiplicity.isEmpty())
+        multiplicityParts.append(multiplicity);
+    }
+    if (!selectedTarget)
+      continue;
+
+    // Raw indirection is inside any template wrappers and therefore has the
+    // final say on ownership. Outer collection multiplicities are retained.
+    if (use.rawPointer) {
       candidate.type = RelationshipType::Aggregation;
       candidate.strength = 3;
+      multiplicityParts.append(QStringLiteral("0..1"));
       candidate.reason =
-          QStringLiteral("Member %1 uses configured shared pointer type %2")
-              .arg(use.memberName, sharedWrapper);
-    } else if (use.pointerOrReference) {
+          QStringLiteral("Member %1 is a raw pointer").arg(use.memberName);
+    } else if (use.reference) {
       candidate.type = RelationshipType::Aggregation;
       candidate.strength = 3;
+      multiplicityParts.append(QStringLiteral("1"));
       candidate.reason =
-          QStringLiteral("Member %1 is a raw pointer or reference")
-              .arg(use.memberName);
+          QStringLiteral("Member %1 is a reference").arg(use.memberName);
+    } else if (matchedConfiguredRule) {
+      candidate.reason =
+          QStringLiteral("Member %1 matches configured type rule(s): %2")
+              .arg(use.memberName, matchedWrappers.join(QStringLiteral(", ")));
     } else if (!use.wrapperTypes.isEmpty()) {
       candidate.type = RelationshipType::Association;
       candidate.strength = 2;
@@ -1882,12 +2073,28 @@ CppImportPreview discover(const QStringList &searchPaths,
       candidate.reason = QStringLiteral("Member %1 stores the type by value")
                              .arg(use.memberName);
     }
+    candidate.multiplicity = combinedMultiplicity(multiplicityParts);
 
+    const QString key = pairKey(memberIdentity(use), use.targetSymbolId);
     const auto existing = memberRelationships.constFind(key);
     if (existing == memberRelationships.cend() ||
         candidate.strength > existing->strength) {
       memberRelationships.insert(key, std::move(candidate));
     }
+    memberPairs.insert(endpointPair);
+  }
+
+  QHash<QString, QString> legacyMemberIdentity;
+  QHash<QString, int> memberPairCounts;
+  for (auto iterator = memberRelationships.cbegin();
+       iterator != memberRelationships.cend(); ++iterator) {
+    const QString endpointPair =
+        pairKey(iterator->use.sourceSymbolId, iterator->use.targetSymbolId);
+    ++memberPairCounts[endpointPair];
+    const QString identity = memberIdentity(iterator->use);
+    if (!legacyMemberIdentity.contains(endpointPair) ||
+        identity < legacyMemberIdentity.value(endpointPair))
+      legacyMemberIdentity.insert(endpointPair, identity);
   }
 
   const auto appendInferred = [&](const InferredRelationship &candidate,
@@ -1903,16 +2110,30 @@ CppImportPreview discover(const QStringList &searchPaths,
     relationship.targetName = target->qualifiedName;
     relationship.evidenceKind = kind;
     relationship.relationshipType = candidate.type;
+    if (kind == QStringLiteral("member")) {
+      relationship.sourceRole = candidate.use.memberName;
+      relationship.sourceMultiplicity = candidate.multiplicity;
+    }
     relationship.classificationReason = candidate.reason;
     relationship.filePath = candidate.use.filePath;
     relationship.line = candidate.use.line;
-    // Member and signature evidence share one identity. Moving a type from a
-    // field into an operation signature therefore reclassifies the existing
-    // relationship instead of leaving a missing structural edge and creating
-    // a duplicate dependency.
-    relationship.symbolId =
-        QStringLiteral("cpp:type-use:%1->%2")
-            .arg(relationship.sourceSymbolId, relationship.targetSymbolId);
+    const QString endpointPair =
+        pairKey(relationship.sourceSymbolId, relationship.targetSymbolId);
+    const bool useLegacyIdentity = kind != QStringLiteral("member") ||
+                                   memberPairCounts.value(endpointPair) == 1 ||
+                                   memberIdentity(candidate.use) ==
+                                       legacyMemberIdentity.value(endpointPair);
+    if (useLegacyIdentity) {
+      // Preserve the original identity for the common one-field case and for
+      // one deterministic field when several fields share the same type.
+      relationship.symbolId =
+          QStringLiteral("cpp:type-use:%1->%2")
+              .arg(relationship.sourceSymbolId, relationship.targetSymbolId);
+    } else {
+      relationship.symbolId =
+          QStringLiteral("cpp:member-use:%1->%2")
+              .arg(memberIdentity(candidate.use), relationship.targetSymbolId);
+    }
     preview.relationships.append(std::move(relationship));
   };
   for (auto iterator = memberRelationships.cbegin();
@@ -1923,7 +2144,7 @@ CppImportPreview discover(const QStringList &searchPaths,
        iterator != signatureRelationships.cend(); ++iterator) {
     // A structural member relationship conveys more information than a
     // signature-only dependency between the same pair.
-    if (!memberRelationships.contains(iterator.key()))
+    if (!memberPairs.contains(iterator.key()))
       appendInferred(iterator.value(), QStringLiteral("signature"));
   }
 
@@ -1934,6 +2155,8 @@ CppImportPreview discover(const QStringList &searchPaths,
                 return left.sourceName < right.sourceName;
               if (left.targetName != right.targetName)
                 return left.targetName < right.targetName;
+              if (left.sourceRole != right.sourceRole)
+                return left.sourceRole < right.sourceRole;
               return left.evidenceKind < right.evidenceKind;
             });
   preview.ok = true;
@@ -1967,12 +2190,46 @@ QString CppImportOptions::defaultInterfacePattern() {
   return QStringLiteral("^I[A-Z].*$");
 }
 
-QStringList CppImportOptions::defaultOwningPointerTypes() {
-  return {QStringLiteral("std::unique_ptr")};
-}
+QList<CppMemberTypeRule> CppImportOptions::defaultMemberTypeRules() {
+  using enum RelationshipType;
+  const auto rule = [](const char *typeName, RelationshipType relationshipType,
+                       const char *multiplicity, int targetArgument = 1) {
+    return CppMemberTypeRule{QString::fromLatin1(typeName), relationshipType,
+                             QString::fromLatin1(multiplicity), targetArgument};
+  };
 
-QStringList CppImportOptions::defaultSharedPointerTypes() {
-  return {QStringLiteral("std::shared_ptr")};
+  // Containers own their elements. Map-like containers point at their mapped
+  // value (argument 2), not their key. {2} reads a non-type template argument,
+  // allowing std::array<T, N> to produce an exact multiplicity.
+  return {
+      rule("std::unique_ptr", Composition, "0..1"),
+      rule("std::shared_ptr", Aggregation, "0..1"),
+      rule("std::optional", Composition, "0..1"),
+      rule("std::vector", Composition, "0..*"),
+      rule("std::deque", Composition, "0..*"),
+      rule("std::list", Composition, "0..*"),
+      rule("std::forward_list", Composition, "0..*"),
+      rule("std::array", Composition, "{2}"),
+      rule("std::inplace_vector", Composition, "0..{2}"),
+      rule("std::hive", Composition, "0..*"),
+      rule("std::basic_string", Composition, "0..*"),
+      rule("std::valarray", Composition, "0..*"),
+      rule("std::set", Composition, "0..*"),
+      rule("std::multiset", Composition, "0..*"),
+      rule("std::unordered_set", Composition, "0..*"),
+      rule("std::unordered_multiset", Composition, "0..*"),
+      rule("std::flat_set", Composition, "0..*"),
+      rule("std::flat_multiset", Composition, "0..*"),
+      rule("std::map", Composition, "0..*", 2),
+      rule("std::multimap", Composition, "0..*", 2),
+      rule("std::unordered_map", Composition, "0..*", 2),
+      rule("std::unordered_multimap", Composition, "0..*", 2),
+      rule("std::flat_map", Composition, "0..*", 2),
+      rule("std::flat_multimap", Composition, "0..*", 2),
+      rule("std::stack", Composition, "0..*"),
+      rule("std::queue", Composition, "0..*"),
+      rule("std::priority_queue", Composition, "0..*"),
+  };
 }
 
 void configureCppImportStereotypes(CppImportOptions &options,

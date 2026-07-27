@@ -19,14 +19,24 @@ enum class CppImportAction {
 
 QString toString(CppImportAction action);
 
+// Describes how a C++ member wrapper maps to UML. The template argument is
+// one-based because that is how users refer to arguments in documentation
+// (for example, value type 2 in std::map<Key, Value>).
+struct CppMemberTypeRule {
+  QString typeName;
+  RelationshipType relationshipType = RelationshipType::Composition;
+  QString multiplicity;
+  int targetArgument = 1;
+
+  bool operator==(const CppMemberTypeRule &) const = default;
+};
+
 struct CppImportOptions {
   static QString defaultInterfacePattern();
-  static QStringList defaultOwningPointerTypes();
-  static QStringList defaultSharedPointerTypes();
+  static QList<CppMemberTypeRule> defaultMemberTypeRules();
 
   QString interfacePattern = defaultInterfacePattern();
-  QStringList owningPointerTypes = defaultOwningPointerTypes();
-  QStringList sharedPointerTypes = defaultSharedPointerTypes();
+  QList<CppMemberTypeRule> memberTypeRules = defaultMemberTypeRules();
   // Source-derived stereotypes are resolved from the project-owned catalog by
   // configureCppImportStereotypes(). Empty values deliberately disable the
   // rule, for example when a project has deleted the conventional definition.
@@ -76,6 +86,10 @@ struct CppSourceRelationship {
   QString targetName;
   QString evidenceKind;
   RelationshipType relationshipType = RelationshipType::Generalization;
+  // Member fields annotate the source end, following the convention already
+  // used by the diagram relationship editor.
+  QString sourceRole;
+  QString sourceMultiplicity;
   QString classificationReason;
   QString filePath;
   int line = 0;

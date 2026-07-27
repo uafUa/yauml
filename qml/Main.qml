@@ -1330,16 +1330,38 @@ ApplicationWindow {
         }
         property bool cppInterfacePatternValid:
             applicationSettings.isValidCppInterfacePattern(cppInterfacePattern.text)
+        property int cppMemberTypeRulesRevision: 0
+        property bool cppMemberTypeRulesValid: {
+            // Referencing the revision makes this binding react to edits in
+            // ListModel roles, not only to rows being added or removed.
+            const revision = cppMemberTypeRulesRevision
+            const seen = {}
+            for (let index = 0; index < cppMemberTypeRulesModel.count; ++index) {
+                const rule = cppMemberTypeRulesModel.get(index)
+                let typeName = rule.typeName.replace(/\s+/g, "")
+                while (typeName.startsWith("::"))
+                    typeName = typeName.substring(2)
+                const templateStart = typeName.indexOf("<")
+                if (templateStart >= 0)
+                    typeName = typeName.substring(0, templateStart)
+                if (typeName.length === 0 || seen[typeName])
+                    return false
+                seen[typeName] = true
+            }
+            return true
+        }
 
         function updateOkButton() {
             const button = standardButton(Dialog.Ok)
             if (button)
                 button.enabled = connectorGestureKeysValid
                                  && cppInterfacePatternValid
+                                 && cppMemberTypeRulesValid
         }
 
         onConnectorGestureKeysValidChanged: updateOkButton()
         onCppInterfacePatternValidChanged: updateOkButton()
+        onCppMemberTypeRulesValidChanged: updateOkButton()
 
         onOpened: {
             distributionGap.value = applicationSettings.defaultDistributionGap
@@ -1365,10 +1387,18 @@ ApplicationWindow {
             compositionGestureKey.text = gestureKeys.composition
             containmentGestureKey.text = gestureKeys.containment
             cppInterfacePattern.text = applicationSettings.cppInterfacePattern
-            cppOwningPointerTypes.text =
-                    applicationSettings.cppOwningPointerTypes.join("\n")
-            cppSharedPointerTypes.text =
-                    applicationSettings.cppSharedPointerTypes.join("\n")
+            cppMemberTypeRulesModel.clear()
+            const memberRules = applicationSettings.cppMemberTypeRules
+            for (let index = 0; index < memberRules.length; ++index) {
+                const rule = memberRules[index]
+                cppMemberTypeRulesModel.append({
+                    typeName: rule.typeName,
+                    relationshipType: rule.relationshipType,
+                    multiplicity: rule.multiplicity,
+                    targetArgument: rule.targetArgument
+                })
+            }
+            ++cppMemberTypeRulesRevision
             Qt.callLater(updateOkButton)
             colorPreferencesModel.clear()
             const roles = uiTheme.colorRoles
@@ -1406,9 +1436,19 @@ ApplicationWindow {
                     defaultConnectorRouting.currentIndex === 1
                     ? "orthogonal" : "straight"
             applicationSettings.setCppInterfacePattern(cppInterfacePattern.text)
-            applicationSettings.setCppPointerTypes(
-                        cppOwningPointerTypes.text.split(/\r?\n/),
-                        cppSharedPointerTypes.text.split(/\r?\n/))
+            const memberRules = []
+            for (let index = 0; index < cppMemberTypeRulesModel.count; ++index) {
+                const rule = cppMemberTypeRulesModel.get(index)
+                if (rule.typeName.trim().length === 0)
+                    continue
+                memberRules.push({
+                    typeName: rule.typeName,
+                    relationshipType: rule.relationshipType,
+                    multiplicity: rule.multiplicity,
+                    targetArgument: rule.targetArgument
+                })
+            }
+            applicationSettings.setCppMemberTypeRules(memberRules)
             const colors = {}
             for (let index = 0; index < colorPreferencesModel.count; ++index) {
                 const entry = colorPreferencesModel.get(index)
@@ -1561,37 +1601,142 @@ ApplicationWindow {
                             Layout.fillWidth: true
                             wrapMode: Text.Wrap
                             color: uiTheme.mutedText
-                            text: qsTr("Member ownership determines the imported UML relationship: values and owning pointers become compositions; shared pointers and raw pointer/reference members become aggregations. Enter one qualified pointer-template name per line.")
+                            text: qsTr("Rules map a C++ wrapper or container to an imported UML relationship and source-end multiplicity. The target argument is one-based: use 2 for the mapped value in map<Key, Value>. A multiplicity such as {2} reads the corresponding non-type template argument, as in array<T, N>.")
                         }
-                        GridLayout {
+                        Label {
                             Layout.fillWidth: true
-                            columns: 2
-                            columnSpacing: 12
-                            rowSpacing: 8
+                            visible: !preferencesDialog.cppMemberTypeRulesValid
+                            color: uiTheme.warningBorder
+                            text: qsTr("Every type rule needs a unique, non-empty C++ type name.")
+                        }
+                        ColumnLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
 
-                            Label {
-                                text: qsTr("Owning pointer types")
-                                Layout.alignment: Qt.AlignTop
-                            }
-                            TextArea {
-                                id: cppOwningPointerTypes
+                            RowLayout {
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 76
-                                selectByMouse: true
-                                wrapMode: TextEdit.NoWrap
-                                placeholderText: "std::unique_ptr"
+                                spacing: 8
+                                Label {
+                                    Layout.fillWidth: true
+                                    text: qsTr("C++ type / template")
+                                    font.bold: true
+                                }
+                                Label {
+                                    Layout.preferredWidth: 112
+                                    text: qsTr("Relationship")
+                                    font.bold: true
+                                }
+                                Label {
+                                    Layout.preferredWidth: 86
+                                    text: qsTr("Multiplicity")
+                                    font.bold: true
+                                }
+                                Label {
+                                    Layout.preferredWidth: 72
+                                    text: qsTr("Type arg.")
+                                    font.bold: true
+                                }
+                                Item { Layout.preferredWidth: 34 }
                             }
-                            Label {
-                                text: qsTr("Shared pointer types")
-                                Layout.alignment: Qt.AlignTop
+
+                            Repeater {
+                                model: cppMemberTypeRulesModel
+                                delegate: RowLayout {
+                                    id: memberTypeRuleRow
+                                    required property int index
+                                    required property string typeName
+                                    required property string relationshipType
+                                    required property string multiplicity
+                                    required property int targetArgument
+                                    Layout.fillWidth: true
+                                    spacing: 8
+
+                                    TextField {
+                                        Layout.fillWidth: true
+                                        text: memberTypeRuleRow.typeName
+                                        selectByMouse: true
+                                        placeholderText: "std::vector"
+                                        onEditingFinished:
+                                        {
+                                            cppMemberTypeRulesModel.setProperty(
+                                                memberTypeRuleRow.index,
+                                                "typeName", text.trim())
+                                            ++preferencesDialog.cppMemberTypeRulesRevision
+                                        }
+                                    }
+                                    ComboBox {
+                                        Layout.preferredWidth: 112
+                                        model: [qsTr("Composition"),
+                                                qsTr("Aggregation")]
+                                        currentIndex:
+                                            memberTypeRuleRow.relationshipType
+                                            === "aggregation" ? 1 : 0
+                                        onActivated:
+                                        {
+                                            cppMemberTypeRulesModel.setProperty(
+                                                memberTypeRuleRow.index,
+                                                "relationshipType",
+                                                currentIndex === 1
+                                                ? "aggregation"
+                                                : "composition")
+                                            ++preferencesDialog.cppMemberTypeRulesRevision
+                                        }
+                                    }
+                                    TextField {
+                                        Layout.preferredWidth: 86
+                                        text: memberTypeRuleRow.multiplicity
+                                        selectByMouse: true
+                                        placeholderText: "0..*"
+                                        onEditingFinished:
+                                        {
+                                            cppMemberTypeRulesModel.setProperty(
+                                                memberTypeRuleRow.index,
+                                                "multiplicity", text.trim())
+                                            ++preferencesDialog.cppMemberTypeRulesRevision
+                                        }
+                                    }
+                                    SpinBox {
+                                        Layout.preferredWidth: 72
+                                        from: 1
+                                        to: 16
+                                        editable: true
+                                        value: memberTypeRuleRow.targetArgument
+                                        onValueModified:
+                                        {
+                                            cppMemberTypeRulesModel.setProperty(
+                                                memberTypeRuleRow.index,
+                                                "targetArgument", value)
+                                            ++preferencesDialog.cppMemberTypeRulesRevision
+                                        }
+                                    }
+                                    ToolButton {
+                                        Layout.preferredWidth: 34
+                                        text: "×"
+                                        Accessible.name: qsTr("Remove rule")
+                                        onClicked: {
+                                            cppMemberTypeRulesModel.remove(
+                                                memberTypeRuleRow.index)
+                                            ++preferencesDialog.cppMemberTypeRulesRevision
+                                        }
+                                    }
+                                }
                             }
-                            TextArea {
-                                id: cppSharedPointerTypes
+
+                            RowLayout {
                                 Layout.fillWidth: true
-                                Layout.preferredHeight: 76
-                                selectByMouse: true
-                                wrapMode: TextEdit.NoWrap
-                                placeholderText: "std::shared_ptr"
+                                Item { Layout.fillWidth: true }
+                                Button {
+                                    text: qsTr("Add type rule")
+                                    onClicked: {
+                                        cppMemberTypeRulesModel.append({
+                                            typeName: "",
+                                            relationshipType: "composition",
+                                            multiplicity: "1",
+                                            targetArgument: 1
+                                        })
+                                        ++preferencesDialog.cppMemberTypeRulesRevision
+                                    }
+                                }
                             }
                         }
                         Item { Layout.preferredHeight: 8 }
@@ -1825,6 +1970,7 @@ ApplicationWindow {
         }
 
         ListModel { id: colorPreferencesModel }
+        ListModel { id: cppMemberTypeRulesModel }
     }
 
     ColorDialog {

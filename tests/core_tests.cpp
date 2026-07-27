@@ -135,6 +135,7 @@ private slots:
   void closingAllDetachedWindowsReturnsTheirDiagrams();
   void persistedWorkspaceRestoresTabGroups();
   void applicationPreferencesPersist();
+  void applicationPreferencesMigrateLegacyCppPointerTypes();
   void recentProjectHistoryPersists();
   void themePreferencesPersistAndReset();
   void interruptedSaveRecovery();
@@ -1278,28 +1279,43 @@ void CoreTests::cppImportClassifiesMemberOwnershipAndDependencies() {
   QVERIFY(sourceDirectory.isValid());
   const QString sourcePath =
       sourceDirectory.filePath(QStringLiteral("relationships.cpp"));
-  writeTestFile(sourcePath,
-                QByteArray("namespace rel {\n"
-                           "template<class T> class OwnerPtr {};\n"
-                           "template<class T> class SharedPtr {};\n"
-                           "template<class T> class MysteryPtr {};\n"
-                           "class ValuePart {};\n"
-                           "class RawPart {};\n"
-                           "class ReferencePart {};\n"
-                           "class OwnedPart {};\n"
-                           "class SharedPart {};\n"
-                           "class UnknownPart {};\n"
-                           "class UsedPart {};\n"
-                           "class Consumer {\n"
-                           "  ValuePart value;\n"
-                           "  RawPart *raw;\n"
-                           "  ReferencePart &reference;\n"
-                           "  OwnerPtr<OwnedPart> owned;\n"
-                           "  SharedPtr<SharedPart> shared;\n"
-                           "  MysteryPtr<UnknownPart> unknown;\n"
-                           "  UsedPart make(UsedPart input);\n"
-                           "};\n"
-                           "}\n"));
+  writeTestFile(
+      sourcePath,
+      QByteArray("namespace rel {\n"
+                 "template<class T> class OwnerPtr {};\n"
+                 "template<class T> class SharedPtr {};\n"
+                 "template<class T> class MysteryPtr {};\n"
+                 "template<class T> class Sequence {};\n"
+                 "template<class K, class V> class Lookup {};\n"
+                 "template<class T, int N> class Fixed {};\n"
+                 "class ValuePart {};\n"
+                 "class RawPart {};\n"
+                 "class ReferencePart {};\n"
+                 "class OwnedPart {};\n"
+                 "class SharedPart {};\n"
+                 "class UnknownPart {};\n"
+                 "class UsedPart {};\n"
+                 "class ManyPart {};\n"
+                 "class MappedPart {};\n"
+                 "class FixedPart {};\n"
+                 "class NestedSharedPart {};\n"
+                 "class DuplicatePart {};\n"
+                 "class Consumer {\n"
+                 "  ValuePart value;\n"
+                 "  RawPart *raw;\n"
+                 "  ReferencePart &reference;\n"
+                 "  OwnerPtr<OwnedPart> owned;\n"
+                 "  SharedPtr<SharedPart> shared;\n"
+                 "  MysteryPtr<UnknownPart> unknown;\n"
+                 "  Sequence<ManyPart> many;\n"
+                 "  Lookup<ValuePart, MappedPart> mapped;\n"
+                 "  Fixed<FixedPart, 4> fixed;\n"
+                 "  Sequence<SharedPtr<NestedSharedPart>> sharedMany;\n"
+                 "  DuplicatePart duplicateA;\n"
+                 "  DuplicatePart duplicateB;\n"
+                 "  UsedPart make(UsedPart input);\n"
+                 "};\n"
+                 "}\n"));
 
   QJsonObject command;
   command.insert(QStringLiteral("directory"), sourceDirectory.path());
@@ -1312,8 +1328,18 @@ void CoreTests::cppImportClassifiesMemberOwnershipAndDependencies() {
       QJsonDocument(QJsonArray{command}).toJson(QJsonDocument::Indented));
 
   CppImportOptions options;
-  options.owningPointerTypes = {QStringLiteral("rel::OwnerPtr")};
-  options.sharedPointerTypes = {QStringLiteral("rel::SharedPtr")};
+  options.memberTypeRules = {
+      {QStringLiteral("rel::OwnerPtr"), RelationshipType::Composition,
+       QStringLiteral("0..1"), 1},
+      {QStringLiteral("rel::SharedPtr"), RelationshipType::Aggregation,
+       QStringLiteral("0..1"), 1},
+      {QStringLiteral("rel::Sequence"), RelationshipType::Composition,
+       QStringLiteral("0..*"), 1},
+      {QStringLiteral("rel::Lookup"), RelationshipType::Composition,
+       QStringLiteral("0..*"), 2},
+      {QStringLiteral("rel::Fixed"), RelationshipType::Composition,
+       QStringLiteral("{2}"), 1},
+  };
   const CppImportPreview preview =
       CppImportService::preview(sourceDirectory.path(), {}, {}, options);
   QVERIFY(preview.ok);
@@ -1328,35 +1354,88 @@ void CoreTests::cppImportClassifiesMemberOwnershipAndDependencies() {
   };
   const auto verifyType = [&](const QString &targetName,
                               RelationshipType expected,
-                              const QString &evidenceKind) {
+                              const QString &evidenceKind,
+                              const QString &role = {},
+                              const QString &multiplicity = {}) {
     const auto relationship = relationshipTo(targetName);
     QVERIFY2(relationship != preview.relationships.cend(),
              qPrintable(
                  QStringLiteral("Missing relationship to %1").arg(targetName)));
     QVERIFY(relationship->relationshipType == expected);
     QCOMPARE(relationship->evidenceKind, evidenceKind);
+    QCOMPARE(relationship->sourceRole, role);
+    QCOMPARE(relationship->sourceMultiplicity, multiplicity);
     QVERIFY(!relationship->classificationReason.isEmpty());
   };
   verifyType(QStringLiteral("rel::ValuePart"), RelationshipType::Composition,
-             QStringLiteral("member"));
+             QStringLiteral("member"), QStringLiteral("value"),
+             QStringLiteral("1"));
   verifyType(QStringLiteral("rel::RawPart"), RelationshipType::Aggregation,
-             QStringLiteral("member"));
+             QStringLiteral("member"), QStringLiteral("raw"),
+             QStringLiteral("0..1"));
   verifyType(QStringLiteral("rel::ReferencePart"),
-             RelationshipType::Aggregation, QStringLiteral("member"));
+             RelationshipType::Aggregation, QStringLiteral("member"),
+             QStringLiteral("reference"), QStringLiteral("1"));
   verifyType(QStringLiteral("rel::OwnedPart"), RelationshipType::Composition,
-             QStringLiteral("member"));
+             QStringLiteral("member"), QStringLiteral("owned"),
+             QStringLiteral("0..1"));
   verifyType(QStringLiteral("rel::SharedPart"), RelationshipType::Aggregation,
-             QStringLiteral("member"));
+             QStringLiteral("member"), QStringLiteral("shared"),
+             QStringLiteral("0..1"));
   verifyType(QStringLiteral("rel::UnknownPart"), RelationshipType::Association,
-             QStringLiteral("member"));
+             QStringLiteral("member"), QStringLiteral("unknown"),
+             QStringLiteral("1"));
   verifyType(QStringLiteral("rel::UsedPart"), RelationshipType::Dependency,
              QStringLiteral("signature"));
+  verifyType(QStringLiteral("rel::ManyPart"), RelationshipType::Composition,
+             QStringLiteral("member"), QStringLiteral("many"),
+             QStringLiteral("0..*"));
+  verifyType(QStringLiteral("rel::MappedPart"), RelationshipType::Composition,
+             QStringLiteral("member"), QStringLiteral("mapped"),
+             QStringLiteral("0..*"));
+  verifyType(QStringLiteral("rel::FixedPart"), RelationshipType::Composition,
+             QStringLiteral("member"), QStringLiteral("fixed"),
+             QStringLiteral("4"));
+  verifyType(QStringLiteral("rel::NestedSharedPart"),
+             RelationshipType::Aggregation, QStringLiteral("member"),
+             QStringLiteral("sharedMany"), QStringLiteral("0..*"));
+
+  QList<CppSourceRelationship> duplicateRelationships;
+  std::copy_if(
+      preview.relationships.cbegin(), preview.relationships.cend(),
+      std::back_inserter(duplicateRelationships),
+      [](const CppSourceRelationship &relationship) {
+        return relationship.sourceName == QStringLiteral("rel::Consumer") &&
+               relationship.targetName == QStringLiteral("rel::DuplicatePart");
+      });
+  QCOMPARE(duplicateRelationships.size(), 2);
+  QCOMPARE(QSet<QString>({duplicateRelationships.at(0).sourceRole,
+                          duplicateRelationships.at(1).sourceRole}),
+           QSet<QString>(
+               {QStringLiteral("duplicateA"), QStringLiteral("duplicateB")}));
+  QVERIFY(duplicateRelationships.at(0).symbolId !=
+          duplicateRelationships.at(1).symbolId);
 
   ProjectData imported = createStarterProject();
   QCOMPARE(CppImportService::apply(imported, preview),
            preview.applicableCount());
+  const auto importedOwned = std::find_if(
+      imported.relationships.cbegin(), imported.relationships.cend(),
+      [&](const Relationship &relationship) {
+        const auto target = std::find_if(
+            imported.elements.cbegin(), imported.elements.cend(),
+            [&](const ModelElement &element) {
+              return element.id == relationship.targetId &&
+                     element.name == QStringLiteral("rel::OwnedPart");
+            });
+        return target != imported.elements.cend();
+      });
+  QVERIFY(importedOwned != imported.relationships.cend());
+  QCOMPARE(importedOwned->sourceEnd.role, QStringLiteral("owned"));
+  QCOMPARE(importedOwned->sourceEnd.multiplicity, QStringLiteral("0..1"));
+
   CppImportOptions reclassifiedOptions = options;
-  reclassifiedOptions.owningPointerTypes.clear();
+  reclassifiedOptions.memberTypeRules.removeFirst();
   const CppImportPreview reclassified =
       CppImportService::preview(sourceDirectory.path(), imported.elements,
                                 imported.relationships, reclassifiedOptions);
@@ -3647,10 +3726,8 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(settings.defaultConnectorRouting(), QStringLiteral("straight"));
     QCOMPARE(settings.cppInterfacePattern(),
              ApplicationSettings::defaultCppInterfacePattern());
-    QCOMPARE(settings.cppOwningPointerTypes(),
-             ApplicationSettings::defaultCppOwningPointerTypes());
-    QCOMPARE(settings.cppSharedPointerTypes(),
-             ApplicationSettings::defaultCppSharedPointerTypes());
+    QCOMPARE(settings.cppMemberTypeRules(),
+             ApplicationSettings::defaultCppMemberTypeRules());
     QCOMPARE(settings.packageReassignmentPolicy(), QStringLiteral("ask"));
     QCOMPARE(settings.relationshipGestureKeys(),
              ApplicationSettings::defaultRelationshipGestureKeys());
@@ -3666,13 +3743,32 @@ void CoreTests::applicationPreferencesPersist() {
     QVERIFY(settings.setCppInterfacePattern(QStringLiteral("^Abstract.*$")));
     QVERIFY(!settings.setCppInterfacePattern(QStringLiteral("[")));
     QCOMPARE(settings.cppInterfacePattern(), QStringLiteral("^Abstract.*$"));
-    settings.setCppPointerTypes(
-        {QStringLiteral(" custom::Owner<> "), QStringLiteral("custom::Owner")},
-        {QStringLiteral("custom::Shared"), QStringLiteral("custom::Owner")});
-    QCOMPARE(settings.cppOwningPointerTypes(),
-             QStringList({QStringLiteral("custom::Owner")}));
-    QCOMPARE(settings.cppSharedPointerTypes(),
-             QStringList({QStringLiteral("custom::Shared")}));
+    const QVariantList customMemberRules = {
+        QVariantMap{
+            {QStringLiteral("typeName"), QStringLiteral(" custom::Owner<> ")},
+            {QStringLiteral("relationshipType"), QStringLiteral("composition")},
+            {QStringLiteral("multiplicity"), QStringLiteral("0..*")},
+            {QStringLiteral("targetArgument"), 2}},
+        QVariantMap{
+            {QStringLiteral("typeName"), QStringLiteral("custom::Shared")},
+            {QStringLiteral("relationshipType"), QStringLiteral("aggregation")},
+            {QStringLiteral("multiplicity"), QStringLiteral("0..1")},
+            {QStringLiteral("targetArgument"), 1}},
+    };
+    QVERIFY(settings.setCppMemberTypeRules(customMemberRules));
+    const QVariantList normalizedMemberRules = {
+        QVariantMap{
+            {QStringLiteral("typeName"), QStringLiteral("custom::Owner")},
+            {QStringLiteral("relationshipType"), QStringLiteral("composition")},
+            {QStringLiteral("multiplicity"), QStringLiteral("0..*")},
+            {QStringLiteral("targetArgument"), 2}},
+        QVariantMap{
+            {QStringLiteral("typeName"), QStringLiteral("custom::Shared")},
+            {QStringLiteral("relationshipType"), QStringLiteral("aggregation")},
+            {QStringLiteral("multiplicity"), QStringLiteral("0..1")},
+            {QStringLiteral("targetArgument"), 1}},
+    };
+    QCOMPARE(settings.cppMemberTypeRules(), normalizedMemberRules);
     QVariantMap gestureKeys =
         ApplicationSettings::defaultRelationshipGestureKeys();
     gestureKeys.insert(QStringLiteral("dependency"), QStringLiteral("X"));
@@ -3695,10 +3791,19 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(restored.diagramItemSizingMode(), QStringLiteral("fixed"));
     QCOMPARE(restored.defaultConnectorRouting(), QStringLiteral("orthogonal"));
     QCOMPARE(restored.cppInterfacePattern(), QStringLiteral("^Abstract.*$"));
-    QCOMPARE(restored.cppOwningPointerTypes(),
-             QStringList({QStringLiteral("custom::Owner")}));
-    QCOMPARE(restored.cppSharedPointerTypes(),
-             QStringList({QStringLiteral("custom::Shared")}));
+    const QVariantList expectedMemberRules = {
+        QVariantMap{
+            {QStringLiteral("typeName"), QStringLiteral("custom::Owner")},
+            {QStringLiteral("relationshipType"), QStringLiteral("composition")},
+            {QStringLiteral("multiplicity"), QStringLiteral("0..*")},
+            {QStringLiteral("targetArgument"), 2}},
+        QVariantMap{
+            {QStringLiteral("typeName"), QStringLiteral("custom::Shared")},
+            {QStringLiteral("relationshipType"), QStringLiteral("aggregation")},
+            {QStringLiteral("multiplicity"), QStringLiteral("0..1")},
+            {QStringLiteral("targetArgument"), 1}},
+    };
+    QCOMPARE(restored.cppMemberTypeRules(), expectedMemberRules);
     QCOMPARE(restored.packageReassignmentPolicy(), QStringLiteral("allow"));
     QVariantMap expectedGestureKeys =
         ApplicationSettings::defaultRelationshipGestureKeys();
@@ -3730,14 +3835,50 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(restored.defaultConnectorRouting(), QStringLiteral("straight"));
     QCOMPARE(restored.cppInterfacePattern(),
              ApplicationSettings::defaultCppInterfacePattern());
-    QCOMPARE(restored.cppOwningPointerTypes(),
-             ApplicationSettings::defaultCppOwningPointerTypes());
-    QCOMPARE(restored.cppSharedPointerTypes(),
-             ApplicationSettings::defaultCppSharedPointerTypes());
+    QCOMPARE(restored.cppMemberTypeRules(),
+             ApplicationSettings::defaultCppMemberTypeRules());
     QCOMPARE(restored.packageReassignmentPolicy(), QStringLiteral("ask"));
     QCOMPARE(restored.relationshipGestureKeys(),
              ApplicationSettings::defaultRelationshipGestureKeys());
   }
+}
+
+void CoreTests::applicationPreferencesMigrateLegacyCppPointerTypes() {
+  IsolatedSettingsScope settingsScope;
+  {
+    QSettings legacy;
+    legacy.beginGroup(QStringLiteral("preferences/cppImport"));
+    legacy.setValue(QStringLiteral("owningPointerTypes"),
+                    QStringList({QStringLiteral("custom::Owner")}));
+    legacy.setValue(QStringLiteral("sharedPointerTypes"),
+                    QStringList({QStringLiteral("custom::Shared")}));
+    legacy.endGroup();
+  }
+
+  ApplicationSettings migrated;
+  const QList<CppMemberTypeRule> rules = migrated.cppMemberTypeRuleValues();
+  const auto findRule = [&](const QString &typeName) {
+    return std::find_if(rules.cbegin(), rules.cend(),
+                        [&](const CppMemberTypeRule &rule) {
+                          return rule.typeName == typeName;
+                        });
+  };
+
+  const auto owner = findRule(QStringLiteral("custom::Owner"));
+  QVERIFY(owner != rules.cend());
+  QVERIFY(owner->relationshipType == RelationshipType::Composition);
+  QCOMPARE(owner->multiplicity, QStringLiteral("0..1"));
+
+  const auto shared = findRule(QStringLiteral("custom::Shared"));
+  QVERIFY(shared != rules.cend());
+  QVERIFY(shared->relationshipType == RelationshipType::Aggregation);
+  QCOMPARE(shared->multiplicity, QStringLiteral("0..1"));
+
+  // New standard-container defaults are added even for an existing profile.
+  const auto vector = findRule(QStringLiteral("std::vector"));
+  QVERIFY(vector != rules.cend());
+  QVERIFY(vector->relationshipType == RelationshipType::Composition);
+  QCOMPARE(vector->multiplicity, QStringLiteral("0..*"));
 }
 
 void CoreTests::recentProjectHistoryPersists() {

@@ -120,8 +120,7 @@ void CppImportController::previewPaths(const QStringList &sourceDirectories) {
   const QList<Relationship> relationships = m_project->data().relationships;
   CppImportOptions options;
   options.interfacePattern = m_settings->cppInterfacePattern();
-  options.owningPointerTypes = m_settings->cppOwningPointerTypes();
-  options.sharedPointerTypes = m_settings->cppSharedPointerTypes();
+  options.memberTypeRules = m_settings->cppMemberTypeRuleValues();
   configureCppImportStereotypes(options, m_project->data());
   m_watcher.setFuture(QtConcurrent::run([paths, elements, relationships,
                                          options] {

@@ -26,6 +26,8 @@ constexpr auto kDefaultConnectorRoutingKey = "defaultRouting";
 constexpr auto kRelationshipGestureKeySuffix = "GestureKey";
 constexpr auto kCppImportSettingsGroup = "preferences/cppImport";
 constexpr auto kCppInterfacePatternKey = "interfacePattern";
+constexpr auto kCppMemberTypeRulesKey = "memberTypeRules";
+// Read-only migration keys used by builds before the rule table existed.
 constexpr auto kCppOwningPointerTypesKey = "owningPointerTypes";
 constexpr auto kCppSharedPointerTypesKey = "sharedPointerTypes";
 constexpr auto kModelingSettingsGroup = "preferences/modeling";
@@ -120,6 +122,73 @@ QStringList normalizedCppTypeNames(const QStringList &candidates) {
   return normalized;
 }
 
+QVariantMap memberTypeRuleVariant(const CppMemberTypeRule &rule) {
+  return {{QStringLiteral("typeName"), rule.typeName},
+          {QStringLiteral("relationshipType"), toString(rule.relationshipType)},
+          {QStringLiteral("multiplicity"), rule.multiplicity},
+          {QStringLiteral("targetArgument"), rule.targetArgument}};
+}
+
+QVariantList memberTypeRuleVariants(const QList<CppMemberTypeRule> &rules) {
+  QVariantList variants;
+  variants.reserve(rules.size());
+  for (const auto &rule : rules)
+    variants.append(memberTypeRuleVariant(rule));
+  return variants;
+}
+
+QList<CppMemberTypeRule>
+normalizedMemberTypeRules(const QVariantList &candidates) {
+  QList<CppMemberTypeRule> normalized;
+  QSet<QString> seenTypes;
+  for (const QVariant &candidate : candidates) {
+    const QVariantMap values = candidate.toMap();
+    const QStringList normalizedNames = normalizedCppTypeNames(
+        {values.value(QStringLiteral("typeName")).toString()});
+    if (normalizedNames.isEmpty())
+      continue;
+
+    bool relationshipOk = false;
+    const RelationshipType relationshipType = relationshipTypeFromString(
+        values.value(QStringLiteral("relationshipType")).toString(),
+        &relationshipOk);
+    if (!relationshipOk || (relationshipType != RelationshipType::Aggregation &&
+                            relationshipType != RelationshipType::Composition))
+      continue;
+
+    const QString typeName = normalizedNames.first();
+    if (seenTypes.contains(typeName))
+      continue;
+    seenTypes.insert(typeName);
+
+    CppMemberTypeRule rule;
+    rule.typeName = typeName;
+    rule.relationshipType = relationshipType;
+    rule.multiplicity =
+        values.value(QStringLiteral("multiplicity")).toString().trimmed();
+    rule.targetArgument = std::clamp(
+        values.value(QStringLiteral("targetArgument"), 1).toInt(), 1, 16);
+    normalized.append(std::move(rule));
+  }
+  return normalized;
+}
+
+void mergeLegacyRules(QList<CppMemberTypeRule> &rules,
+                      const QStringList &typeNames,
+                      RelationshipType relationshipType) {
+  for (const QString &typeName : normalizedCppTypeNames(typeNames)) {
+    const auto existing =
+        std::find_if(rules.begin(), rules.end(), [&](const auto &rule) {
+          return rule.typeName == typeName;
+        });
+    if (existing != rules.end()) {
+      existing->relationshipType = relationshipType;
+      continue;
+    }
+    rules.append({typeName, relationshipType, QStringLiteral("0..1"), 1});
+  }
+}
+
 } // namespace
 
 ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
@@ -185,18 +254,23 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
               QRegularExpression(storedInterfacePattern).isValid()
           ? storedInterfacePattern
           : defaultCppInterfacePattern();
-  m_cppOwningPointerTypes = normalizedCppTypeNames(
-      settings
-          .value(QLatin1String(kCppOwningPointerTypesKey),
-                 defaultCppOwningPointerTypes())
-          .toStringList());
-  m_cppSharedPointerTypes = normalizedCppTypeNames(
-      settings
-          .value(QLatin1String(kCppSharedPointerTypesKey),
-                 defaultCppSharedPointerTypes())
-          .toStringList());
-  for (const QString &owningType : std::as_const(m_cppOwningPointerTypes))
-    m_cppSharedPointerTypes.removeAll(owningType);
+  if (settings.contains(QLatin1String(kCppMemberTypeRulesKey))) {
+    m_cppMemberTypeRules = normalizedMemberTypeRules(
+        settings.value(QLatin1String(kCppMemberTypeRulesKey)).toList());
+  } else {
+    // Existing installations only stored two pointer lists. Start from the
+    // richer defaults so the newly supported standard containers work
+    // immediately, then merge any custom pointer templates the user added.
+    m_cppMemberTypeRules = CppImportOptions::defaultMemberTypeRules();
+    mergeLegacyRules(
+        m_cppMemberTypeRules,
+        settings.value(QLatin1String(kCppOwningPointerTypesKey)).toStringList(),
+        RelationshipType::Composition);
+    mergeLegacyRules(
+        m_cppMemberTypeRules,
+        settings.value(QLatin1String(kCppSharedPointerTypesKey)).toStringList(),
+        RelationshipType::Aggregation);
+  }
   settings.endGroup();
 
   settings.beginGroup(QLatin1String(kModelingSettingsGroup));
@@ -238,12 +312,8 @@ QString ApplicationSettings::defaultCppInterfacePattern() {
   return CppImportOptions::defaultInterfacePattern();
 }
 
-QStringList ApplicationSettings::defaultCppOwningPointerTypes() {
-  return CppImportOptions::defaultOwningPointerTypes();
-}
-
-QStringList ApplicationSettings::defaultCppSharedPointerTypes() {
-  return CppImportOptions::defaultSharedPointerTypes();
+QVariantList ApplicationSettings::defaultCppMemberTypeRules() {
+  return memberTypeRuleVariants(CppImportOptions::defaultMemberTypeRules());
 }
 
 QString ApplicationSettings::defaultPackageReassignmentPolicy() {
@@ -358,29 +428,24 @@ bool ApplicationSettings::isValidCppInterfacePattern(
   return !pattern.isEmpty() && QRegularExpression(pattern).isValid();
 }
 
-QStringList ApplicationSettings::cppOwningPointerTypes() const {
-  return m_cppOwningPointerTypes;
+QVariantList ApplicationSettings::cppMemberTypeRules() const {
+  return memberTypeRuleVariants(m_cppMemberTypeRules);
 }
 
-QStringList ApplicationSettings::cppSharedPointerTypes() const {
-  return m_cppSharedPointerTypes;
+QList<CppMemberTypeRule> ApplicationSettings::cppMemberTypeRuleValues() const {
+  return m_cppMemberTypeRules;
 }
 
-void ApplicationSettings::setCppPointerTypes(const QStringList &owningTypes,
-                                             const QStringList &sharedTypes) {
-  QStringList normalizedOwning = normalizedCppTypeNames(owningTypes);
-  QStringList normalizedShared = normalizedCppTypeNames(sharedTypes);
-  // An overlap is ambiguous. Exclusive ownership is the stronger declaration,
-  // so it wins deterministically and the type is removed from the shared list.
-  for (const QString &owningType : std::as_const(normalizedOwning))
-    normalizedShared.removeAll(owningType);
-  if (m_cppOwningPointerTypes == normalizedOwning &&
-      m_cppSharedPointerTypes == normalizedShared)
-    return;
-  m_cppOwningPointerTypes = std::move(normalizedOwning);
-  m_cppSharedPointerTypes = std::move(normalizedShared);
+bool ApplicationSettings::setCppMemberTypeRules(const QVariantList &rules) {
+  const QList<CppMemberTypeRule> normalized = normalizedMemberTypeRules(rules);
+  if (normalized.size() != rules.size())
+    return false;
+  if (m_cppMemberTypeRules == normalized)
+    return true;
+  m_cppMemberTypeRules = normalized;
   persistCppImportPreferences();
-  emit cppPointerTypesChanged();
+  emit cppMemberTypeRulesChanged();
+  return true;
 }
 
 QString ApplicationSettings::packageReassignmentPolicy() const {
@@ -449,8 +514,7 @@ void ApplicationSettings::resetDefaults() {
   setDefaultConnectorRouting(toString(kDefaultConnectorRouting));
   setRelationshipGestureKeys(makeDefaultRelationshipGestureKeys());
   setCppInterfacePattern(defaultCppInterfacePattern());
-  setCppPointerTypes(defaultCppOwningPointerTypes(),
-                     defaultCppSharedPointerTypes());
+  setCppMemberTypeRules(defaultCppMemberTypeRules());
   setPackageReassignmentPolicy(defaultPackageReassignmentPolicy());
 }
 
@@ -486,10 +550,10 @@ void ApplicationSettings::persistCppImportPreferences() const {
   settings.beginGroup(QLatin1String(kCppImportSettingsGroup));
   settings.setValue(QLatin1String(kCppInterfacePatternKey),
                     m_cppInterfacePattern);
-  settings.setValue(QLatin1String(kCppOwningPointerTypesKey),
-                    m_cppOwningPointerTypes);
-  settings.setValue(QLatin1String(kCppSharedPointerTypesKey),
-                    m_cppSharedPointerTypes);
+  settings.setValue(QLatin1String(kCppMemberTypeRulesKey),
+                    memberTypeRuleVariants(m_cppMemberTypeRules));
+  settings.remove(QLatin1String(kCppOwningPointerTypesKey));
+  settings.remove(QLatin1String(kCppSharedPointerTypesKey));
   settings.endGroup();
   settings.sync();
 }
