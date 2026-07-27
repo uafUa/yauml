@@ -308,6 +308,8 @@ toolboxes implemented, expansion planned
 - Add a stereotype catalog with stable identifiers. New projects seed their
   project-owned catalog with conventional UML definitions; after creation,
   those defaults are editable and deletable like entries created by the user.
+  The seed includes `local`, `private`, and `api` source-visibility
+  classifications.
   Definitions, applicability, and assignments live in project JSON5. Semantic
   elements—packages, classes, structs, enumerations, and nested types—and
   relationships can reference zero or more catalog entries. Custom
@@ -369,6 +371,11 @@ toolboxes implemented, expansion planned
   persisted preferences (defaulting to `std::unique_ptr` and
   `std::shared_ptr`). Reclassification keeps stable bindings and therefore uses
   the normal user-authoritative conflict rules.
+- C++ implementation-file declarations receive the project catalog's `local`
+  stereotype. The binding tracks only that derived assignment as source-owned:
+  moving the declaration to a header removes it, while manual `private`, `api`,
+  and custom stereotype assignments remain intact. Existing projects gain the
+  three editable definitions through a duplicate-safe schema migration.
 - Per-project repeatable synchronization controls are implemented. Applying a
   successful preview persists its source root in the project manifest as part
   of the same compact undo command as semantic changes. **Synchronize C++**

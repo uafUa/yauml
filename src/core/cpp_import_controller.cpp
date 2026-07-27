@@ -80,6 +80,7 @@ void CppImportController::preview(const QUrl &sourceOrBuildDirectory) {
   options.interfacePattern = m_settings->cppInterfacePattern();
   options.owningPointerTypes = m_settings->cppOwningPointerTypes();
   options.sharedPointerTypes = m_settings->cppSharedPointerTypes();
+  configureCppImportStereotypes(options, m_project->data());
   m_watcher.setFuture(QtConcurrent::run([path, elements, relationships,
                                          options] {
     return CppImportService::preview(path, elements, relationships, options);
@@ -96,8 +97,14 @@ void CppImportController::applyPreview() {
   if (!canApply() || !m_project)
     return;
 
-  const CppImportPreview currentPlan = CppImportService::replan(
-      m_preview, m_project->data().elements, m_project->data().relationships);
+  // The project-owned catalog may have changed while Clang discovery was
+  // running. Refresh its derived-stereotype policy before the final re-plan.
+  CppImportPreview currentDiscovery = m_preview;
+  configureCppImportStereotypes(currentDiscovery.optionsUsed,
+                                m_project->data());
+  const CppImportPreview currentPlan =
+      CppImportService::replan(currentDiscovery, m_project->data().elements,
+                               m_project->data().relationships);
   const qsizetype discoveryCount = currentPlan.discoveryDiagnostics.size();
   if (currentPlan.diagnostics.size() > discoveryCount) {
     publishDiagnostics(currentPlan.diagnostics.mid(discoveryCount));

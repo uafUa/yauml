@@ -88,6 +88,7 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   options.interfacePattern = settings.cppInterfacePattern();
   options.owningPointerTypes = settings.cppOwningPointerTypes();
   options.sharedPointerTypes = settings.cppSharedPointerTypes();
+  uuml::configureCppImportStereotypes(options, load.project);
   uuml::CppImportPreview preview = uuml::CppImportService::preview(
       sourcePath, load.project.elements, load.project.relationships, options);
   writeDiagnostics(preview.diagnostics, out, err);

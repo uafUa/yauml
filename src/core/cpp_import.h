@@ -27,7 +27,15 @@ struct CppImportOptions {
   QString interfacePattern = defaultInterfacePattern();
   QStringList owningPointerTypes = defaultOwningPointerTypes();
   QStringList sharedPointerTypes = defaultSharedPointerTypes();
+  // Source-derived stereotypes are resolved from the project-owned catalog by
+  // configureCppImportStereotypes(). Empty values deliberately disable the
+  // rule, for example when a project has deleted the conventional definition.
+  QString localTypeStereotypeId;
+  QStringList localTypeStereotypeApplicableTo;
 };
+
+void configureCppImportStereotypes(CppImportOptions &options,
+                                   const ProjectData &project);
 
 // A compiler-owned description of one C++ record. Keeping discovery separate
 // from planning allows an asynchronous preview to be safely re-planned against
@@ -106,6 +114,9 @@ struct CppImportPreview {
   // against current model state without duplicating Clang work or messages.
   QList<Diagnostic> discoveryDiagnostics;
   QList<Diagnostic> diagnostics;
+  // Re-planning reuses Clang discovery but must retain the project-specific
+  // source-derived stereotype policy used to materialize desired elements.
+  CppImportOptions optionsUsed;
   bool usedCompilationDatabase = false;
   bool ok = false;
 

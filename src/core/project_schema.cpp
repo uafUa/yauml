@@ -62,25 +62,29 @@ QJsonObject stereotypeDefinitionJson(const StereotypeDefinition &definition) {
           {QStringLiteral("applicableTo"), applicableTo}};
 }
 
-void migrateVersionOneToTwo(ProjectJsonDocuments &documents) {
-  // In schema 1 the conventional UML entries lived in the application and
-  // only custom entries were serialized. Schema 2 makes the whole catalog
-  // project-owned. Copy each missing default once, retaining all custom entries
-  // and their order after the seeded section.
+void prependMissingDefinitions(ProjectJsonDocuments &documents,
+                               const QList<StereotypeDefinition> &definitions) {
   const QJsonValue catalogValue =
       documents.model.value(QStringLiteral("stereotypes"));
   if (catalogValue.isUndefined() || catalogValue.isArray()) {
     const QJsonArray existing = catalogValue.toArray();
     QSet<QString> existingIds;
+    QSet<QString> existingNames;
     for (const QJsonValue &value : existing) {
-      if (value.isObject())
-        existingIds.insert(
-            value.toObject().value(QStringLiteral("id")).toString());
+      if (!value.isObject())
+        continue;
+      const QJsonObject object = value.toObject();
+      existingIds.insert(object.value(QStringLiteral("id")).toString());
+      existingNames.insert(object.value(QStringLiteral("name"))
+                               .toString()
+                               .trimmed()
+                               .toCaseFolded());
     }
 
     QJsonArray migrated;
-    for (const auto &definition : stereotype_catalog::defaultDefinitions()) {
-      if (!existingIds.contains(definition.id))
+    for (const auto &definition : definitions) {
+      if (!existingIds.contains(definition.id) &&
+          !existingNames.contains(definition.name.trimmed().toCaseFolded()))
         migrated.append(stereotypeDefinitionJson(definition));
     }
     for (const QJsonValue &value : existing)
@@ -89,7 +93,25 @@ void migrateVersionOneToTwo(ProjectJsonDocuments &documents) {
   }
   // Preserve malformed values for the normal load validator to report rather
   // than silently replacing user data during migration.
+}
+
+void migrateVersionOneToTwo(ProjectJsonDocuments &documents) {
+  // In schema 1 the conventional UML entries lived in the application and
+  // only custom entries were serialized. Schema 2 makes the whole catalog
+  // project-owned. Copy each missing default once, retaining all custom entries
+  // and their order after the seeded section.
+  prependMissingDefinitions(documents,
+                            stereotype_catalog::defaultDefinitions());
   documents.manifest.insert(QStringLiteral("schemaVersion"), 2);
+}
+
+void migrateVersionTwoToThree(ProjectJsonDocuments &documents) {
+  // Schema 3 adds conventional source-visibility stereotypes. Do not reseed
+  // unrelated catalog entries that a user may have deliberately deleted. A
+  // same-named custom entry is also retained as the project's definition.
+  prependMissingDefinitions(documents,
+                            stereotype_catalog::sourceVisibilityDefinitions());
+  documents.manifest.insert(QStringLiteral("schemaVersion"), 3);
 }
 
 } // namespace
@@ -122,6 +144,10 @@ ProjectSchemaMigrator::migrate(ProjectJsonDocuments documents) {
     case 1:
       migrateVersionOneToTwo(outcome.documents);
       version = 2;
+      break;
+    case 2:
+      migrateVersionTwoToThree(outcome.documents);
+      version = 3;
       break;
     default:
       outcome.diagnostics.append(schemaError(

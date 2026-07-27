@@ -94,6 +94,7 @@ private slots:
   void validationFindsBrokenReferences();
   void commandUndoRedo();
   void cppImportUsesClangAndProtectsUserEdits();
+  void cppImportAssignsLocalStereotypeToImplementationTypes();
   void cppInterfacePatternClassifiesRealization();
   void cppImportClassifiesMemberOwnershipAndDependencies();
   void cppImportCreatesNestedTypeContainment();
@@ -466,8 +467,61 @@ void CoreTests::stereotypeCatalogSeedMigrationAndEmptyPersistence() {
   QCOMPARE(findElement(migrated.project, element.id)->stereotypeIds,
            element.stereotypeIds);
 
-  // In schema 2 an empty array is intentional and must not be repopulated on
-  // every load after a user removes all seeded definitions.
+  // Schema 3 adds source-visibility conventions without duplicating an
+  // existing same-named custom stereotype or restoring unrelated definitions.
+  QTemporaryDir schemaTwoDirectory;
+  QVERIFY(schemaTwoDirectory.isValid());
+  ProjectData schemaTwo =
+      createStarterProject(QStringLiteral("Schema 2 catalog"));
+  schemaTwo.stereotypeDefinitions.removeIf(
+      [](const StereotypeDefinition &definition) {
+        return definition.id == stereotype_catalog::kLocalStereotypeId ||
+               definition.id == stereotype_catalog::kPrivateStereotypeId ||
+               definition.id == stereotype_catalog::kApiStereotypeId;
+      });
+  StereotypeDefinition customLocal;
+  customLocal.id = newId();
+  customLocal.name = QStringLiteral("LOCAL");
+  customLocal.applicableTo = {QStringLiteral("class")};
+  schemaTwo.stereotypeDefinitions.append(customLocal);
+  QVERIFY(ProjectSerializer::save(schemaTwoDirectory.path(), schemaTwo).ok);
+
+  const QString schemaTwoManifestPath =
+      QDir(schemaTwoDirectory.path())
+          .filePath(QStringLiteral("manifest.json5"));
+  QFile schemaTwoManifestFile(schemaTwoManifestPath);
+  QVERIFY(schemaTwoManifestFile.open(QIODevice::ReadOnly));
+  const auto parsedSchemaTwoManifest =
+      Json5::parse(schemaTwoManifestFile.readAll());
+  schemaTwoManifestFile.close();
+  QVERIFY2(parsedSchemaTwoManifest, qPrintable(parsedSchemaTwoManifest.error));
+  QJsonObject schemaTwoManifest = parsedSchemaTwoManifest.document.object();
+  schemaTwoManifest.insert(QStringLiteral("schemaVersion"), 2);
+  writeTestFile(schemaTwoManifestPath,
+                Json5::serialize(QJsonDocument(std::move(schemaTwoManifest))));
+
+  const LoadOutcome schemaThree =
+      ProjectSerializer::load(schemaTwoDirectory.path());
+  QVERIFY(schemaThree.ok);
+  QVERIFY(schemaThree.migrated);
+  QCOMPARE(schemaThree.project.schemaVersion, kCurrentProjectSchemaVersion);
+  QCOMPARE(schemaThree.project.stereotypeDefinitions.size(),
+           stereotype_catalog::defaultDefinitions().size());
+  QVERIFY(findStereotypeDefinition(schemaThree.project, customLocal.id));
+  QVERIFY(!findStereotypeDefinition(schemaThree.project,
+                                    stereotype_catalog::kLocalStereotypeId));
+  QVERIFY(findStereotypeDefinition(schemaThree.project,
+                                   stereotype_catalog::kPrivateStereotypeId));
+  QVERIFY(findStereotypeDefinition(schemaThree.project,
+                                   stereotype_catalog::kApiStereotypeId));
+  CppImportOptions migratedOptions;
+  configureCppImportStereotypes(migratedOptions, schemaThree.project);
+  QCOMPARE(migratedOptions.localTypeStereotypeId, customLocal.id);
+  QCOMPARE(migratedOptions.localTypeStereotypeApplicableTo,
+           customLocal.applicableTo);
+
+  // In the current schema an empty array is intentional and must not be
+  // repopulated on every load after a user removes all seeded definitions.
   QTemporaryDir emptyDirectory;
   QVERIFY(emptyDirectory.isValid());
   ProjectData empty = createStarterProject(QStringLiteral("Empty catalog"));
@@ -943,6 +997,129 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
           CppImportAction::MissingSource);
   QCOMPARE(CppImportService::apply(imported, inheritanceRemoved), 0);
   QCOMPARE(imported.relationships.size(), 1);
+}
+
+void CoreTests::cppImportAssignsLocalStereotypeToImplementationTypes() {
+  if (!CppImportService::available())
+    QSKIP("This build was configured without libclang");
+
+  QTemporaryDir sourceDirectory;
+  QVERIFY(sourceDirectory.isValid());
+  const QString headerPath =
+      sourceDirectory.filePath(QStringLiteral("public.hpp"));
+  const QString sourcePath =
+      sourceDirectory.filePath(QStringLiteral("implementation.cpp"));
+  writeTestFile(headerPath, QByteArray("#pragma once\n"
+                                       "class ApiType {};\n"));
+  writeTestFile(sourcePath, QByteArray("#include \"public.hpp\"\n"
+                                       "class LocalType {};\n"
+                                       "struct LocalStruct {};\n"));
+
+  QJsonObject command;
+  command.insert(QStringLiteral("directory"), sourceDirectory.path());
+  command.insert(QStringLiteral("file"), sourcePath);
+  command.insert(QStringLiteral("arguments"),
+                 QJsonArray{QStringLiteral("clang++"),
+                            QStringLiteral("-std=c++20"), sourcePath});
+  writeTestFile(
+      sourceDirectory.filePath(QStringLiteral("compile_commands.json")),
+      QJsonDocument(QJsonArray{command}).toJson(QJsonDocument::Indented));
+
+  ProjectController controller;
+  CppImportOptions options;
+  configureCppImportStereotypes(options, controller.data());
+  QCOMPARE(options.localTypeStereotypeId,
+           stereotype_catalog::kLocalStereotypeId);
+
+  const CppImportPreview initial = CppImportService::preview(
+      sourceDirectory.path(), controller.data().elements,
+      controller.data().relationships, options);
+  QVERIFY(initial.ok);
+  QCOMPARE(initial.elementApplicableCount(), 3);
+  const auto desiredType = [&](const QString &name) -> const ModelElement * {
+    const auto item =
+        std::find_if(initial.items.cbegin(), initial.items.cend(),
+                     [&](const CppImportItem &candidate) {
+                       return candidate.symbol.qualifiedName == name;
+                     });
+    return item == initial.items.cend() ? nullptr : &item->desiredElement;
+  };
+  const ModelElement *apiType = desiredType(QStringLiteral("ApiType"));
+  const ModelElement *localType = desiredType(QStringLiteral("LocalType"));
+  const ModelElement *localStruct = desiredType(QStringLiteral("LocalStruct"));
+  QVERIFY(apiType);
+  QVERIFY(localType);
+  QVERIFY(localStruct);
+  QVERIFY(
+      !apiType->stereotypeIds.contains(stereotype_catalog::kLocalStereotypeId));
+  QVERIFY(localType->stereotypeIds.contains(
+      stereotype_catalog::kLocalStereotypeId));
+  QVERIFY(localStruct->stereotypeIds.contains(
+      stereotype_catalog::kLocalStereotypeId));
+
+  QCOMPARE(controller.applyCppImportPlan(initial), 3);
+  QCOMPARE(controller.undoText(), QStringLiteral("Import C++ changes"));
+  controller.undo();
+  QVERIFY(controller.data().elements.isEmpty());
+  controller.redo();
+
+  const auto importedLocal = std::find_if(
+      controller.data().elements.cbegin(), controller.data().elements.cend(),
+      [](const ModelElement &element) {
+        return element.name == QStringLiteral("LocalType");
+      });
+  QVERIFY(importedLocal != controller.data().elements.cend());
+  const QString localTypeId = importedLocal->id;
+  controller.editText(localTypeId, QStringLiteral("name"), -1,
+                      QStringLiteral("Manually named local type"));
+  controller.assignStereotypes(QStringLiteral("element"), localTypeId,
+                               {stereotype_catalog::kLocalStereotypeId,
+                                stereotype_catalog::kApiStereotypeId});
+
+  // Moving the declaration to a public header removes only the import-owned
+  // local classification. The independently assigned API classification is
+  // user-owned and must survive synchronization.
+  writeTestFile(headerPath, QByteArray("#pragma once\n"
+                                       "class ApiType {};\n"
+                                       "class LocalType {};\n"));
+  writeTestFile(sourcePath, QByteArray("#include \"public.hpp\"\n"));
+  const CppImportPreview moved = CppImportService::preview(
+      sourceDirectory.path(), controller.data().elements,
+      controller.data().relationships, options);
+  QVERIFY(moved.ok);
+  const auto movedLocal = std::find_if(
+      moved.items.cbegin(), moved.items.cend(), [](const CppImportItem &item) {
+        return item.symbol.qualifiedName == QStringLiteral("LocalType");
+      });
+  QVERIFY(movedLocal != moved.items.cend());
+  QVERIFY(movedLocal->action == CppImportAction::Update);
+  QVERIFY(!movedLocal->desiredElement.stereotypeIds.contains(
+      stereotype_catalog::kLocalStereotypeId));
+  QVERIFY(movedLocal->desiredElement.stereotypeIds.contains(
+      stereotype_catalog::kApiStereotypeId));
+  QCOMPARE(movedLocal->desiredElement.name,
+           QStringLiteral("Manually named local type"));
+
+  QCOMPARE(controller.applyCppImportPlan(moved), 1);
+  const auto *updatedLocal = findElement(controller.data(), localTypeId);
+  QVERIFY(updatedLocal);
+  QVERIFY(!updatedLocal->stereotypeIds.contains(
+      stereotype_catalog::kLocalStereotypeId));
+  QVERIFY(updatedLocal->stereotypeIds.contains(
+      stereotype_catalog::kApiStereotypeId));
+  QCOMPARE(updatedLocal->name, QStringLiteral("Manually named local type"));
+  controller.undo();
+  updatedLocal = findElement(controller.data(), localTypeId);
+  QVERIFY(updatedLocal->stereotypeIds.contains(
+      stereotype_catalog::kLocalStereotypeId));
+  QVERIFY(updatedLocal->stereotypeIds.contains(
+      stereotype_catalog::kApiStereotypeId));
+  controller.redo();
+  updatedLocal = findElement(controller.data(), localTypeId);
+  QVERIFY(!updatedLocal->stereotypeIds.contains(
+      stereotype_catalog::kLocalStereotypeId));
+  QVERIFY(updatedLocal->stereotypeIds.contains(
+      stereotype_catalog::kApiStereotypeId));
 }
 
 void CoreTests::cppInterfacePatternClassifiesRealization() {

@@ -1,5 +1,7 @@
 #include "core/cpp_import.h"
 
+#include "core/stereotype_catalog.h"
+
 #include <QDir>
 #include <QFileInfo>
 #include <QHash>
@@ -23,7 +25,8 @@ namespace {
 
 constexpr auto kBindingKey = "sourceBinding";
 constexpr auto kBindingLanguage = "cpp";
-constexpr auto kBindingVersion = 1;
+constexpr auto kBindingVersion = 2;
+constexpr auto kManagedStereotypeIdsKey = "managedStereotypeIds";
 
 Diagnostic importDiagnostic(DiagnosticSeverity severity, const QString &message,
                             const QString &elementId = {}) {
@@ -212,13 +215,24 @@ QJsonObject sourceBinding(const Relationship &relationship) {
              : QJsonObject{};
 }
 
+bool isCppImplementationFile(const QString &path);
+
 ModelElement sourceElement(const CppSourceSymbol &symbol,
                            const QString &desiredId, const QString &packageId,
                            const QString &enclosingTypeId,
+                           const CppImportOptions &options,
                            const ModelElement *existing = nullptr) {
   ModelElement element = existing ? *existing : ModelElement{};
   if (!existing)
     element.id = desiredId;
+
+  // Only IDs explicitly recorded as import-managed are removed here. All
+  // other assignments remain user-owned and survive every synchronization.
+  const QJsonObject previousBinding =
+      existing ? sourceBinding(*existing) : QJsonObject{};
+  const QStringList previouslyManaged = stringList(
+      previousBinding.value(QString::fromLatin1(kManagedStereotypeIdsKey)));
+
   element.type = symbol.elementType;
   element.name = symbol.qualifiedName;
   element.packageId = packageId;
@@ -226,6 +240,22 @@ ModelElement sourceElement(const CppSourceSymbol &symbol,
   element.attributes = symbol.attributes;
   element.operations = symbol.operations;
   element.enumLiterals.clear();
+
+  QStringList managedStereotypeIds;
+  const QString applicability =
+      stereotype_catalog::applicabilityFor(symbol.elementType);
+  if (symbol.elementType != ElementType::Package &&
+      isCppImplementationFile(symbol.filePath) &&
+      !options.localTypeStereotypeId.isEmpty() &&
+      options.localTypeStereotypeApplicableTo.contains(applicability)) {
+    managedStereotypeIds.append(options.localTypeStereotypeId);
+  }
+  for (const QString &stereotypeId : previouslyManaged)
+    if (!managedStereotypeIds.contains(stereotypeId))
+      element.stereotypeIds.removeAll(stereotypeId);
+  for (const QString &stereotypeId : managedStereotypeIds)
+    if (!element.stereotypeIds.contains(stereotypeId))
+      element.stereotypeIds.append(stereotypeId);
 
   QJsonObject binding;
   binding.insert(QStringLiteral("version"), kBindingVersion);
@@ -237,6 +267,10 @@ ModelElement sourceElement(const CppSourceSymbol &symbol,
   binding.insert(QStringLiteral("line"), symbol.line);
   binding.insert(QStringLiteral("column"), symbol.column);
   binding.insert(QStringLiteral("lastImported"), elementSnapshot(element));
+  if (!managedStereotypeIds.isEmpty()) {
+    binding.insert(QString::fromLatin1(kManagedStereotypeIdsKey),
+                   QJsonArray::fromStringList(managedStereotypeIds));
+  }
   element.extra.insert(QString::fromLatin1(kBindingKey), binding);
   return element;
 }
@@ -434,7 +468,7 @@ CppImportPreview planImport(const CppImportPreview &discovery,
         item.desiredElement = sourceElement(
             symbol, plannedElementIdBySymbol.value(symbol.symbolId),
             packageIdByNamespacePath.value(symbol.namespacePath),
-            enclosingTypeIdFor(symbol));
+            enclosingTypeIdFor(symbol), result.optionsUsed);
         item.message = symbol.elementType == ElementType::Package
                            ? QStringLiteral("New C++ namespace package")
                            : QStringLiteral("New C++ type");
@@ -447,7 +481,7 @@ CppImportPreview planImport(const CppImportPreview &discovery,
     item.desiredElement =
         sourceElement(symbol, existing->id,
                       packageIdByNamespacePath.value(symbol.namespacePath),
-                      enclosingTypeIdFor(symbol), existing);
+                      enclosingTypeIdFor(symbol), result.optionsUsed, existing);
     const QJsonObject binding = sourceBinding(*existing);
     const QJsonObject lastObject =
         binding.value(QStringLiteral("lastImported")).toObject();
@@ -469,6 +503,14 @@ CppImportPreview planImport(const CppImportPreview &discovery,
         !sourceOwnedStateEquals(item.desiredElement, lastImported);
     const bool converged =
         sourceOwnedStateEquals(*existing, item.desiredElement);
+    const QStringList previouslyManaged = stringList(
+        binding.value(QString::fromLatin1(kManagedStereotypeIdsKey)));
+    const QJsonObject desiredBinding = sourceBinding(item.desiredElement);
+    const QStringList currentlyManaged = stringList(
+        desiredBinding.value(QString::fromLatin1(kManagedStereotypeIdsKey)));
+    const bool sourceStereotypesChanged =
+        existing->stereotypeIds != item.desiredElement.stereotypeIds ||
+        previouslyManaged != currentlyManaged;
     if (userChanged && sourceChanged && !converged) {
       item.action = CppImportAction::Conflict;
       item.message = QStringLiteral("Source and user edits both changed this "
@@ -479,13 +521,29 @@ CppImportPreview planImport(const CppImportPreview &discovery,
                          "remains authoritative")
               .arg(symbol.qualifiedName),
           existing->id));
+    } else if (userChanged && !sourceChanged && sourceStereotypesChanged) {
+      // Apply the explicit source-derived classification without overwriting
+      // unrelated user edits to source-synchronized fields. The baseline
+      // remains the source snapshot, so later conflicts are still detected.
+      ModelElement stereotypeOnlyUpdate = *existing;
+      stereotypeOnlyUpdate.stereotypeIds = item.desiredElement.stereotypeIds;
+      stereotypeOnlyUpdate.extra = item.desiredElement.extra;
+      item.desiredElement = std::move(stereotypeOnlyUpdate);
+      item.action = CppImportAction::Update;
+      item.message =
+          QStringLiteral("Refresh source-derived stereotypes; user-edited "
+                         "model retained");
     } else if (userChanged && !sourceChanged) {
       item.action = CppImportAction::UserModified;
       item.message = QStringLiteral("User-edited model retained");
-    } else if (sourceChanged || (converged && userChanged)) {
+    } else if (sourceChanged || sourceStereotypesChanged ||
+               (converged && userChanged)) {
       item.action = CppImportAction::Update;
-      item.message = converged ? QStringLiteral("Refresh source baseline")
-                               : QStringLiteral("Source changed");
+      if (sourceStereotypesChanged && !sourceChanged)
+        item.message = QStringLiteral("Source-derived stereotypes changed");
+      else
+        item.message = converged ? QStringLiteral("Refresh source baseline")
+                                 : QStringLiteral("Source changed");
     } else {
       item.action = CppImportAction::Unchanged;
       item.message = QStringLiteral("Already synchronized");
@@ -1416,6 +1474,7 @@ void appendTranslationUnitDiagnostics(CXTranslationUnit translationUnit,
 CppImportPreview discover(const QString &searchPath,
                           const CppImportOptions &options) {
   CppImportPreview preview;
+  preview.optionsUsed = options;
   const QRegularExpression interfacePattern(options.interfacePattern);
   if (options.interfacePattern.isEmpty() || !interfacePattern.isValid()) {
     preview.discoveryDiagnostics.append(importDiagnostic(
@@ -1788,6 +1847,18 @@ QStringList CppImportOptions::defaultOwningPointerTypes() {
 
 QStringList CppImportOptions::defaultSharedPointerTypes() {
   return {QStringLiteral("std::shared_ptr")};
+}
+
+void configureCppImportStereotypes(CppImportOptions &options,
+                                   const ProjectData &project) {
+  options.localTypeStereotypeId.clear();
+  options.localTypeStereotypeApplicableTo.clear();
+  const auto *localDefinition = stereotype_catalog::findByConventionalIdOrName(
+      project, stereotype_catalog::kLocalStereotypeId, QStringLiteral("local"));
+  if (!localDefinition)
+    return;
+  options.localTypeStereotypeId = localDefinition->id;
+  options.localTypeStereotypeApplicableTo = localDefinition->applicableTo;
 }
 
 int CppImportPreview::elementApplicableCount() const {

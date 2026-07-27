@@ -30,6 +30,14 @@ partial handwritten language parser.
   Diagram placement and other presentation or user metadata remain outside
   synchronization. Manually changed package or nesting ownership remains
   user-authoritative under the same three-way rules below.
+- The project-owned stereotype catalog seeds `local`, `private`, and `api`.
+  A class or struct definition originating in a C++ implementation file gains
+  the project's `local` stereotype. The binding records that particular
+  assignment as import-managed, allowing synchronization to remove it when the
+  declaration moves to a header. All other stereotype assignments—including
+  manual `private`, `api`, and custom entries—remain user-owned. If the project
+  deletes the conventional `local` definition, import disables the rule rather
+  than recreating project data.
 - Plan each import using a three-way comparison:
 
   | Current model | Current source | Result |
@@ -88,7 +96,8 @@ database from causing destructive model changes.
 ## Consequences
 
 The initial importer is conservative and repeatable. Manual model edits survive
-source evolution, and every conflict is visible in the existing log panel. The
+source evolution, except for the explicitly source-derived `local`
+classification, and every conflict is visible in the existing log panel. The
 stored baseline also provides the foundation for later explicit resolution,
 rename matching, and continuous synchronization.
 

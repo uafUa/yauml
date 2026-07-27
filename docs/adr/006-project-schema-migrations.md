@@ -42,8 +42,11 @@ cannot safely interpret.
 ## Consequences
 
 Compatibility policy has one testable boundary, and domain code does not need
-version-specific branches. Adding schema version 2 requires a focused 1-to-2
+version-specific branches. Each new schema version requires one focused
 migration plus fixtures that exercise upgrade, canonical save, and reload.
+Schema 2 moved conventional stereotypes into the project-owned catalog; schema
+3 adds the `local`, `private`, and `api` definitions without duplicating
+same-named custom entries or restoring unrelated defaults a user deleted.
 
 Opening an unversioned project produces an informational log entry and marks the
 loaded representation as migrated, but does not itself make an external write.

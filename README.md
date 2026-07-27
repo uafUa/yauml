@@ -155,6 +155,12 @@ is never overwritten.
 - Each imported element and inheritance stores a Clang-derived source binding,
   provenance, and the last imported source snapshot in extensible JSON5
   metadata.
+- New projects pre-populate `local`, `private`, and `api` in their editable
+  stereotype catalog. Import assigns `local` to classes and structs whose
+  definition originates in a C++ implementation file (`.cpp`, `.cc`, `.cxx`,
+  `.c++`, `.ixx`, or `.cppm`). That derived assignment is source-owned and is
+  removed if the declaration later moves to a header; every other manual
+  stereotype assignment remains untouched.
 - If only source changed, the next import updates the element. If only the model
   changed, the model stays authoritative. If both changed differently, the
   model is retained and a structured conflict is shown in the log panel.
