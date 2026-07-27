@@ -244,6 +244,23 @@ void CoreTests::actionIconCatalogIsValid() {
              qPrintable(node.key() + QStringLiteral(" needs match rules")));
     QVERIFY2(entry.value(QStringLiteral("svg")).isString(),
              qPrintable(node.key() + QStringLiteral(" needs an svg field")));
+
+    const auto verifyAssignedIconExists =
+        [&](const QString &field, bool required) {
+          const QJsonValue value = entry.value(field);
+          QVERIFY2(!required || value.isString(),
+                   qPrintable(node.key() + QStringLiteral(" needs a ") + field +
+                              QStringLiteral(" field")));
+          if (!value.isString() || value.toString().isEmpty())
+            return;
+          const QString svg = value.toString();
+          QVERIFY2(
+              QFileInfo::exists(QFileInfo(catalogPath).dir().filePath(svg)),
+              qPrintable(node.key() + u'.' + field +
+                         QStringLiteral(" references missing ") + svg));
+        };
+    verifyAssignedIconExists(QStringLiteral("svg"), true);
+    verifyAssignedIconExists(QStringLiteral("expandedSvg"), false);
   }
 }
 

@@ -535,15 +535,48 @@ ApplicationWindow {
                         required property bool nested
                         property bool browserDropActive: false
                         property int browserInsertionEdge: 0
+                        readonly property url treeIconSource:
+                            iconRegistry.projectTreeIcon(
+                                kind, objectType, objectId, nested, expanded)
                         highlighted: kind !== "root" && (
                                          kind === "diagram"
                                          ? objectId === workspaceController.activeDiagramId
                                          : selected)
-                        icon.source: iconRegistry.projectTreeIcon(
-                                         kind, objectType, objectId,
-                                         nested, expanded)
-                        icon.width: iconRegistry.defaultSize
-                        icon.height: iconRegistry.defaultSize
+                        // Fusion's standard TreeViewDelegate content item only
+                        // paints the model text, even though the delegate
+                        // exposes an icon property. Keep the standard tree
+                        // indentation and disclosure indicator, but paint the
+                        // configured project icon explicitly beside the label.
+                        contentItem: RowLayout {
+                            spacing: treeIcon.visible ? 4 : 0
+                            visible: !treeDelegate.editing
+
+                            Image {
+                                id: treeIcon
+                                visible: treeDelegate.treeIconSource.toString() !== ""
+                                source: treeDelegate.treeIconSource
+                                fillMode: Image.PreserveAspectFit
+                                sourceSize.width: iconRegistry.defaultSize
+                                sourceSize.height: iconRegistry.defaultSize
+                                Layout.preferredWidth: visible
+                                                       ? iconRegistry.defaultSize : 0
+                                Layout.preferredHeight: visible
+                                                        ? iconRegistry.defaultSize : 0
+                                Layout.alignment: Qt.AlignVCenter
+                            }
+
+                            Label {
+                                text: treeDelegate.model.display
+                                font: treeDelegate.font
+                                color: treeDelegate.highlighted
+                                       ? treeDelegate.palette.highlightedText
+                                       : treeDelegate.palette.buttonText
+                                elide: Text.ElideRight
+                                verticalAlignment: Text.AlignVCenter
+                                Layout.fillWidth: true
+                                Layout.alignment: Qt.AlignVCenter
+                            }
+                        }
                         background: Rectangle {
                             color: treeDelegate.highlighted ? uiTheme.accent
                                  : treeDelegate.browserDropActive ? uiTheme.hoverBackground
