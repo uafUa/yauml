@@ -6,8 +6,9 @@ code.
 
 ## Qt
 
-The application uses Qt 6 libraries and QML modules. Qt open-source licensing
-and obligations are described at:
+The application uses Qt 6 libraries and QML modules. The Windows setup program
+is generated with Qt Installer Framework. Qt open-source licensing and
+obligations are described at:
 
 - https://www.qt.io/licensing/open-source-lgpl-obligations
 - https://doc.qt.io/qt-6/licensing.html

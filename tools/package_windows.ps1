@@ -18,19 +18,9 @@ param(
 $ErrorActionPreference = "Stop"
 Set-StrictMode -Version Latest
 
-function Get-ProjectVersion {
-    param([string]$RepositoryRoot)
-
-    $cmakeText = Get-Content -LiteralPath `
-        (Join-Path $RepositoryRoot "CMakeLists.txt") -Raw
-    $match = [regex]::Match(
-        $cmakeText,
-        'project\s*\(\s*uuml\s+VERSION\s+([0-9]+\.[0-9]+\.[0-9]+)')
-    if (-not $match.Success) {
-        throw "Could not read the project version from CMakeLists.txt."
-    }
-    return $match.Groups[1].Value
-}
+$repositoryRoot = [System.IO.Path]::GetFullPath(
+    (Join-Path $PSScriptRoot ".."))
+Import-Module (Join-Path $PSScriptRoot "WindowsPackaging.psm1") -Force
 
 function Find-QtRoot {
     param([string]$ResolvedBuildDirectory)
@@ -134,11 +124,9 @@ function Assert-PackageContents {
     }
 }
 
-$repositoryRoot = [System.IO.Path]::GetFullPath(
-    (Join-Path $PSScriptRoot ".."))
 $resolvedBuildDirectory = [System.IO.Path]::GetFullPath(
     (Join-Path $repositoryRoot $BuildDirectory))
-$projectVersion = Get-ProjectVersion -RepositoryRoot $repositoryRoot
+$projectVersion = Get-UumlProjectVersion -RepositoryRoot $repositoryRoot
 if (-not $Version) {
     $Version = $projectVersion
 }

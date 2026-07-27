@@ -383,9 +383,10 @@ toolboxes implemented, expansion planned
 - Performance benchmarks and rendered-image regression coverage.
 - Windows CI and packaging automation is implemented. Every main-branch update
   and pull request performs a clean MSVC Release build with Qt and libclang,
-  runs the test suite, and publishes a verified portable ZIP plus SHA-256
-  checksum. A matching `v*` tag promotes those same artifacts to a GitHub
-  Release. Cross-platform packaging remains future work.
+  runs the test suite, and publishes a verified portable ZIP and Qt Installer
+  Framework offline installer plus SHA-256 checksums. A matching `v*` tag
+  promotes those same artifacts to a GitHub Release. Cross-platform packaging
+  remains future work.
 
 ## Phase 6: diagram export — lower priority
 

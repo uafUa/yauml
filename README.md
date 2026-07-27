@@ -68,12 +68,13 @@ PowerShell window.
 
 GitHub Actions performs the same clean MSVC Release build and complete test
 suite for pull requests and changes to `main`. Successful runs provide a
-portable Windows ZIP in the run's **Artifacts** section. Pushing a version tag
-such as `v0.1.0` publishes that tested ZIP and its SHA-256 checksum as a GitHub
-Release.
+portable Windows ZIP and a conventional Windows installer in the run's
+**Artifacts** section. Pushing a version tag such as `v0.1.0` publishes both
+tested distributions and their SHA-256 checksums as a GitHub Release.
 
 The package includes the Qt/QML runtime and `libclang.dll`, and is smoke-tested
-after deployment. See
+after deployment. The installer also provides clean removal, Start-menu
+integration, `.uuml` file association, and an optional desktop shortcut. See
 [`docs/releasing.md`](docs/releasing.md) for downloading development artifacts,
 creating releases, version rules, and local packaging.
 

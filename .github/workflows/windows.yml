@@ -39,7 +39,9 @@ jobs:
           host: windows
           target: desktop
           arch: win64_msvc2022_64
+          tools: tools_ifw,qt.tools.ifw.47
           cache: true
+          cache-key-prefix: install-qt-action-ifw47
 
       - name: Locate LLVM
         shell: pwsh
@@ -99,12 +101,23 @@ jobs:
           }
           & .\tools\package_windows.ps1 @arguments
 
+      - name: Create and verify Windows installer
+        shell: pwsh
+        run: |
+          & .\tools\build_windows_installer.ps1 `
+            -PortableArchive `
+              "out\packages\yauml-$env:PACKAGE_VERSION-windows-x64.zip" `
+            -Version $env:PACKAGE_VERSION `
+            -OutputDirectory "out\packages" `
+            -Verify
+
       - name: Upload tested package
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: yauml-windows-x64-${{ github.sha }}
           path: |
             out/packages/*.zip
+            out/packages/*.exe
             out/packages/*.sha256
           if-no-files-found: error
           retention-days: 14

@@ -1,0 +1,10 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Package>
+    <DisplayName>Desktop shortcut</DisplayName>
+    <Description>Add a uuml shortcut to the desktop.</Description>
+    <Version>{{PRODUCT_VERSION}}</Version>
+    <ReleaseDate>{{RELEASE_DATE}}</ReleaseDate>
+    <Dependencies>io.github.uafua.yauml</Dependencies>
+    <Default>true</Default>
+    <Script>installscript.qs</Script>
+</Package>

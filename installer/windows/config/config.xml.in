@@ -1,0 +1,16 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Installer>
+    <Name>uuml</Name>
+    <Version>{{PRODUCT_VERSION}}</Version>
+    <Title>uuml Setup</Title>
+    <Publisher>uuml project</Publisher>
+    <ProductUrl>https://github.com/uafUa/yauml</ProductUrl>
+    <StartMenuDir>uuml</StartMenuDir>
+    <TargetDir>@ApplicationsDirX64@/uuml</TargetDir>
+    <MaintenanceToolName>maintenancetool</MaintenanceToolName>
+    <RunProgram>@TargetDir@/uuml.exe</RunProgram>
+    <RunProgramDescription>Start uuml</RunProgramDescription>
+    <AllowNonAsciiCharacters>true</AllowNonAsciiCharacters>
+    <AllowRepositoriesForOfflineInstaller>false</AllowRepositoriesForOfflineInstaller>
+    <RemoveTargetDir>true</RemoveTargetDir>
+</Installer>

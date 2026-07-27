@@ -14,16 +14,19 @@ Every pull request and every push to `main` performs a clean build with:
 - all core, canvas, headless, import, UI smoke, and source-policy tests.
 
 Successful runs upload a tested portable ZIP and its SHA-256 checksum to the
-workflow run for 14 days. Open the run's **Artifacts** section to download it.
-These development packages use a name such as
-`yauml-dev-1a2b3c4d-windows-x64.zip`.
+workflow run for 14 days, together with a tested offline Windows installer and
+its checksum. Open the run's **Artifacts** section to download them. These
+development packages use names such as:
+
+- `yauml-dev-1a2b3c4d-windows-x64.zip`;
+- `yauml-dev-1a2b3c4d-windows-x64-installer.exe`.
 
 ## Tagged releases
 
 An annotated tag matching `v*` builds and tests exactly like `main`, then
-publishes the resulting ZIP and checksum as a permanent GitHub Release.
-Release tags and `project(... VERSION ...)` in `CMakeLists.txt` must agree.
-Pre-release suffixes are allowed, for example `v0.2.0-rc.1`.
+publishes the resulting ZIP, installer, and checksums as a permanent GitHub
+Release. Release tags and `project(... VERSION ...)` in `CMakeLists.txt` must
+agree. Pre-release suffixes are allowed, for example `v0.2.0-rc.1`.
 
 To publish version `0.2.0` after its version change is merged to `main`:
 
@@ -54,6 +57,28 @@ The script creates `out/packages/yauml-<version>-windows-x64.zip` plus a
 checksum. It stages only runtime files in a temporary directory, invokes
 `windeployqt`, requires `libclang.dll`, and runs validation and UI smoke tests
 against the packaged executable before creating the archive.
+
+To create the offline Windows installer from that verified archive:
+
+```powershell
+.\tools\build_windows_installer.ps1 `
+  -PortableArchive .\out\packages\yauml-0.1.0-windows-x64.zip `
+  -Version 0.1.0 `
+  -Verify
+```
+
+This requires Qt Installer Framework. The script finds `binarycreator.exe`
+through `QIFW_ROOT`, `PATH`, the GitHub Actions Qt tools directory, or a
+standard `C:\Qt\Tools\QtInstallerFramework` installation. It verifies the
+portable archive's checksum, builds an offline installer, performs a temporary
+headless installation without changing shell integration, validates the
+installed application, and exercises the uninstaller.
+
+The interactive installer installs to the 64-bit Windows applications
+directory by default. The application component creates a Start-menu shortcut
+and associates `.uuml` projects with uuml. A separately selectable component
+controls the desktop shortcut. The installer is currently unsigned, so Windows
+may show an unknown-publisher warning until release code signing is introduced.
 
 When testing an undeployed Windows build tree manually, use `ctest` rather than
 starting the test executables directly. CTest supplies the configured Qt kit's
