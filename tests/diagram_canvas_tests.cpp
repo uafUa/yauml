@@ -462,7 +462,8 @@ void DiagramCanvasTests::contextualSelectAllUsesContainerScope() {
   const QString diagramId = controller.data().diagrams.first().id;
   const QString first = controller.addElement(QStringLiteral("class"));
   const QString second = controller.addElement(QStringLiteral("struct"));
-  controller.addElement(QStringLiteral("class"), diagramId);
+  const QString diagramRoot =
+      controller.addElement(QStringLiteral("class"), diagramId);
   const QString fourth = controller.addElement(QStringLiteral("class"));
   const QString folder = controller.addBrowserFolder(
       QStringLiteral("model"), {}, QStringLiteral("Selection scope"));
@@ -509,10 +510,12 @@ void DiagramCanvasTests::contextualSelectAllUsesContainerScope() {
 
   canvas.key(Qt::Key_A, Qt::ControlModifier);
   QCOMPARE(canvas.selectedNodeCount(), 2);
+  QCOMPARE(canvas.selectedContainerCount(), 1);
 
   canvas.clearCanvasSelection();
   canvas.key(Qt::Key_A, Qt::ControlModifier);
   QCOMPARE(canvas.selectedNodeCount(), 1);
+  QCOMPARE(canvas.selectedContainerCount(), 1);
 
   canvas.clearCanvasSelection();
   const auto child =
@@ -526,6 +529,7 @@ void DiagramCanvasTests::contextualSelectAllUsesContainerScope() {
   QCOMPARE(canvas.selectedNodeCount(), 1);
   canvas.key(Qt::Key_A, Qt::ControlModifier);
   QCOMPARE(canvas.selectedNodeCount(), 2);
+  QCOMPARE(canvas.selectedContainerCount(), 1);
 
   canvas.clearCanvasSelection();
   const auto nestedChild =
@@ -538,6 +542,22 @@ void DiagramCanvasTests::contextualSelectAllUsesContainerScope() {
   canvas.release(nestedChild->geometry.center() + viewPan);
   canvas.key(Qt::Key_A, Qt::ControlModifier);
   QCOMPARE(canvas.selectedNodeCount(), 1);
+  QCOMPARE(canvas.selectedContainerCount(), 0);
+
+  const Diagram beforeRemoval = controller.data().diagrams.first();
+  const QString rootContainerId = rootFrame->id;
+  canvas.clearCanvasSelection();
+  canvas.key(Qt::Key_A, Qt::ControlModifier);
+  canvas.key(Qt::Key_Delete);
+  const Diagram &afterRemoval = controller.data().diagrams.first();
+  QVERIFY(!findContainer(afterRemoval, rootContainerId));
+  QVERIFY(std::none_of(
+      afterRemoval.nodes.cbegin(), afterRemoval.nodes.cend(),
+      [&](const NodePresentation &node) {
+        return node.elementId == diagramRoot;
+      }));
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first(), beforeRemoval);
 }
 
 void DiagramCanvasTests::clippedChildIsOnlyInteractiveInsideContainer() {

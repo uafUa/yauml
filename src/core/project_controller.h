@@ -199,6 +199,9 @@ public:
                                        const QStringList &nodeIds);
   Q_INVOKABLE void removeContainerPresentation(const QString &diagramId,
                                                const QString &containerId);
+  void removeDiagramPresentations(const QString &diagramId,
+                                  const QStringList &nodeIds,
+                                  const QStringList &containerIds);
   Q_INVOKABLE void deleteSelected();
   Q_INVOKABLE void deleteDiagram(const QString &diagramId);
   Q_INVOKABLE void deleteRelationship(const QString &relationshipId);

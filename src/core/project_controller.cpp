@@ -2783,6 +2783,56 @@ void ProjectController::removeContainerPresentation(
   clearSelection();
 }
 
+void ProjectController::removeDiagramPresentations(
+    const QString &diagramId, const QStringList &nodeIds,
+    const QStringList &containerIds) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram)
+    return;
+
+  const QSet<QString> requestedNodeIds(nodeIds.cbegin(), nodeIds.cend());
+  QSet<QString> validNodeIds;
+  for (const auto &node : diagram->nodes)
+    if (requestedNodeIds.contains(node.id))
+      validNodeIds.insert(node.id);
+
+  const QSet<QString> requestedContainerIds(containerIds.cbegin(),
+                                            containerIds.cend());
+  QStringList validContainerIds;
+  for (const auto &container : diagram->containers)
+    if (requestedContainerIds.contains(container.id))
+      validContainerIds.append(container.id);
+
+  const qsizetype selectionSize =
+      validNodeIds.size() + validContainerIds.size();
+  if (selectionSize == 0)
+    return;
+  if (validContainerIds.isEmpty()) {
+    removePresentations(diagramId, validNodeIds.values());
+    return;
+  }
+  if (validNodeIds.isEmpty() && validContainerIds.size() == 1) {
+    removeContainerPresentation(diagramId, validContainerIds.constFirst());
+    return;
+  }
+
+  // One user selection is one undo step. Container commands are built after
+  // node removal so each command records the membership state it actually
+  // receives from the preceding command.
+  m_undoStack.beginMacro(QStringLiteral("Remove presentations from diagram"));
+  if (!validNodeIds.isEmpty())
+    pushCommand(std::make_unique<RemovePresentationsCommand>(
+        this, m_data, diagramId, validNodeIds));
+  for (const QString &containerId : validContainerIds) {
+    const auto *currentDiagram = findDiagram(m_data, diagramId);
+    if (currentDiagram && findContainer(*currentDiagram, containerId))
+      pushCommand(std::make_unique<RemoveContainerPresentationCommand>(
+          this, m_data, diagramId, containerId));
+  }
+  m_undoStack.endMacro();
+  clearSelection();
+}
+
 void ProjectController::deleteSelected() {
   if (m_selectedId.isEmpty())
     return;

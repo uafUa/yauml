@@ -28,6 +28,8 @@ class DiagramCanvas : public QQuickItem {
   Q_PROPERTY(qreal zoom READ zoom NOTIFY viewportChanged)
   Q_PROPERTY(int selectedNodeCount READ selectedNodeCount NOTIFY
                  canvasSelectionChanged)
+  Q_PROPERTY(int selectedContainerCount READ selectedContainerCount NOTIFY
+                 canvasSelectionChanged)
   Q_PROPERTY(bool connectorSelected READ connectorSelected NOTIFY
                  canvasSelectionChanged)
   Q_PROPERTY(bool containerSelected READ containerSelected NOTIFY
@@ -128,6 +130,7 @@ public:
   void setDiagramId(const QString &diagramId);
   qreal zoom() const;
   int selectedNodeCount() const;
+  int selectedContainerCount() const;
   bool connectorSelected() const;
   bool containerSelected() const;
   bool bendPointSelected() const;
@@ -362,6 +365,9 @@ private:
   void resetLassoState();
   void selectAllInContext();
   void synchronizeProjectSelection();
+  void captureSelectedGeometry();
+  void clearContainerSelection();
+  void selectOnlyContainer(const QString &containerId);
   void createElementAt(const QString &type, const QPointF &sceneCenter);
   void selectNode(const QString &nodeId, bool toggle);
   void selectConnector(const QString &connectorId, bool preserveNodes);
@@ -374,6 +380,10 @@ private:
   // QSet provides cheap membership checks for rendering; this list preserves
   // click order so relationship source and target are deterministic.
   QStringList m_selectedNodeOrder;
+  QSet<QString> m_selectedContainers;
+  // A container is "active" only when it was selected on its own. Multi-item
+  // selection still highlights containers but must not expose single-item
+  // editing commands or redefine the Ctrl+A scope.
   QString m_selectedContainer;
   QString m_selectedConnector;
   Interaction m_interaction = Interaction::None;
@@ -386,6 +396,7 @@ private:
   QRectF m_lassoRect;
   QSet<QString> m_lassoBaseNodes;
   QStringList m_lassoBaseNodeOrder;
+  QSet<QString> m_lassoBaseContainers;
   QString m_lassoBaseContainer;
   QString m_lassoBaseConnector;
   int m_lassoBaseBendPoint = -1;

@@ -1651,7 +1651,7 @@ void DiagramCanvas::setProject(ProjectController *project) {
       m_sceneDirty = true;
       m_textDirty = true;
       if (!m_selectedNodes.isEmpty() || !m_selectedConnector.isEmpty() ||
-          !m_selectedContainer.isEmpty())
+          !m_selectedContainers.isEmpty())
         emit canvasSelectionChanged();
       update();
     });
@@ -1677,12 +1677,15 @@ void DiagramCanvas::setDiagramId(const QString &diagramId) {
 
 qreal DiagramCanvas::zoom() const { return m_zoom; }
 int DiagramCanvas::selectedNodeCount() const { return m_selectedNodes.size(); }
+int DiagramCanvas::selectedContainerCount() const {
+  return m_selectedContainers.size();
+}
 bool DiagramCanvas::connectorSelected() const {
   return !m_selectedConnector.isEmpty();
 }
 
 bool DiagramCanvas::containerSelected() const {
-  return !m_selectedContainer.isEmpty();
+  return !m_selectedContainers.isEmpty();
 }
 
 bool DiagramCanvas::bendPointSelected() const {
@@ -1801,14 +1804,13 @@ bool DiagramCanvas::canWrapSelectionInPackage() const {
 QString DiagramCanvas::selectedStyleId() const {
   if (!m_project)
     return {};
-  if (!m_selectedContainer.isEmpty())
-    return m_project->explicitStyleIdForPresentation(m_diagramId,
-                                                     m_selectedContainer);
   QString commonStyle;
   bool first = true;
-  for (const QString &nodeId : m_selectedNodeOrder) {
+  QStringList presentationIds = m_selectedNodeOrder;
+  presentationIds.append(m_selectedContainers.values());
+  for (const QString &presentationId : presentationIds) {
     const QString style =
-        m_project->explicitStyleIdForPresentation(m_diagramId, nodeId);
+        m_project->explicitStyleIdForPresentation(m_diagramId, presentationId);
     if (first) {
       commonStyle = style;
       first = false;
@@ -2915,14 +2917,12 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
       const ui::DiagramClipLayout clipLayout(*d, m_previewGeometry);
       QSet<QString> detachedDragRoots;
       if (m_interaction == Interaction::Move && !m_previewGeometry.isEmpty()) {
-        if (!m_selectedContainer.isEmpty()) {
-          detachedDragRoots.insert(m_selectedContainer);
-        } else {
-          for (const QString &nodeId : m_selectedNodeOrder) {
-            if (m_originalGeometry.contains(nodeId))
-              detachedDragRoots.insert(nodeId);
-          }
-        }
+        for (const QString &containerId : m_selectedContainers)
+          if (m_originalGeometry.contains(containerId))
+            detachedDragRoots.insert(containerId);
+        for (const QString &nodeId : m_selectedNodeOrder)
+          if (m_originalGeometry.contains(nodeId))
+            detachedDragRoots.insert(nodeId);
       }
       const auto containerDepth = [&](const QString &containerId) {
         int depth = 0;
@@ -2954,7 +2954,8 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
              container.subjectKind == QStringLiteral("package"),
              renderElementStyle(project_style::effectiveStyleForContainer(
                  projectData, container)),
-             container.id == m_selectedContainer, containerDepth(container.id),
+             m_selectedContainers.contains(container.id),
+             containerDepth(container.id),
              clip.rect, clip.active, clipLayout.overflowEdges(container)});
       }
       std::stable_sort(
@@ -3415,6 +3416,40 @@ DiagramCanvas::TextHit DiagramCanvas::hitText(const QPointF &scenePoint) const {
   return {};
 }
 
+void DiagramCanvas::captureSelectedGeometry() {
+  m_originalGeometry.clear();
+  const auto *currentDiagram = diagram();
+  if (!currentDiagram)
+    return;
+
+  // A selected frame moves as a subtree. Recording descendants here keeps a
+  // mixed Ctrl+A selection visually intact without treating those descendants
+  // as independently selected objects.
+  QSet<QString> visitedContainers;
+  const auto collectContainer =
+      [&](const auto &self, const ContainerPresentation &container) -> void {
+    if (visitedContainers.contains(container.id))
+      return;
+    visitedContainers.insert(container.id);
+    m_originalGeometry.insert(container.id, containerGeometry(container));
+    for (const QString &childId : container.childPresentationIds) {
+      if (const auto *childNode = findNode(*currentDiagram, childId))
+        m_originalGeometry.insert(childNode->id, nodeGeometry(*childNode));
+      else if (const auto *childContainer =
+                   findContainer(*currentDiagram, childId))
+        self(self, *childContainer);
+    }
+  };
+
+  for (const QString &containerId : m_selectedContainers)
+    if (const auto *container = findContainer(*currentDiagram, containerId))
+      collectContainer(collectContainer, *container);
+  for (const QString &nodeId : m_selectedNodeOrder)
+    if (!m_originalGeometry.contains(nodeId))
+      if (const auto *node = findNode(*currentDiagram, nodeId))
+        m_originalGeometry.insert(nodeId, nodeGeometry(*node));
+}
+
 void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
   forceActiveFocus();
   emit contextToolboxesDismissRequested();
@@ -3472,7 +3507,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
       m_selectedNodeOrder.clear();
       m_selectedConnector.clear();
       m_selectedBendPoint = -1;
-      m_selectedContainer = container->id;
+      selectOnlyContainer(container->id);
       if (m_project)
         m_project->clearSelection();
       target = QStringLiteral("container");
@@ -3586,6 +3621,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
     m_lassoRect = QRectF(m_pressScene, m_pressScene);
     m_lassoBaseNodes = m_selectedNodes;
     m_lassoBaseNodeOrder = m_selectedNodeOrder;
+    m_lassoBaseContainers = m_selectedContainers;
     m_lassoBaseContainer = m_selectedContainer;
     m_lassoBaseConnector = m_selectedConnector;
     m_lassoBaseBendPoint = m_selectedBendPoint;
@@ -3601,10 +3637,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
                               14 / m_zoom);
     m_interaction = resizeHandle.contains(m_pressScene) ? Interaction::Resize
                                                         : Interaction::Move;
-    m_originalGeometry.clear();
-    for (const auto &candidate : diagram()->nodes)
-      if (m_selectedNodes.contains(candidate.id))
-        m_originalGeometry.insert(candidate.id, nodeGeometry(candidate));
+    captureSelectedGeometry();
     if (m_project)
       m_project->selectObject(node->elementId, QStringLiteral("element"));
   } else if (const auto *connector = hitConnector(m_pressScene)) {
@@ -3635,31 +3668,19 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
       return;
     }
 
-    m_selectedNodes.clear();
-    m_selectedNodeOrder.clear();
+    const bool resize = resizeHandle.contains(m_pressScene);
+    const bool preserveMultiSelection =
+        !resize && m_selectedContainers.contains(container->id);
+    if (!preserveMultiSelection) {
+      m_selectedNodes.clear();
+      m_selectedNodeOrder.clear();
+      selectOnlyContainer(container->id);
+    }
     m_selectedConnector.clear();
     m_selectedBendPoint = -1;
-    m_selectedContainer = container->id;
     m_interactionNode = container->id;
-    m_interaction = resizeHandle.contains(m_pressScene) ? Interaction::Resize
-                                                        : Interaction::Move;
-    m_originalGeometry.clear();
-    QSet<QString> visited;
-    const auto collectDescendants =
-        [&](const auto &self, const ContainerPresentation &current) -> void {
-      if (visited.contains(current.id))
-        return;
-      visited.insert(current.id);
-      m_originalGeometry.insert(current.id, containerGeometry(current));
-      for (const QString &childId : current.childPresentationIds) {
-        if (const auto *childNode = findNode(*diagram(), childId))
-          m_originalGeometry.insert(childNode->id, nodeGeometry(*childNode));
-        else if (const auto *childContainer =
-                     findContainer(*diagram(), childId))
-          self(self, *childContainer);
-      }
-    };
-    collectDescendants(collectDescendants, *container);
+    m_interaction = resize ? Interaction::Resize : Interaction::Move;
+    captureSelectedGeometry();
     if (m_project)
       m_project->clearSelection();
     m_sceneDirty = true;
@@ -3945,12 +3966,13 @@ void DiagramCanvas::commitGeometryPreview() {
     values.append(map);
   }
   const bool moving = m_interaction == Interaction::Move;
+  const bool includesContainers = !m_selectedContainers.isEmpty();
   const QString description =
-      m_selectedContainer.isEmpty()
-          ? (moving ? QStringLiteral("Move diagram elements")
-                    : QStringLiteral("Resize diagram element"))
-          : (moving ? QStringLiteral("Move diagram container")
-                    : QStringLiteral("Resize diagram container"));
+      includesContainers
+          ? (moving ? QStringLiteral("Move diagram selection")
+                    : QStringLiteral("Resize diagram container"))
+          : (moving ? QStringLiteral("Move diagram elements")
+                    : QStringLiteral("Resize diagram element"));
   if (!moving) {
     m_project->updatePresentationGeometries(m_diagramId, values, description);
     return;
@@ -3958,19 +3980,21 @@ void DiagramCanvas::commitGeometryPreview() {
 
   QStringList movedPresentationIds;
   QSet<QString> excludedDropTargets;
-  if (!m_selectedContainer.isEmpty()) {
-    movedPresentationIds.append(m_selectedContainer);
+  for (const QString &containerId : m_selectedContainers) {
+    if (m_originalGeometry.contains(containerId))
+      movedPresentationIds.append(containerId);
+  }
+  if (!m_selectedContainers.isEmpty()) {
     // A moving container carries its complete subtree. None of those frames
     // can be a legal drop target because reparenting to one would create a
     // membership cycle.
     for (auto geometry = m_originalGeometry.cbegin();
          geometry != m_originalGeometry.cend(); ++geometry)
       excludedDropTargets.insert(geometry.key());
-  } else {
-    for (const QString &nodeId : m_selectedNodeOrder)
-      if (m_originalGeometry.contains(nodeId))
-        movedPresentationIds.append(nodeId);
   }
+  for (const QString &nodeId : m_selectedNodeOrder)
+    if (m_originalGeometry.contains(nodeId))
+      movedPresentationIds.append(nodeId);
 
   const auto *target = hitContainer(m_lastPointerScene, excludedDropTargets);
   const QString targetId = target ? target->id : QString{};
@@ -4010,10 +4034,10 @@ void DiagramCanvas::updateLassoSelection(const QPointF &scenePoint) {
 
   const bool selectionChanged =
       nextNodes != m_selectedNodes || nextOrder != m_selectedNodeOrder ||
-      !m_selectedContainer.isEmpty() || !m_selectedConnector.isEmpty();
+      !m_selectedContainers.isEmpty() || !m_selectedConnector.isEmpty();
   m_selectedNodes = std::move(nextNodes);
   m_selectedNodeOrder = std::move(nextOrder);
-  m_selectedContainer.clear();
+  clearContainerSelection();
   m_selectedConnector.clear();
   m_selectedBendPoint = -1;
   m_endpointDragActive = false;
@@ -4033,6 +4057,7 @@ void DiagramCanvas::finishLassoSelection() {
 void DiagramCanvas::cancelLassoSelection() {
   m_selectedNodes = m_lassoBaseNodes;
   m_selectedNodeOrder = m_lassoBaseNodeOrder;
+  m_selectedContainers = m_lassoBaseContainers;
   m_selectedContainer = m_lassoBaseContainer;
   m_selectedConnector = m_lassoBaseConnector;
   m_selectedBendPoint = m_lassoBaseBendPoint;
@@ -4049,6 +4074,7 @@ void DiagramCanvas::resetLassoState() {
   m_lassoRect = {};
   m_lassoBaseNodes.clear();
   m_lassoBaseNodeOrder.clear();
+  m_lassoBaseContainers.clear();
   m_lassoBaseContainer.clear();
   m_lassoBaseConnector.clear();
   m_lassoBaseBendPoint = -1;
@@ -4073,27 +4099,39 @@ void DiagramCanvas::selectAllInContext() {
   };
 
   QString scopeContainerId = m_selectedContainer;
-  if (scopeContainerId.isEmpty() && !m_selectedNodeOrder.isEmpty()) {
-    // A selected child makes its closest container the natural selection
-    // scope. Selections spanning different frames deliberately fall back to
-    // the whole diagram instead of choosing an arbitrary owner.
-    scopeContainerId = ownerContainerId(m_selectedNodeOrder.constFirst());
-    for (const QString &nodeId : m_selectedNodeOrder) {
-      if (ownerContainerId(nodeId) != scopeContainerId) {
-        scopeContainerId.clear();
-        break;
+  if (scopeContainerId.isEmpty()) {
+    // A selected child makes its owner the natural selection scope. All
+    // selected presentation kinds participate so a prior Ctrl+A remains in
+    // the same one-level scope even when that level contains frames.
+    QStringList selectedPresentationIds = m_selectedNodeOrder;
+    selectedPresentationIds.append(m_selectedContainers.values());
+    if (!selectedPresentationIds.isEmpty()) {
+      scopeContainerId =
+          ownerContainerId(selectedPresentationIds.constFirst());
+      for (const QString &presentationId : selectedPresentationIds) {
+        if (ownerContainerId(presentationId) != scopeContainerId) {
+          // Mixed owners do not define a unique nested scope. Fall back to
+          // diagram-level objects instead of choosing an arbitrary frame.
+          scopeContainerId.clear();
+          break;
+        }
       }
     }
   }
 
   QSet<QString> scopedNodeIds;
+  QSet<QString> scopedContainerIds;
   if (!scopeContainerId.isEmpty()) {
-    // Selection follows one visible hierarchy level. A nested frame is a
-    // separate scope and its children must not leak into its parent selection.
-    if (const auto *container = findContainer(*d, scopeContainerId))
-      for (const QString &childId : container->childPresentationIds)
+    // Selection follows one visible hierarchy level. Nested frames are
+    // selected as objects, while their children remain outside this scope.
+    if (const auto *container = findContainer(*d, scopeContainerId)) {
+      for (const QString &childId : container->childPresentationIds) {
         if (findNode(*d, childId))
           scopedNodeIds.insert(childId);
+        else if (findContainer(*d, childId))
+          scopedContainerIds.insert(childId);
+      }
+    }
   } else {
     QSet<QString> containedPresentationIds;
     for (const auto &container : d->containers)
@@ -4102,10 +4140,13 @@ void DiagramCanvas::selectAllInContext() {
     for (const auto &node : d->nodes)
       if (!containedPresentationIds.contains(node.id))
         scopedNodeIds.insert(node.id);
+    for (const auto &container : d->containers)
+      if (!containedPresentationIds.contains(container.id))
+        scopedContainerIds.insert(container.id);
   }
 
   // Keep an empty selected frame active; Ctrl+A in it is a harmless no-op.
-  if (scopedNodeIds.isEmpty())
+  if (scopedNodeIds.isEmpty() && scopedContainerIds.isEmpty())
     return;
 
   clearRelationshipToolboxCandidate();
@@ -4120,6 +4161,7 @@ void DiagramCanvas::selectAllInContext() {
   for (const auto &node : d->nodes)
     if (scopedNodeIds.contains(node.id))
       m_selectedNodeOrder.append(node.id);
+  m_selectedContainers = std::move(scopedContainerIds);
   m_selectedContainer.clear();
   m_selectedConnector.clear();
   m_selectedBendPoint = -1;
@@ -4242,7 +4284,7 @@ void DiagramCanvas::createElementAt(const QString &type,
       m_selectedNodes.clear();
       m_selectedNodeOrder.clear();
       m_selectedConnector.clear();
-      m_selectedContainer = container->id;
+      selectOnlyContainer(container->id);
       emit canvasSelectionChanged();
       update();
     }
@@ -4539,7 +4581,7 @@ void DiagramCanvas::fitSelectionToContent() {
 
   QVariantList geometries;
   geometries.reserve(m_selectedNodeOrder.size() +
-                     (m_selectedContainer.isEmpty() ? 0 : 1));
+                     m_selectedContainers.size());
   const auto appendGeometry = [&](const QString &id, const QRectF &geometry) {
     QVariantMap value;
     value.insert(QStringLiteral("id"), id);
@@ -4567,8 +4609,8 @@ void DiagramCanvas::fitSelectionToContent() {
         node->showOperations.value_or(d->showOperations)));
     appendGeometry(nodeId, fitted);
   }
-  if (!m_selectedContainer.isEmpty()) {
-    if (const auto *container = findContainer(*d, m_selectedContainer)) {
+  for (const QString &containerId : m_selectedContainers) {
+    if (const auto *container = findContainer(*d, containerId)) {
       appendGeometry(container->id,
                      presentation_layout::containerContentGeometry(
                          m_project->data(), *d, *container));
@@ -4595,8 +4637,7 @@ void DiagramCanvas::assignStyleToSelection(const QString &styleId) {
   if (!m_project)
     return;
   QStringList presentationIds = m_selectedNodeOrder;
-  if (!m_selectedContainer.isEmpty())
-    presentationIds = {m_selectedContainer};
+  presentationIds.append(m_selectedContainers.values());
   m_project->assignStyleToPresentations(m_diagramId, presentationIds, styleId);
 }
 
@@ -4632,43 +4673,40 @@ void DiagramCanvas::arrangeSelection(const QString &operation) {
 }
 
 void DiagramCanvas::nudgeSelection(qreal deltaX, qreal deltaY) {
-  if (!m_project || m_selectedNodes.isEmpty() ||
+  if (!m_project ||
+      (m_selectedNodes.isEmpty() && m_selectedContainers.isEmpty()) ||
       (qFuzzyIsNull(deltaX) && qFuzzyIsNull(deltaY)))
     return;
-  const auto *d = diagram();
-  if (!d)
-    return;
 
+  captureSelectedGeometry();
   QVariantList geometries;
-  geometries.reserve(m_selectedNodeOrder.size());
-  for (const QString &nodeId : m_selectedNodeOrder) {
-    const auto *node = findNode(*d, nodeId);
-    if (!node)
-      continue;
-    const QRectF geometry = nodeGeometry(*node).translated(deltaX, deltaY);
+  geometries.reserve(m_originalGeometry.size());
+  for (auto item = m_originalGeometry.cbegin();
+       item != m_originalGeometry.cend(); ++item) {
+    const QRectF geometry = item.value().translated(deltaX, deltaY);
     QVariantMap value;
-    value.insert(QStringLiteral("id"), nodeId);
+    value.insert(QStringLiteral("id"), item.key());
     value.insert(QStringLiteral("x"), geometry.x());
     value.insert(QStringLiteral("y"), geometry.y());
     value.insert(QStringLiteral("width"), geometry.width());
     value.insert(QStringLiteral("height"), geometry.height());
     geometries.append(value);
   }
+  m_originalGeometry.clear();
+  const qsizetype rootSelectionSize =
+      m_selectedNodes.size() + m_selectedContainers.size();
   m_project->updatePresentationGeometries(
       m_diagramId, geometries,
-      m_selectedNodes.size() == 1 ? QStringLiteral("Nudge diagram element")
-                                  : QStringLiteral("Nudge diagram elements"));
+      rootSelectionSize == 1 ? QStringLiteral("Nudge diagram element")
+                             : QStringLiteral("Nudge diagram elements"));
 }
 
 void DiagramCanvas::removeSelectedPresentations() {
-  if (!m_project)
+  if (!m_project ||
+      (m_selectedNodes.isEmpty() && m_selectedContainers.isEmpty()))
     return;
-  if (!m_selectedContainer.isEmpty())
-    m_project->removeContainerPresentation(m_diagramId, m_selectedContainer);
-  else if (!m_selectedNodes.isEmpty())
-    m_project->removePresentations(m_diagramId, m_selectedNodes.values());
-  else
-    return;
+  m_project->removeDiagramPresentations(m_diagramId, m_selectedNodes.values(),
+                                        m_selectedContainers.values());
   clearCanvasSelection();
 }
 
@@ -4684,9 +4722,19 @@ void DiagramCanvas::deleteSelectedConnector() {
   clearCanvasSelection();
 }
 
+void DiagramCanvas::clearContainerSelection() {
+  m_selectedContainers.clear();
+  m_selectedContainer.clear();
+}
+
+void DiagramCanvas::selectOnlyContainer(const QString &containerId) {
+  m_selectedContainers = {containerId};
+  m_selectedContainer = containerId;
+}
+
 void DiagramCanvas::clearCanvasSelection() {
   const bool hadSelection =
-      !m_selectedNodes.isEmpty() || !m_selectedContainer.isEmpty() ||
+      !m_selectedNodes.isEmpty() || !m_selectedContainers.isEmpty() ||
       !m_selectedConnector.isEmpty() ||
       !m_connectorGestureSourceNode.isEmpty() || m_endpointDragActive;
   resetLassoState();
@@ -4698,7 +4746,7 @@ void DiagramCanvas::clearCanvasSelection() {
   clearPresentationToolboxCandidate(true);
   m_selectedNodes.clear();
   m_selectedNodeOrder.clear();
-  m_selectedContainer.clear();
+  clearContainerSelection();
   m_selectedConnector.clear();
   m_selectedBendPoint = -1;
   m_endpointDragTargetNode.clear();
@@ -4731,7 +4779,12 @@ void DiagramCanvas::selectNode(const QString &nodeId, bool toggle) {
   clearArrangementToolboxCandidate(true);
   clearConnectorToolboxCandidate(true);
   clearPresentationToolboxCandidate(true);
-  m_selectedContainer.clear();
+  const bool preserveExistingSelection =
+      !toggle && m_selectedNodes.contains(nodeId);
+  if (!toggle && !preserveExistingSelection)
+    clearContainerSelection();
+  else
+    m_selectedContainer.clear();
   if (toggle) {
     if (m_selectedNodes.contains(nodeId)) {
       m_selectedNodes.remove(nodeId);
@@ -4762,7 +4815,7 @@ void DiagramCanvas::selectConnector(const QString &connectorId,
   clearArrangementToolboxCandidate(true);
   clearConnectorToolboxCandidate(true);
   clearPresentationToolboxCandidate(true);
-  m_selectedContainer.clear();
+  clearContainerSelection();
   m_selectedConnector = connectorId;
   m_selectedBendPoint = -1;
   m_endpointDragTargetNode.clear();
@@ -4825,12 +4878,8 @@ void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
     event->accept();
     return;
   }
-  if (event->key() == Qt::Key_Delete && !m_selectedNodes.isEmpty()) {
-    removeSelectedPresentations();
-    event->accept();
-    return;
-  }
-  if (event->key() == Qt::Key_Delete && !m_selectedContainer.isEmpty()) {
+  if (event->key() == Qt::Key_Delete &&
+      (!m_selectedNodes.isEmpty() || !m_selectedContainers.isEmpty())) {
     removeSelectedPresentations();
     event->accept();
     return;
@@ -4851,7 +4900,8 @@ void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
       event->key() == Qt::Key_Up || event->key() == Qt::Key_Down;
   Qt::KeyboardModifiers modifiers = event->modifiers();
   modifiers.setFlag(Qt::KeypadModifier, false);
-  if (arrowKey && !m_selectedNodes.isEmpty() &&
+  if (arrowKey &&
+      (!m_selectedNodes.isEmpty() || !m_selectedContainers.isEmpty()) &&
       (modifiers == Qt::NoModifier || modifiers == Qt::ShiftModifier)) {
     const qreal distance = modifiers == Qt::ShiftModifier ? 10.0 : 1.0;
     QPointF delta;
