@@ -9,7 +9,7 @@ complete CTest suite as local acceptance testing.
 Every pull request and every push to `main` performs a clean build with:
 
 - Windows Server 2022 and MSVC 2022;
-- Qt 6.11.1 for `win64_msvc2022_64`;
+- Qt 6.10.3 for `win64_msvc2022_64`;
 - the runner's LLVM/libclang installation, required rather than optional;
 - all core, canvas, headless, import, UI smoke, and source-policy tests.
 
