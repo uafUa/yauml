@@ -133,6 +133,7 @@ private slots:
   void edgeGestureCreatesCancelsAndSupportsSelfConnections();
   void relationshipToolboxRequiresSelectedEdgeAndCreatesConnector();
   void multiSelectionToolboxTracksArrangementCommands();
+  void connectorToolboxEditsRoutingAndAnnotations();
   void connectorEndpointsDragToReattachAndCancel();
   void connectorPortsSnapAndRemainFreelyPlaceable();
   void liveDragSnappingIsUndoableAndAltSuppressesIt();
@@ -990,6 +991,79 @@ void DiagramCanvasTests::multiSelectionToolboxTracksArrangementCommands() {
   QVERIFY(!canvas.arrangementToolboxCandidate());
   QVERIFY(canvas.arrangementToolboxNodeId().isEmpty());
   QVERIFY(canvas.arrangementToolboxViewAnchor().isNull());
+}
+
+void DiagramCanvasTests::connectorToolboxEditsRoutingAndAnnotations() {
+  ProjectController controller;
+  populate(controller, 2);
+  useStandardInteractionGeometry(controller);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+  const QString connectorId = controller.createRelationship(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("association"));
+  QVERIFY(!connectorId.isEmpty());
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+
+  // A connector toolbox is contextual: merely having a connector in the
+  // diagram is insufficient. The pointer must be over the selected route or
+  // one of its annotations.
+  canvas.hover({315.0, 140.0});
+  QVERIFY(!canvas.connectorToolboxCandidate());
+  canvas.press({315.0, 140.0});
+  canvas.release({315.0, 140.0});
+  QVERIFY(canvas.connectorSelected());
+  canvas.hover({700.0, 400.0}, {315.0, 140.0});
+  QVERIFY(!canvas.connectorToolboxCandidate());
+  canvas.hover({315.0, 140.0}, {700.0, 400.0});
+  QVERIFY(canvas.connectorToolboxCandidate());
+  QCOMPARE(canvas.connectorToolboxConnectorId(), connectorId);
+  QCOMPARE(canvas.connectorToolboxViewAnchor(), QPointF(315.0, 140.0));
+
+  canvas.setSelectedConnectorRouting(QStringLiteral("orthogonal"));
+  QCOMPARE(canvas.selectedConnectorRouting(), QStringLiteral("orthogonal"));
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Use orthogonal connector routing"));
+  QVERIFY(canvas.connectorToolboxCandidate());
+  controller.undo();
+  QCOMPARE(canvas.selectedConnectorRouting(), QStringLiteral("straight"));
+
+  // Optional annotations without rendered text can still be created from the
+  // toolbox. The canvas computes their normal automatic location and opens the
+  // same in-place editor used by a text double-click.
+  QSignalSpy textEdits(&canvas, &DiagramCanvas::editRequested);
+  canvas.editSelectedConnectorAnnotation(QStringLiteral("sourceRole"));
+  QCOMPARE(textEdits.count(), 1);
+  const auto edit = textEdits.takeFirst();
+  const auto *connector =
+      findConnector(controller.data().diagrams.first(), connectorId);
+  QVERIFY(connector);
+  QCOMPARE(edit.at(0).toString(), connector->relationshipId);
+  QCOMPARE(edit.at(1).toString(), QStringLiteral("sourceRole"));
+  QCOMPARE(edit.at(3).toString(), QString{});
+  QVERIFY(edit.at(6).toReal() > 0.0);
+  QVERIFY(edit.at(7).toReal() > 0.0);
+
+  QSignalSpy stereotypeEdits(&canvas, &DiagramCanvas::stereotypeEditRequested);
+  canvas.editSelectedConnectorAnnotation(QStringLiteral("stereotypes"));
+  QCOMPARE(stereotypeEdits.count(), 1);
+  QCOMPARE(stereotypeEdits.first().at(0).toString(), connector->relationshipId);
+  QCOMPARE(stereotypeEdits.first().at(1).toString(),
+           QStringLiteral("relationship"));
+
+  controller.setConnectorAnnotationPlacement(
+      diagramId, connectorId, QStringLiteral("name"), 0.5, 0.0, 30.0);
+  QVERIFY(canvas.selectedConnectorHasManualAnnotationPositions());
+  canvas.resetSelectedConnectorAnnotationPositions();
+  QVERIFY(!canvas.selectedConnectorHasManualAnnotationPositions());
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Reset connector annotation positions"));
+  controller.undo();
+  QVERIFY(canvas.selectedConnectorHasManualAnnotationPositions());
+
+  canvas.key(Qt::Key_Escape);
+  QVERIFY(!canvas.connectorToolboxCandidate());
 }
 
 void DiagramCanvasTests::connectorEndpointsDragToReattachAndCancel() {

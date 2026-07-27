@@ -36,6 +36,9 @@ class DiagramCanvas : public QQuickItem {
                  canvasSelectionChanged)
   Q_PROPERTY(bool selectedConnectorHasBendPoints READ
                  selectedConnectorHasBendPoints NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(bool selectedConnectorHasManualAnnotationPositions READ
+                 selectedConnectorHasManualAnnotationPositions NOTIFY
+                     canvasSelectionChanged)
   Q_PROPERTY(
       bool contextAnnotationHasManualPosition READ
           contextAnnotationHasManualPosition NOTIFY canvasSelectionChanged)
@@ -86,6 +89,13 @@ class DiagramCanvas : public QQuickItem {
   Q_PROPERTY(
       QPointF arrangementToolboxViewAnchor READ arrangementToolboxViewAnchor
           NOTIFY arrangementToolboxCandidateChanged)
+  Q_PROPERTY(bool connectorToolboxCandidate READ connectorToolboxCandidate
+                 NOTIFY connectorToolboxCandidateChanged)
+  Q_PROPERTY(
+      QString connectorToolboxConnectorId READ connectorToolboxConnectorId
+          NOTIFY connectorToolboxCandidateChanged)
+  Q_PROPERTY(QPointF connectorToolboxViewAnchor READ connectorToolboxViewAnchor
+                 NOTIFY connectorToolboxCandidateChanged)
 
 public:
   explicit DiagramCanvas(QQuickItem *parent = nullptr);
@@ -100,6 +110,7 @@ public:
   bool containerSelected() const;
   bool bendPointSelected() const;
   bool selectedConnectorHasBendPoints() const;
+  bool selectedConnectorHasManualAnnotationPositions() const;
   bool contextAnnotationHasManualPosition() const;
   QString connectorInteractionPrompt() const;
   int defaultDistributionGap() const;
@@ -129,6 +140,9 @@ public:
   bool arrangementToolboxCandidate() const;
   QString arrangementToolboxNodeId() const;
   QPointF arrangementToolboxViewAnchor() const;
+  bool connectorToolboxCandidate() const;
+  QString connectorToolboxConnectorId() const;
+  QPointF connectorToolboxViewAnchor() const;
 
   Q_INVOKABLE void fitToContent();
   Q_INVOKABLE void addElementsAt(const QStringList &elementIds, qreal x,
@@ -145,6 +159,8 @@ public:
   Q_INVOKABLE void clearSelectedConnectorBendPoints();
   Q_INVOKABLE void resetContextAnnotationPosition();
   Q_INVOKABLE void resetSelectedConnectorAnnotationPositions();
+  Q_INVOKABLE void
+  editSelectedConnectorAnnotation(const QString &annotationField);
   Q_INVOKABLE void setSelectedConnectorRouting(const QString &routing);
   Q_INVOKABLE void setSelectedPortSnapPoints(int horizontalPointCount,
                                              int verticalPointCount);
@@ -180,6 +196,7 @@ signals:
   void relationshipGestureKeysChanged();
   void relationshipToolboxCandidateChanged();
   void arrangementToolboxCandidateChanged();
+  void connectorToolboxCandidateChanged();
   // Actual pointer/selection interactions dismiss every contextual surface.
   // Model state changes deliberately do not: a toolbox remains usable for a
   // sequence of compact commands while the selection stays unchanged.
@@ -289,6 +306,9 @@ private:
   void updateArrangementToolboxCandidate(const QPointF &viewPoint);
   void refreshArrangementToolboxAnchor();
   void clearArrangementToolboxCandidate(bool clearAnchor = false);
+  void updateConnectorToolboxCandidate(const QPointF &viewPoint);
+  void refreshConnectorToolboxAnchor();
+  void clearConnectorToolboxCandidate(bool clearAnchor = false);
   void updateConnectorGesture(const QPointF &scenePoint, bool suppressSnapping);
   void commitConnectorGesture(const QPointF &scenePoint, bool suppressSnapping);
   void cancelConnectorGesture();
@@ -379,6 +399,9 @@ private:
   bool m_arrangementToolboxCandidate = false;
   QString m_arrangementToolboxNodeId;
   QPointF m_arrangementToolboxViewAnchor;
+  bool m_connectorToolboxCandidate = false;
+  QString m_connectorToolboxConnectorId;
+  QPointF m_connectorToolboxViewAnchor;
   QVector<QLineF> m_alignmentGuides;
   quint64 m_themeRevision = 0;
 };

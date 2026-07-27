@@ -249,8 +249,8 @@ history memory grow with total project size rather than the size of each edit.
   presentations resume inheritance. The registry and every assignment persist
   in project JSON5 rather than application preferences.
 
-### 3.8 Contextual hover toolboxes — relationship and multi-selection
-toolboxes implemented, expansion planned
+### 3.8 Contextual hover toolboxes — relationship, multi-selection, and
+connector toolboxes implemented; expansion planned
 
 - Keep contextual toolboxes task-specific instead of building one universal
   floating toolbar. The implemented selected-edge toolbox remains dedicated to
@@ -267,21 +267,27 @@ toolboxes implemented, expansion planned
   gives relationship creation priority. The palette invokes the existing
   command-backed actions and follows its hovered presentation as repeated
   arrangement commands change the geometry.
-- The next expansions add connector routing and annotation controls, followed
-  by high-frequency node/container commands such as edit name, fit to content,
-  style, and wrap in parent namespace. Destructive and modal commands remain in
-  context menus until usage proves that placing them in a hover surface is
-  beneficial.
+- The selected-connector expansion is implemented. Hovering a selected route or
+  one of its annotations exposes straight/orthogonal routing, direct in-place
+  editors for the name, both roles, both cardinalities, and stereotypes, plus
+  reset of all manually positioned annotations. Empty optional annotations can
+  be created from the toolbox because the canvas derives their ordinary
+  automatic placement before opening the editor. The toolbox remains stable
+  while crossing its hover bridge and follows the connector midpoint after a
+  route change.
+- The next expansion adds high-frequency node/container commands such as edit
+  name, fit to content, style, and wrap in parent namespace. Destructive and
+  modal commands remain in context menus until usage proves that placing them
+  in a hover surface is beneficial.
 - Use one shared visibility state machine: the toolbox appears only for the
   currently selected target, remains open while the pointer crosses a
   hover-safe bridge to the toolbox, stays open during a drag gesture, and
   dismisses on Escape, selection change, diagram deactivation, or a short
   pointer-leave delay. Keyboard focus and touch/pen invocation must not depend
   on hover.
-- Implement the remaining providers in this order: connector
-  annotations/routing, node/container commands, then user customization. Each
-  slice includes multi-window focus, zoom, clipping, accessibility, and command
-  undo/redo tests.
+- Implement the remaining providers in this order: node/container commands,
+  then user customization. Each slice includes multi-window focus, zoom,
+  clipping, accessibility, and command undo/redo tests.
 
 ### 3.9 Relationship ends, movable annotations, and stereotypes — implemented
 

@@ -1636,6 +1636,7 @@ void DiagramCanvas::setProject(ProjectController *project) {
     return;
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
+  clearConnectorToolboxCandidate(true);
   if (m_project)
     disconnect(m_project, nullptr, this, nullptr);
   m_project = project;
@@ -1643,6 +1644,7 @@ void DiagramCanvas::setProject(ProjectController *project) {
     connect(m_project, &ProjectController::stateChanged, this, [this] {
       clearRelationshipToolboxCandidate();
       refreshArrangementToolboxAnchor();
+      refreshConnectorToolboxAnchor();
       m_sceneDirty = true;
       m_textDirty = true;
       if (!m_selectedNodes.isEmpty() || !m_selectedConnector.isEmpty() ||
@@ -1692,6 +1694,12 @@ bool DiagramCanvas::selectedConnectorHasBendPoints() const {
   const auto *d = diagram();
   const auto *connector = d ? findConnector(*d, m_selectedConnector) : nullptr;
   return connector && !connector->bendPoints.isEmpty();
+}
+
+bool DiagramCanvas::selectedConnectorHasManualAnnotationPositions() const {
+  const auto *d = diagram();
+  const auto *connector = d ? findConnector(*d, m_selectedConnector) : nullptr;
+  return connector && !connector->annotationPlacements.isEmpty();
 }
 
 bool DiagramCanvas::contextAnnotationHasManualPosition() const {
@@ -1809,6 +1817,18 @@ QString DiagramCanvas::arrangementToolboxNodeId() const {
 
 QPointF DiagramCanvas::arrangementToolboxViewAnchor() const {
   return m_arrangementToolboxViewAnchor;
+}
+
+bool DiagramCanvas::connectorToolboxCandidate() const {
+  return m_connectorToolboxCandidate;
+}
+
+QString DiagramCanvas::connectorToolboxConnectorId() const {
+  return m_connectorToolboxConnectorId;
+}
+
+QPointF DiagramCanvas::connectorToolboxViewAnchor() const {
+  return m_connectorToolboxViewAnchor;
 }
 
 QString DiagramCanvas::connectorInteractionPrompt() const {
@@ -2518,6 +2538,77 @@ void DiagramCanvas::clearArrangementToolboxCandidate(bool clearAnchor) {
   emit arrangementToolboxCandidateChanged();
 }
 
+void DiagramCanvas::updateConnectorToolboxCandidate(const QPointF &viewPoint) {
+  if (m_interaction != Interaction::None || m_selectedConnector.isEmpty()) {
+    clearConnectorToolboxCandidate(m_selectedConnector.isEmpty());
+    return;
+  }
+
+  const QPointF scenePoint = toScene(viewPoint);
+  const auto *hoveredConnector = hitConnector(scenePoint);
+  const AnnotationHit annotation = hitConnectorAnnotation(scenePoint);
+  const bool overSelectedRoute =
+      hoveredConnector && hoveredConnector->id == m_selectedConnector;
+  const bool overSelectedAnnotation =
+      !annotation.connectorId.isEmpty() &&
+      annotation.connectorId == m_selectedConnector;
+  if (!overSelectedRoute && !overSelectedAnnotation) {
+    clearConnectorToolboxCandidate();
+    return;
+  }
+
+  const bool becameCandidate = !m_connectorToolboxCandidate;
+  const bool targetChanged =
+      m_connectorToolboxConnectorId != m_selectedConnector;
+  const QPointF previousAnchor = m_connectorToolboxViewAnchor;
+  m_connectorToolboxCandidate = true;
+  m_connectorToolboxConnectorId = m_selectedConnector;
+  refreshConnectorToolboxAnchor();
+  if ((becameCandidate || targetChanged) && m_connectorToolboxCandidate &&
+      previousAnchor == m_connectorToolboxViewAnchor)
+    emit connectorToolboxCandidateChanged();
+}
+
+void DiagramCanvas::refreshConnectorToolboxAnchor() {
+  const auto *d = diagram();
+  if (!d || m_connectorToolboxConnectorId.isEmpty() ||
+      m_connectorToolboxConnectorId != m_selectedConnector) {
+    clearConnectorToolboxCandidate(true);
+    return;
+  }
+
+  const auto *connector = findConnector(*d, m_connectorToolboxConnectorId);
+  const ui::ConnectorRoute route =
+      connector ? connectorRoute(*connector) : ui::ConnectorRoute{};
+  const qreal length = polylineLength(route.points);
+  const auto midpoint = samplePolyline(route.points, length / 2.0);
+  if (!connector || !midpoint) {
+    clearConnectorToolboxCandidate(true);
+    return;
+  }
+
+  const QPointF nextAnchor = toView(midpoint->position);
+  if (m_connectorToolboxViewAnchor == nextAnchor)
+    return;
+  m_connectorToolboxViewAnchor = nextAnchor;
+  emit connectorToolboxCandidateChanged();
+}
+
+void DiagramCanvas::clearConnectorToolboxCandidate(bool clearAnchor) {
+  const bool changed =
+      m_connectorToolboxCandidate ||
+      (clearAnchor && (!m_connectorToolboxConnectorId.isEmpty() ||
+                       !m_connectorToolboxViewAnchor.isNull()));
+  if (!changed)
+    return;
+  m_connectorToolboxCandidate = false;
+  if (clearAnchor) {
+    m_connectorToolboxConnectorId.clear();
+    m_connectorToolboxViewAnchor = {};
+  }
+  emit connectorToolboxCandidateChanged();
+}
+
 void DiagramCanvas::updateConnectorGesture(const QPointF &scenePoint,
                                            bool suppressSnapping) {
   m_connectorGestureTargetPoint = scenePoint;
@@ -3134,6 +3225,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
   emit contextToolboxesDismissRequested();
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
+  clearConnectorToolboxCandidate(true);
   m_alignmentGuides.clear();
   m_pressView = event->position();
   m_pressScene = toScene(m_pressView);
@@ -3599,22 +3691,30 @@ void DiagramCanvas::mouseDoubleClickEvent(QMouseEvent *event) {
 void DiagramCanvas::hoverMoveEvent(QHoverEvent *event) {
   m_lastPointerScene = toScene(event->position());
   updateRelationshipToolboxCandidate(event->position());
-  if (m_relationshipToolboxCandidate)
+  if (m_relationshipToolboxCandidate) {
     clearArrangementToolboxCandidate();
-  else
-    updateArrangementToolboxCandidate(event->position());
+    clearConnectorToolboxCandidate();
+  } else {
+    updateConnectorToolboxCandidate(event->position());
+    if (m_connectorToolboxCandidate)
+      clearArrangementToolboxCandidate();
+    else
+      updateArrangementToolboxCandidate(event->position());
+  }
   event->accept();
 }
 
 void DiagramCanvas::hoverLeaveEvent(QHoverEvent *event) {
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate();
+  clearConnectorToolboxCandidate();
   event->accept();
 }
 
 void DiagramCanvas::wheelEvent(QWheelEvent *event) {
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
+  clearConnectorToolboxCandidate(true);
   const QPointF before = toScene(event->position());
   const qreal factor = event->angleDelta().y() > 0 ? 1.12 : 1.0 / 1.12;
   m_zoom = std::clamp(m_zoom * factor, 0.2, 4.0);
@@ -3950,6 +4050,85 @@ void DiagramCanvas::resetSelectedConnectorAnnotationPositions() {
   update();
 }
 
+void DiagramCanvas::editSelectedConnectorAnnotation(
+    const QString &annotationField) {
+  const auto *d = diagram();
+  const auto *connector = d ? findConnector(*d, m_selectedConnector) : nullptr;
+  const auto *relationship =
+      connector && m_project
+          ? findRelationship(m_project->data(), connector->relationshipId)
+          : nullptr;
+  if (!connector || !relationship)
+    return;
+
+  QString name = relationship->name;
+  QString stereotype = stereotype_catalog::displayText(
+      m_project->data(), relationship->stereotypeIds);
+  RelationshipEnd sourceEnd = relationship->sourceEnd;
+  RelationshipEnd targetEnd = relationship->targetEnd;
+  QString currentText;
+
+  // Empty annotations have no rendered hit rectangle. Supply a short sizing
+  // placeholder only while calculating the editor target so every optional
+  // field can still be created directly from the contextual toolbox.
+  if (annotationField == QStringLiteral("name")) {
+    currentText = name;
+    if (name.isEmpty())
+      name = QStringLiteral("relationship");
+  } else if (annotationField == QStringLiteral("stereotypes")) {
+    currentText = stereotype;
+    if (stereotype.isEmpty())
+      stereotype = QStringLiteral("«stereotype»");
+  } else if (annotationField == QStringLiteral("sourceRole")) {
+    currentText = sourceEnd.role;
+    if (sourceEnd.role.isEmpty())
+      sourceEnd.role = QStringLiteral("role");
+  } else if (annotationField == QStringLiteral("sourceMultiplicity")) {
+    currentText = sourceEnd.multiplicity;
+    if (sourceEnd.multiplicity.isEmpty())
+      sourceEnd.multiplicity = QStringLiteral("1..*");
+  } else if (annotationField == QStringLiteral("targetRole")) {
+    currentText = targetEnd.role;
+    if (targetEnd.role.isEmpty())
+      targetEnd.role = QStringLiteral("role");
+  } else if (annotationField == QStringLiteral("targetMultiplicity")) {
+    currentText = targetEnd.multiplicity;
+    if (targetEnd.multiplicity.isEmpty())
+      targetEnd.multiplicity = QStringLiteral("1..*");
+  } else {
+    return;
+  }
+
+  const ui::ConnectorRoute route = connectorRoute(*connector);
+  const QFont font = QGuiApplication::font();
+  const ConnectorAnnotationLayout layout = connectorAnnotationLayout(
+      route.points, name, stereotype, sourceEnd, targetEnd,
+      connector->annotationPlacements, font);
+  const QHash<QString, QRectF> targets = {
+      {QStringLiteral("name"), layout.name},
+      {QStringLiteral("stereotypes"), layout.stereotype},
+      {QStringLiteral("sourceRole"), layout.sourceRole},
+      {QStringLiteral("sourceMultiplicity"), layout.sourceMultiplicity},
+      {QStringLiteral("targetRole"), layout.targetRole},
+      {QStringLiteral("targetMultiplicity"), layout.targetMultiplicity}};
+  const QRectF sceneTarget = targets.value(annotationField);
+  if (sceneTarget.isEmpty())
+    return;
+  const QRectF viewTarget = toView(sceneTarget);
+
+  if (annotationField == QStringLiteral("stereotypes")) {
+    emit stereotypeEditRequested(
+        relationship->id, QStringLiteral("relationship"), viewTarget.x(),
+        viewTarget.y(), viewTarget.width(), viewTarget.height());
+    return;
+  }
+
+  const qreal fontPixelSize = qMax(1.0, QFontInfo(font).pixelSize() * m_zoom);
+  emit editRequested(relationship->id, annotationField, -1, currentText,
+                     viewTarget.x(), viewTarget.y(), viewTarget.width(),
+                     viewTarget.height(), fontPixelSize, false);
+}
+
 void DiagramCanvas::setSelectedConnectorRouting(const QString &routing) {
   if (!m_project || m_selectedConnector.isEmpty())
     return;
@@ -4120,6 +4299,7 @@ void DiagramCanvas::clearCanvasSelection() {
     return;
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
+  clearConnectorToolboxCandidate(true);
   m_selectedNodes.clear();
   m_selectedNodeOrder.clear();
   m_selectedContainer.clear();
@@ -4153,6 +4333,7 @@ void DiagramCanvas::clearCanvasSelection() {
 void DiagramCanvas::selectNode(const QString &nodeId, bool toggle) {
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
+  clearConnectorToolboxCandidate(true);
   m_selectedContainer.clear();
   if (toggle) {
     if (m_selectedNodes.contains(nodeId)) {
@@ -4182,6 +4363,7 @@ void DiagramCanvas::selectConnector(const QString &connectorId,
                                     bool preserveNodes) {
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
+  clearConnectorToolboxCandidate(true);
   m_selectedContainer.clear();
   m_selectedConnector = connectorId;
   m_selectedBendPoint = -1;
@@ -4279,6 +4461,14 @@ void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
     else
       delta.ry() = distance;
     nudgeSelection(delta.x(), delta.y());
+    event->accept();
+    return;
+  }
+  if (event->key() == Qt::Key_Escape) {
+    clearRelationshipToolboxCandidate();
+    clearArrangementToolboxCandidate();
+    clearConnectorToolboxCandidate();
+    emit contextToolboxesDismissRequested();
     event->accept();
     return;
   }

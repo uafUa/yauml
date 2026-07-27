@@ -49,6 +49,38 @@ Item {
             label: qsTr("Containment")
         }
     ]
+    readonly property var connectorAnnotationActions: [
+        {
+            field: "name",
+            fallback: qsTr("N"),
+            label: qsTr("Edit relationship name")
+        },
+        {
+            field: "sourceRole",
+            fallback: qsTr("SR"),
+            label: qsTr("Edit source role")
+        },
+        {
+            field: "sourceMultiplicity",
+            fallback: qsTr("S#"),
+            label: qsTr("Edit source cardinality")
+        },
+        {
+            field: "targetRole",
+            fallback: qsTr("TR"),
+            label: qsTr("Edit target role")
+        },
+        {
+            field: "targetMultiplicity",
+            fallback: qsTr("T#"),
+            label: qsTr("Edit target cardinality")
+        },
+        {
+            field: "stereotypes",
+            fallback: qsTr("«»"),
+            label: qsTr("Choose relationship stereotypes")
+        }
+    ]
 
     function addElementsAt(elementIds, x, y) {
         canvas.addElementsAt(elementIds, x, y)
@@ -143,6 +175,7 @@ Item {
         function onViewportChanged() {
             root.dismissRelationshipToolbox()
             arrangementToolbox.dismiss()
+            connectorToolbox.dismiss()
         }
 
         function onCanvasSelectionChanged() {
@@ -151,11 +184,14 @@ Item {
                 root.dismissRelationshipToolbox()
             if (canvas.selectedNodeCount < 2)
                 arrangementToolbox.dismiss()
+            if (!canvas.connectorSelected)
+                connectorToolbox.dismiss()
         }
 
         function onContextToolboxesDismissRequested() {
             root.dismissRelationshipToolbox()
             arrangementToolbox.dismiss()
+            connectorToolbox.dismiss()
         }
     }
 
@@ -423,6 +459,7 @@ Item {
         }
         MenuItem {
             text: qsTr("Reset all annotation positions")
+            enabled: canvas.selectedConnectorHasManualAnnotationPositions
             onTriggered: canvas.resetSelectedConnectorAnnotationPositions()
         }
         MenuSeparator {}
@@ -766,6 +803,106 @@ Item {
                         modelData.action.trigger()
                         canvas.forceActiveFocus()
                     }
+                }
+            }
+        }
+    }
+
+    ContextToolboxFrame {
+        id: connectorToolbox
+        objectName: "connectorToolbox"
+        candidate: canvas.connectorToolboxCandidate
+                   && canvas.connectorSelected
+                   && !editor.visible
+        candidateKey: canvas.connectorToolboxConnectorId
+        anchor: canvas.connectorToolboxViewAnchor
+        placement: "top"
+        trackAnchorWhileShown: true
+
+        Row {
+            spacing: 2
+
+            CatalogToolButton {
+                catalogId: "connector.routeStraight"
+                width: 32
+                height: 32
+                text: qsTr("—")
+                checkable: true
+                checked: canvas.selectedConnectorRouting === "straight"
+                display: icon.source.toString().length > 0
+                         ? AbstractButton.IconOnly
+                         : AbstractButton.TextOnly
+                Accessible.name: qsTr("Use straight routing")
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: {
+                    canvas.setSelectedConnectorRouting("straight")
+                    canvas.forceActiveFocus()
+                }
+            }
+
+            CatalogToolButton {
+                catalogId: "connector.routeOrthogonal"
+                width: 32
+                height: 32
+                text: qsTr("⌞")
+                checkable: true
+                checked: canvas.selectedConnectorRouting === "orthogonal"
+                display: icon.source.toString().length > 0
+                         ? AbstractButton.IconOnly
+                         : AbstractButton.TextOnly
+                Accessible.name: qsTr("Use orthogonal routing")
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: {
+                    canvas.setSelectedConnectorRouting("orthogonal")
+                    canvas.forceActiveFocus()
+                }
+            }
+
+            Rectangle {
+                width: 1
+                height: 24
+                anchors.verticalCenter: parent.verticalCenter
+                color: uiTheme.overlayBorder
+            }
+
+            Repeater {
+                model: root.connectorAnnotationActions
+
+                ToolButton {
+                    required property var modelData
+                    width: 32
+                    height: 32
+                    text: modelData.fallback
+                    Accessible.name: modelData.label
+                    ToolTip.visible: hovered
+                    ToolTip.text: modelData.label
+                    onClicked: {
+                        canvas.editSelectedConnectorAnnotation(modelData.field)
+                        connectorToolbox.dismiss()
+                    }
+                }
+            }
+
+            Rectangle {
+                width: 1
+                height: 24
+                anchors.verticalCenter: parent.verticalCenter
+                color: uiTheme.overlayBorder
+            }
+
+            ToolButton {
+                width: 32
+                height: 32
+                text: qsTr("↺")
+                enabled: canvas.selectedConnectorHasManualAnnotationPositions
+                Accessible.name: qsTr("Reset all annotation positions")
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: {
+                    canvas.resetSelectedConnectorAnnotationPositions()
+                    canvas.forceActiveFocus()
                 }
             }
         }
