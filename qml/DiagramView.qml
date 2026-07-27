@@ -404,7 +404,7 @@ Item {
         MenuSeparator {}
         Menu {
             title: qsTr("Attributes")
-            enabled: canvas.selectedNodeCount === 1
+            enabled: canvas.selectedNodeCount > 0
             MenuItem {
                 text: qsTr("Inherit diagram setting")
                 checkable: true
@@ -429,7 +429,7 @@ Item {
         }
         Menu {
             title: qsTr("Operations")
-            enabled: canvas.selectedNodeCount === 1
+            enabled: canvas.selectedNodeCount > 0
             MenuItem {
                 text: qsTr("Inherit diagram setting")
                 checkable: true
@@ -865,7 +865,7 @@ Item {
         trackAnchorWhileShown: true
 
         Grid {
-            columns: 6
+            columns: 7
             spacing: 2
 
             Repeater {
@@ -904,6 +904,45 @@ Item {
                         modelData.action.trigger()
                         canvas.forceActiveFocus()
                     }
+                }
+            }
+
+            CatalogToolButton {
+                catalogId: "arrange.fitToContent"
+                width: 32
+                height: 32
+                text: qsTr("Fit")
+                enabled: fitSelectionAction.enabled
+                display: icon.source.toString().length > 0
+                         ? AbstractButton.IconOnly
+                         : AbstractButton.TextOnly
+                Accessible.name: fitSelectionAction.text
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: {
+                    fitSelectionAction.trigger()
+                    canvas.forceActiveFocus()
+                }
+            }
+
+            CatalogToolButton {
+                id: arrangementStyleButton
+                catalogId: "style.assignNamed"
+                width: 32
+                height: 32
+                text: qsTr("Style")
+                display: icon.source.toString().length > 0
+                         ? AbstractButton.IconOnly
+                         : AbstractButton.TextOnly
+                Accessible.name: qsTr("Choose style for selection")
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: {
+                    const menuPoint = mapToItem(root, 0, height)
+                    presentationStyleQuickMenu.x = menuPoint.x
+                    presentationStyleQuickMenu.y = menuPoint.y
+                    arrangementToolbox.dismiss()
+                    presentationStyleQuickMenu.open()
                 }
             }
         }

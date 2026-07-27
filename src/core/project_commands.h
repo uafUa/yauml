@@ -495,24 +495,28 @@ private:
   bool m_after;
 };
 
+struct NodeCompartmentVisibilityChange {
+  QString nodeId;
+  std::optional<bool> before;
+  std::optional<bool> after;
+};
+
 class SetNodeCompartmentVisibilityCommand final : public ProjectCommand {
 public:
   SetNodeCompartmentVisibilityCommand(ProjectController *controller,
-                                      QString diagramId, QString nodeId,
                                       bool attributesCompartment,
-                                      std::optional<bool> before,
-                                      std::optional<bool> after);
+                                      QString diagramId,
+                                      QList<NodeCompartmentVisibilityChange>
+                                          changes);
 
 private:
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
-  void apply(ProjectData &project, std::optional<bool> value);
+  void apply(ProjectData &project, bool forward);
 
   QString m_diagramId;
-  QString m_nodeId;
   bool m_attributesCompartment;
-  std::optional<bool> m_before;
-  std::optional<bool> m_after;
+  QList<NodeCompartmentVisibilityChange> m_changes;
 };
 
 class CreateRelationshipCommand final : public ProjectCommand {

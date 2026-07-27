@@ -227,6 +227,9 @@ public:
                                                 const QString &nodeId,
                                                 const QString &compartment,
                                                 const QString &visibility);
+  Q_INVOKABLE void setNodesCompartmentVisibility(
+      const QString &diagramId, const QStringList &nodeIds,
+      const QString &compartment, const QString &visibility);
   void updatePresentationGeometries(const QString &diagramId,
                                     const QVariantList &geometries,
                                     const QString &description);

@@ -1076,30 +1076,34 @@ void SetDiagramCompartmentVisibilityCommand::apply(ProjectData &project,
 }
 
 SetNodeCompartmentVisibilityCommand::SetNodeCompartmentVisibilityCommand(
-    ProjectController *controller, QString diagramId, QString nodeId,
-    bool attributesCompartment, std::optional<bool> before,
-    std::optional<bool> after)
+    ProjectController *controller, bool attributesCompartment,
+    QString diagramId, QList<NodeCompartmentVisibilityChange> changes)
     : ProjectCommand(controller,
-                     QStringLiteral("Set presentation %1 visibility")
+                     QStringLiteral("Set selected %1 visibility")
                          .arg(attributesCompartment
-                                  ? QStringLiteral("attribute")
-                                  : QStringLiteral("operation"))),
-      m_diagramId(std::move(diagramId)), m_nodeId(std::move(nodeId)),
-      m_attributesCompartment(attributesCompartment), m_before(before),
-      m_after(after) {}
+                                  ? QStringLiteral("attributes")
+                                  : QStringLiteral("operations"))),
+      m_diagramId(std::move(diagramId)),
+      m_attributesCompartment(attributesCompartment),
+      m_changes(std::move(changes)) {}
 
 void SetNodeCompartmentVisibilityCommand::execute(ProjectData &project) {
-  apply(project, m_after);
+  apply(project, true);
 }
 
 void SetNodeCompartmentVisibilityCommand::revert(ProjectData &project) {
-  apply(project, m_before);
+  apply(project, false);
 }
 
 void SetNodeCompartmentVisibilityCommand::apply(ProjectData &project,
-                                                std::optional<bool> value) {
+                                                bool forward) {
   if (auto *diagram = findDiagram(project, m_diagramId)) {
-    if (auto *node = findNode(*diagram, m_nodeId)) {
+    for (const auto &change : m_changes) {
+      auto *node = findNode(*diagram, change.nodeId);
+      if (!node)
+        continue;
+      const std::optional<bool> value =
+          forward ? change.after : change.before;
       if (m_attributesCompartment)
         node->showAttributes = value;
       else

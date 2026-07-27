@@ -365,6 +365,7 @@ private:
   void resetLassoState();
   void selectAllInContext();
   void synchronizeProjectSelection();
+  QString selectedCompartmentVisibility(bool attributes) const;
   void captureSelectedGeometry();
   void clearContainerSelection();
   void selectOnlyContainer(const QString &containerId);

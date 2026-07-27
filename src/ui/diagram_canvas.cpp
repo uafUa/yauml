@@ -1757,29 +1757,37 @@ bool DiagramCanvas::diagramOperationsVisible() const {
 }
 
 QString DiagramCanvas::selectedAttributesVisibility() const {
-  if (m_selectedNodeOrder.size() != 1)
-    return {};
-  const auto *currentDiagram = diagram();
-  const auto *node = currentDiagram ? findNode(*currentDiagram,
-                                               m_selectedNodeOrder.constFirst())
-                                    : nullptr;
-  if (!node || !node->showAttributes)
-    return node ? QStringLiteral("inherit") : QString{};
-  return *node->showAttributes ? QStringLiteral("show")
-                               : QStringLiteral("hide");
+  return selectedCompartmentVisibility(true);
 }
 
 QString DiagramCanvas::selectedOperationsVisibility() const {
-  if (m_selectedNodeOrder.size() != 1)
+  return selectedCompartmentVisibility(false);
+}
+
+QString
+DiagramCanvas::selectedCompartmentVisibility(bool attributes) const {
+  if (m_selectedNodeOrder.isEmpty())
     return {};
   const auto *currentDiagram = diagram();
-  const auto *node = currentDiagram ? findNode(*currentDiagram,
-                                               m_selectedNodeOrder.constFirst())
-                                    : nullptr;
-  if (!node || !node->showOperations)
-    return node ? QStringLiteral("inherit") : QString{};
-  return *node->showOperations ? QStringLiteral("show")
-                               : QStringLiteral("hide");
+  if (!currentDiagram)
+    return {};
+
+  QString commonVisibility;
+  for (const QString &nodeId : m_selectedNodeOrder) {
+    const auto *node = findNode(*currentDiagram, nodeId);
+    if (!node)
+      return {};
+    const std::optional<bool> value =
+        attributes ? node->showAttributes : node->showOperations;
+    QString visibility = QStringLiteral("inherit");
+    if (value)
+      visibility = *value ? QStringLiteral("show") : QStringLiteral("hide");
+    if (commonVisibility.isEmpty())
+      commonVisibility = visibility;
+    else if (commonVisibility != visibility)
+      return QStringLiteral("mixed");
+  }
+  return commonVisibility;
 }
 
 int DiagramCanvas::incomingRelatedTypeCount() const {
@@ -4566,10 +4574,10 @@ void DiagramCanvas::setDiagramCompartmentVisible(const QString &compartment,
 
 void DiagramCanvas::setSelectedCompartmentVisibility(
     const QString &compartment, const QString &visibility) {
-  if (!m_project || m_selectedNodeOrder.size() != 1)
+  if (!m_project || m_selectedNodeOrder.isEmpty())
     return;
-  m_project->setNodeCompartmentVisibility(
-      m_diagramId, m_selectedNodeOrder.constFirst(), compartment, visibility);
+  m_project->setNodesCompartmentVisibility(
+      m_diagramId, m_selectedNodeOrder, compartment, visibility);
 }
 
 void DiagramCanvas::addRelatedTypes(const QString &direction) {

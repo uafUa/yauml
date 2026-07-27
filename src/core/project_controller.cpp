@@ -2958,9 +2958,14 @@ void ProjectController::setDiagramCompartmentVisible(const QString &diagramId,
 void ProjectController::setNodeCompartmentVisibility(
     const QString &diagramId, const QString &nodeId, const QString &compartment,
     const QString &visibility) {
+  setNodesCompartmentVisibility(diagramId, {nodeId}, compartment, visibility);
+}
+
+void ProjectController::setNodesCompartmentVisibility(
+    const QString &diagramId, const QStringList &nodeIds,
+    const QString &compartment, const QString &visibility) {
   const auto *diagram = findDiagram(m_data, diagramId);
-  const auto *node = diagram ? findNode(*diagram, nodeId) : nullptr;
-  if (!node)
+  if (!diagram || nodeIds.isEmpty())
     return;
   const bool attributes = compartment == QStringLiteral("attributes");
   if (!attributes && compartment != QStringLiteral("operations"))
@@ -2973,12 +2978,22 @@ void ProjectController::setNodeCompartmentVisibility(
     after = false;
   else if (visibility != QStringLiteral("inherit"))
     return;
-  const std::optional<bool> before =
-      attributes ? node->showAttributes : node->showOperations;
-  if (before == after)
+
+  const QSet<QString> requestedNodeIds(nodeIds.cbegin(), nodeIds.cend());
+  QList<NodeCompartmentVisibilityChange> changes;
+  changes.reserve(requestedNodeIds.size());
+  for (const auto &node : diagram->nodes) {
+    if (!requestedNodeIds.contains(node.id))
+      continue;
+    const std::optional<bool> before =
+        attributes ? node.showAttributes : node.showOperations;
+    if (before != after)
+      changes.append({node.id, before, after});
+  }
+  if (changes.isEmpty())
     return;
   pushCommand(std::make_unique<SetNodeCompartmentVisibilityCommand>(
-      this, diagramId, nodeId, attributes, before, after));
+      this, attributes, diagramId, std::move(changes)));
 }
 
 void ProjectController::updatePresentationGeometries(

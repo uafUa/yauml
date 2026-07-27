@@ -1140,6 +1140,21 @@ void DiagramCanvasTests::multiSelectionToolboxTracksArrangementCommands() {
   canvas.press({440.0, 140.0}, Qt::ControlModifier);
   canvas.release({440.0, 140.0}, Qt::ControlModifier);
   QCOMPARE(canvas.selectedNodeCount(), 2);
+  QCOMPARE(canvas.selectedAttributesVisibility(), QStringLiteral("inherit"));
+
+  canvas.setSelectedCompartmentVisibility(QStringLiteral("attributes"),
+                                          QStringLiteral("hide"));
+  QCOMPARE(canvas.selectedAttributesVisibility(), QStringLiteral("hide"));
+  for (const auto &node : controller.data().diagrams.first().nodes)
+    QVERIFY(node.showAttributes == std::optional<bool>(false));
+  controller.undo();
+  QCOMPARE(canvas.selectedAttributesVisibility(), QStringLiteral("inherit"));
+
+  controller.setNodeCompartmentVisibility(
+      controller.data().diagrams.first().id, nodes.at(0).id,
+      QStringLiteral("attributes"), QStringLiteral("show"));
+  QCOMPARE(canvas.selectedAttributesVisibility(), QStringLiteral("mixed"));
+  controller.undo();
 
   // The arrangement surface is contextual: it appears over the selected
   // group, not merely because several nodes happen to be selected.

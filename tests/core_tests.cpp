@@ -1812,30 +1812,37 @@ void CoreTests::bulkDiagramPlacementIsOneUndoableCommand() {
 void CoreTests::diagramCompartmentVisibilityPersistsAndIsUndoable() {
   ProjectController controller;
   const QString diagramId = controller.data().diagrams.first().id;
-  const QString elementId =
+  const QString firstElementId =
       controller.addElement(QStringLiteral("class"), diagramId);
-  const QString nodeId = controller.data().diagrams.first().nodes.first().id;
+  controller.addElement(QStringLiteral("struct"), diagramId);
+  const auto nodes = controller.data().diagrams.first().nodes;
+  const QStringList nodeIds = {nodes.at(0).id, nodes.at(1).id};
 
   controller.setDiagramCompartmentVisible(diagramId,
                                           QStringLiteral("attributes"), false);
   QCOMPARE(controller.data().diagrams.first().showAttributes, false);
-  controller.setNodeCompartmentVisibility(
-      diagramId, nodeId, QStringLiteral("attributes"), QStringLiteral("show"));
-  controller.setNodeCompartmentVisibility(
-      diagramId, nodeId, QStringLiteral("operations"), QStringLiteral("hide"));
+  controller.setNodesCompartmentVisibility(
+      diagramId, nodeIds, QStringLiteral("attributes"),
+      QStringLiteral("show"));
+  controller.setNodesCompartmentVisibility(
+      diagramId, nodeIds, QStringLiteral("operations"), QStringLiteral("hide"));
 
-  const auto *node = findNode(controller.data().diagrams.first(), nodeId);
-  QVERIFY(node);
-  QVERIFY(node->showAttributes == std::optional<bool>(true));
-  QVERIFY(node->showOperations == std::optional<bool>(false));
+  for (const QString &nodeId : nodeIds) {
+    const auto *node = findNode(controller.data().diagrams.first(), nodeId);
+    QVERIFY(node);
+    QVERIFY(node->showAttributes == std::optional<bool>(true));
+    QVERIFY(node->showOperations == std::optional<bool>(false));
+  }
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Set selected operations visibility"));
   controller.undo();
-  node = findNode(controller.data().diagrams.first(), nodeId);
-  QVERIFY(node);
-  QVERIFY(!node->showOperations);
+  for (const QString &nodeId : nodeIds)
+    QVERIFY(!findNode(controller.data().diagrams.first(), nodeId)
+                 ->showOperations);
   controller.redo();
-  QVERIFY(
-      findNode(controller.data().diagrams.first(), nodeId)->showOperations ==
-      std::optional<bool>(false));
+  for (const QString &nodeId : nodeIds)
+    QVERIFY(findNode(controller.data().diagrams.first(), nodeId)
+                ->showOperations == std::optional<bool>(false));
 
   QTemporaryDir temporary;
   QVERIFY(temporary.isValid());
@@ -1843,7 +1850,7 @@ void CoreTests::diagramCompartmentVisibilityPersistsAndIsUndoable() {
   const LoadOutcome loaded = ProjectSerializer::load(temporary.path());
   QVERIFY(loaded.ok);
   QCOMPARE(loaded.project, controller.data());
-  QCOMPARE(findElement(loaded.project, elementId)->attributes.size(), 1);
+  QCOMPARE(findElement(loaded.project, firstElementId)->attributes.size(), 1);
 }
 
 void CoreTests::relatedTypeNeighborhoodActionsAreDirectionalAndUndoable() {
