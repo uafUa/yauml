@@ -1637,6 +1637,7 @@ void DiagramCanvas::setProject(ProjectController *project) {
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
   clearConnectorToolboxCandidate(true);
+  clearPresentationToolboxCandidate(true);
   if (m_project)
     disconnect(m_project, nullptr, this, nullptr);
   m_project = project;
@@ -1645,6 +1646,7 @@ void DiagramCanvas::setProject(ProjectController *project) {
       clearRelationshipToolboxCandidate();
       refreshArrangementToolboxAnchor();
       refreshConnectorToolboxAnchor();
+      refreshPresentationToolboxAnchor();
       m_sceneDirty = true;
       m_textDirty = true;
       if (!m_selectedNodes.isEmpty() || !m_selectedConnector.isEmpty() ||
@@ -1829,6 +1831,22 @@ QString DiagramCanvas::connectorToolboxConnectorId() const {
 
 QPointF DiagramCanvas::connectorToolboxViewAnchor() const {
   return m_connectorToolboxViewAnchor;
+}
+
+bool DiagramCanvas::presentationToolboxCandidate() const {
+  return m_presentationToolboxCandidate;
+}
+
+QString DiagramCanvas::presentationToolboxPresentationId() const {
+  return m_presentationToolboxPresentationId;
+}
+
+QString DiagramCanvas::presentationToolboxKind() const {
+  return m_presentationToolboxKind;
+}
+
+QPointF DiagramCanvas::presentationToolboxViewAnchor() const {
+  return m_presentationToolboxViewAnchor;
 }
 
 QString DiagramCanvas::connectorInteractionPrompt() const {
@@ -2609,6 +2627,115 @@ void DiagramCanvas::clearConnectorToolboxCandidate(bool clearAnchor) {
   emit connectorToolboxCandidateChanged();
 }
 
+void DiagramCanvas::updatePresentationToolboxCandidate(
+    const QPointF &viewPoint) {
+  if (m_interaction != Interaction::None) {
+    clearPresentationToolboxCandidate();
+    return;
+  }
+
+  const QPointF scenePoint = toScene(viewPoint);
+  QString candidateId;
+  QString candidateKind;
+  if (m_selectedNodes.size() == 1) {
+    const auto *node = hitNode(scenePoint);
+    if (node && m_selectedNodes.contains(node->id)) {
+      const QRectF nodeRect = nodeGeometry(*node);
+      const QRectF resizeHandle(nodeRect.right() - 14.0 / m_zoom,
+                                nodeRect.bottom() - 14.0 / m_zoom,
+                                14.0 / m_zoom, 14.0 / m_zoom);
+      if (!resizeHandle.contains(scenePoint)) {
+        candidateId = node->id;
+        candidateKind = QStringLiteral("node");
+      }
+    }
+  } else if (!m_selectedContainer.isEmpty()) {
+    const auto *diagramData = diagram();
+    const auto *container =
+        diagramData ? findContainer(*diagramData, m_selectedContainer)
+                    : nullptr;
+    if (container && !hitNode(scenePoint)) {
+      const QRectF geometry = containerGeometry(*container);
+      const QRectF visibleGeometry = visibleContainerGeometry(*container);
+      const qreal headerHeight =
+          container->subjectKind == QStringLiteral("package")
+              ? 24.0
+              : kContainerHeaderHeight;
+      const QRectF visibleHeader = QRectF(geometry.left(), geometry.top(),
+                                          geometry.width(), headerHeight)
+                                       .intersected(visibleGeometry);
+      if (visibleHeader.contains(scenePoint)) {
+        candidateId = container->id;
+        candidateKind = QStringLiteral("container");
+      }
+    }
+  }
+
+  if (candidateId.isEmpty()) {
+    clearPresentationToolboxCandidate();
+    return;
+  }
+
+  const bool becameCandidate = !m_presentationToolboxCandidate;
+  const bool targetChanged =
+      m_presentationToolboxPresentationId != candidateId ||
+      m_presentationToolboxKind != candidateKind;
+  const QPointF previousAnchor = m_presentationToolboxViewAnchor;
+  m_presentationToolboxCandidate = true;
+  m_presentationToolboxPresentationId = candidateId;
+  m_presentationToolboxKind = candidateKind;
+  refreshPresentationToolboxAnchor();
+  if ((becameCandidate || targetChanged) && m_presentationToolboxCandidate &&
+      previousAnchor == m_presentationToolboxViewAnchor)
+    emit presentationToolboxCandidateChanged();
+}
+
+void DiagramCanvas::refreshPresentationToolboxAnchor() {
+  const auto *diagramData = diagram();
+  QRectF visibleGeometry;
+  if (diagramData && m_presentationToolboxKind == QStringLiteral("node") &&
+      m_selectedNodes.size() == 1 &&
+      m_selectedNodes.contains(m_presentationToolboxPresentationId)) {
+    if (const auto *node =
+            findNode(*diagramData, m_presentationToolboxPresentationId))
+      visibleGeometry = visibleNodeGeometry(*node);
+  } else if (diagramData &&
+             m_presentationToolboxKind == QStringLiteral("container") &&
+             m_selectedContainer == m_presentationToolboxPresentationId) {
+    if (const auto *container =
+            findContainer(*diagramData, m_presentationToolboxPresentationId))
+      visibleGeometry = visibleContainerGeometry(*container);
+  }
+
+  if (visibleGeometry.isEmpty()) {
+    clearPresentationToolboxCandidate(true);
+    return;
+  }
+  const QRectF viewBounds = toView(visibleGeometry);
+  const QPointF nextAnchor(viewBounds.center().x(), viewBounds.top());
+  if (m_presentationToolboxViewAnchor == nextAnchor)
+    return;
+  m_presentationToolboxViewAnchor = nextAnchor;
+  emit presentationToolboxCandidateChanged();
+}
+
+void DiagramCanvas::clearPresentationToolboxCandidate(bool clearAnchor) {
+  const bool changed =
+      m_presentationToolboxCandidate ||
+      (clearAnchor && (!m_presentationToolboxPresentationId.isEmpty() ||
+                       !m_presentationToolboxKind.isEmpty() ||
+                       !m_presentationToolboxViewAnchor.isNull()));
+  if (!changed)
+    return;
+  m_presentationToolboxCandidate = false;
+  if (clearAnchor) {
+    m_presentationToolboxPresentationId.clear();
+    m_presentationToolboxKind.clear();
+    m_presentationToolboxViewAnchor = {};
+  }
+  emit presentationToolboxCandidateChanged();
+}
+
 void DiagramCanvas::updateConnectorGesture(const QPointF &scenePoint,
                                            bool suppressSnapping) {
   m_connectorGestureTargetPoint = scenePoint;
@@ -3226,6 +3353,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
   clearConnectorToolboxCandidate(true);
+  clearPresentationToolboxCandidate(true);
   m_alignmentGuides.clear();
   m_pressView = event->position();
   m_pressScene = toScene(m_pressView);
@@ -3694,12 +3822,19 @@ void DiagramCanvas::hoverMoveEvent(QHoverEvent *event) {
   if (m_relationshipToolboxCandidate) {
     clearArrangementToolboxCandidate();
     clearConnectorToolboxCandidate();
+    clearPresentationToolboxCandidate();
   } else {
     updateConnectorToolboxCandidate(event->position());
-    if (m_connectorToolboxCandidate)
+    if (m_connectorToolboxCandidate) {
       clearArrangementToolboxCandidate();
-    else
+      clearPresentationToolboxCandidate();
+    } else {
       updateArrangementToolboxCandidate(event->position());
+      if (m_arrangementToolboxCandidate)
+        clearPresentationToolboxCandidate();
+      else
+        updatePresentationToolboxCandidate(event->position());
+    }
   }
   event->accept();
 }
@@ -3708,6 +3843,7 @@ void DiagramCanvas::hoverLeaveEvent(QHoverEvent *event) {
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate();
   clearConnectorToolboxCandidate();
+  clearPresentationToolboxCandidate();
   event->accept();
 }
 
@@ -3715,6 +3851,7 @@ void DiagramCanvas::wheelEvent(QWheelEvent *event) {
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
   clearConnectorToolboxCandidate(true);
+  clearPresentationToolboxCandidate(true);
   const QPointF before = toScene(event->position());
   const qreal factor = event->angleDelta().y() > 0 ? 1.12 : 1.0 / 1.12;
   m_zoom = std::clamp(m_zoom * factor, 0.2, 4.0);
@@ -4129,6 +4266,91 @@ void DiagramCanvas::editSelectedConnectorAnnotation(
                      viewTarget.height(), fontPixelSize, false);
 }
 
+void DiagramCanvas::editSelectedPresentationName() {
+  const auto *diagramData = diagram();
+  if (!diagramData || !m_project)
+    return;
+
+  QString objectId;
+  QString currentName;
+  QRectF sceneTarget;
+  QRectF visibleGeometry;
+  if (m_selectedNodes.size() == 1) {
+    const auto *node = findNode(*diagramData, *m_selectedNodes.constBegin());
+    const auto *element =
+        node ? findElement(m_project->data(), node->elementId) : nullptr;
+    if (!node || !element)
+      return;
+    objectId = element->id;
+    currentName = element->name;
+    visibleGeometry = visibleNodeGeometry(*node);
+    const QString stereotype = stereotype_catalog::displayText(
+        m_project->data(), element->stereotypeIds);
+    sceneTarget =
+        QRectF(nodeGeometry(*node).left() + 4.0,
+               nodeGeometry(*node).top() +
+                   (stereotype.isEmpty() ? 0.0 : kLineHeight) + 3.0,
+               nodeGeometry(*node).width() - 8.0, kHeaderHeight - 6.0);
+  } else if (!m_selectedContainer.isEmpty()) {
+    const auto *container = findContainer(*diagramData, m_selectedContainer);
+    if (!container)
+      return;
+    visibleGeometry = visibleContainerGeometry(*container);
+    const QRectF geometry = containerGeometry(*container);
+    const qreal headerHeight =
+        container->subjectKind == QStringLiteral("package")
+            ? 24.0
+            : kContainerHeaderHeight;
+    qreal titleTop = geometry.top() + 3.0;
+    qreal titleHeight = headerHeight - 6.0;
+    if (container->subjectKind == QStringLiteral("folder")) {
+      const auto *folder =
+          findBrowserFolder(m_project->data(), container->subjectId);
+      if (!folder)
+        return;
+      objectId = folder->id;
+      currentName = folder->name;
+    } else {
+      const auto *package =
+          findElement(m_project->data(), container->subjectId);
+      if (!package)
+        return;
+      objectId = package->id;
+      currentName = package->name;
+      const QString stereotype = stereotype_catalog::displayText(
+          m_project->data(), package->stereotypeIds);
+      if (!stereotype.isEmpty()) {
+        titleTop = geometry.top() + 10.0;
+        titleHeight = headerHeight - 10.0;
+      }
+    }
+    sceneTarget = QRectF(geometry.left() + 4.0, titleTop,
+                         geometry.width() - 8.0, titleHeight);
+  } else {
+    return;
+  }
+
+  sceneTarget = sceneTarget.intersected(visibleGeometry);
+  if (sceneTarget.isEmpty()) {
+    // A clipped child can remain selected while its header is outside the
+    // container viewport. Keep the command usable by placing the editor in the
+    // first visible strip of that presentation.
+    sceneTarget =
+        QRectF(visibleGeometry.left() + 4.0, visibleGeometry.top() + 2.0,
+               qMax(24.0, visibleGeometry.width() - 8.0),
+               qMin(kHeaderHeight - 4.0, visibleGeometry.height() - 4.0));
+  }
+  if (sceneTarget.width() <= 0.0 || sceneTarget.height() <= 0.0)
+    return;
+
+  const QRectF viewTarget = toView(sceneTarget);
+  const qreal fontPixelSize =
+      qMax(1.0, QFontInfo(QGuiApplication::font()).pixelSize() * m_zoom);
+  emit editRequested(objectId, QStringLiteral("name"), -1, currentName,
+                     viewTarget.x(), viewTarget.y(), viewTarget.width(),
+                     viewTarget.height(), fontPixelSize, true);
+}
+
 void DiagramCanvas::setSelectedConnectorRouting(const QString &routing) {
   if (!m_project || m_selectedConnector.isEmpty())
     return;
@@ -4300,6 +4522,7 @@ void DiagramCanvas::clearCanvasSelection() {
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
   clearConnectorToolboxCandidate(true);
+  clearPresentationToolboxCandidate(true);
   m_selectedNodes.clear();
   m_selectedNodeOrder.clear();
   m_selectedContainer.clear();
@@ -4334,6 +4557,7 @@ void DiagramCanvas::selectNode(const QString &nodeId, bool toggle) {
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
   clearConnectorToolboxCandidate(true);
+  clearPresentationToolboxCandidate(true);
   m_selectedContainer.clear();
   if (toggle) {
     if (m_selectedNodes.contains(nodeId)) {
@@ -4364,6 +4588,7 @@ void DiagramCanvas::selectConnector(const QString &connectorId,
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
   clearConnectorToolboxCandidate(true);
+  clearPresentationToolboxCandidate(true);
   m_selectedContainer.clear();
   m_selectedConnector = connectorId;
   m_selectedBendPoint = -1;
@@ -4468,6 +4693,7 @@ void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
     clearRelationshipToolboxCandidate();
     clearArrangementToolboxCandidate();
     clearConnectorToolboxCandidate();
+    clearPresentationToolboxCandidate();
     emit contextToolboxesDismissRequested();
     event->accept();
     return;

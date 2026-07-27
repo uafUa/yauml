@@ -249,14 +249,14 @@ history memory grow with total project size rather than the size of each edit.
   presentations resume inheritance. The registry and every assignment persist
   in project JSON5 rather than application preferences.
 
-### 3.8 Contextual hover toolboxes — relationship, multi-selection, and
-connector toolboxes implemented; expansion planned
+### 3.8 Contextual hover toolboxes — core target providers implemented;
+customization planned
 
 - Keep contextual toolboxes task-specific instead of building one universal
   floating toolbar. The implemented selected-edge toolbox remains dedicated to
-  starting relationships. Later providers cover a selected node or container,
-  a multi-selection, and a selected connector, each exposing only commands
-  applicable to that target and selection state.
+  starting relationships. Separate providers cover a selected node or
+  container, a multi-selection, and a selected connector, each exposing only
+  commands applicable to that target and selection state.
 - Reuse the centralized command/action catalog so toolbox buttons, context
   menus, keyboard commands, accessible names, and SVG icons invoke the same
   command definitions. Do not duplicate mutation logic in QML.
@@ -275,8 +275,12 @@ connector toolboxes implemented; expansion planned
   automatic placement before opening the editor. The toolbox remains stable
   while crossing its hover bridge and follows the connector midpoint after a
   route change.
-- The next expansion adds high-frequency node/container commands such as edit
-  name, fit to content, style, and wrap in parent namespace. Destructive and
+- The selected-node/container expansion is implemented. Hovering a selected
+  node body or selected container header exposes direct name editing, fit to
+  content, a lightweight named-style menu with access to style management, and
+  wrapping in the direct parent namespace when applicable. The provider keeps
+  relationship edges and multi-selection arrangement at higher priority, and
+  container bodies do not claim hover from their children. Destructive and
   modal commands remain in context menus until usage proves that placing them
   in a hover surface is beneficial.
 - Use one shared visibility state machine: the toolbox appears only for the
@@ -285,9 +289,10 @@ connector toolboxes implemented; expansion planned
   dismisses on Escape, selection change, diagram deactivation, or a short
   pointer-leave delay. Keyboard focus and touch/pen invocation must not depend
   on hover.
-- Implement the remaining providers in this order: node/container commands,
-  then user customization. Each slice includes multi-window focus, zoom,
-  clipping, accessibility, and command undo/redo tests.
+- The remaining expansion is user customization: allow users to choose which
+  applicable non-destructive commands appear in each toolbox without changing
+  the provider priority or interaction rules. Include multi-window focus,
+  zoom, clipping, accessibility, and command undo/redo tests in that slice.
 
 ### 3.9 Relationship ends, movable annotations, and stereotypes — implemented
 

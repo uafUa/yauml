@@ -134,6 +134,7 @@ private slots:
   void relationshipToolboxRequiresSelectedEdgeAndCreatesConnector();
   void multiSelectionToolboxTracksArrangementCommands();
   void connectorToolboxEditsRoutingAndAnnotations();
+  void presentationToolboxTracksNodesContainersAndPriorities();
   void connectorEndpointsDragToReattachAndCancel();
   void connectorPortsSnapAndRemainFreelyPlaceable();
   void liveDragSnappingIsUndoableAndAltSuppressesIt();
@@ -1064,6 +1065,88 @@ void DiagramCanvasTests::connectorToolboxEditsRoutingAndAnnotations() {
 
   canvas.key(Qt::Key_Escape);
   QVERIFY(!canvas.connectorToolboxCandidate());
+}
+
+void DiagramCanvasTests::
+    presentationToolboxTracksNodesContainersAndPriorities() {
+  ProjectController controller;
+  populate(controller, 2);
+  useStandardInteractionGeometry(controller);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto initialNodes = controller.data().diagrams.first().nodes;
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+
+  canvas.press({190.0, 140.0});
+  canvas.release({190.0, 140.0});
+  canvas.hover({190.0, 140.0});
+  QVERIFY(canvas.presentationToolboxCandidate());
+  QCOMPARE(canvas.presentationToolboxPresentationId(), initialNodes.at(0).id);
+  QCOMPARE(canvas.presentationToolboxKind(), QStringLiteral("node"));
+  QCOMPARE(canvas.presentationToolboxViewAnchor(), QPointF(190.0, 80.0));
+
+  QSignalSpy edits(&canvas, &DiagramCanvas::editRequested);
+  canvas.editSelectedPresentationName();
+  QCOMPARE(edits.count(), 1);
+  QCOMPARE(edits.first().at(0).toString(), initialNodes.at(0).elementId);
+  QCOMPARE(edits.first().at(1).toString(), QStringLiteral("name"));
+  QVERIFY(edits.first().at(6).toReal() > 0.0);
+  QVERIFY(edits.first().at(7).toReal() > 0.0);
+
+  // A selected edge belongs exclusively to relationship creation.
+  canvas.hover({300.0, 140.0}, {190.0, 140.0});
+  QVERIFY(canvas.relationshipToolboxCandidate());
+  QVERIFY(!canvas.presentationToolboxCandidate());
+
+  // Multi-selection uses the arrangement palette rather than the single
+  // presentation commands.
+  canvas.press({440.0, 140.0}, Qt::ControlModifier);
+  canvas.release({440.0, 140.0}, Qt::ControlModifier);
+  canvas.hover({440.0, 140.0});
+  QVERIFY(canvas.arrangementToolboxCandidate());
+  QVERIFY(!canvas.presentationToolboxCandidate());
+
+  canvas.clearCanvasSelection();
+  const QString folderId = controller.addBrowserFolder(
+      QStringLiteral("model"), {}, QStringLiteral("Toolbox group"));
+  const QString folderJson = QString::fromUtf8(
+      QJsonDocument(QJsonArray{QJsonObject{
+                        {QStringLiteral("kind"), QStringLiteral("folder")},
+                        {QStringLiteral("id"), folderId}}})
+          .toJson(QJsonDocument::Compact));
+  QCOMPARE(
+      controller.addTreeItemsToDiagram(diagramId, {}, folderJson, 650.0, 300.0),
+      1);
+  const auto &container =
+      controller.data().diagrams.first().containers.constLast();
+  const QPointF viewPan(30.0, 30.0);
+  const QPointF headerPoint =
+      container.geometry.topLeft() + QPointF(12.0, 10.0) + viewPan;
+  canvas.press(headerPoint);
+  canvas.release(headerPoint);
+  QVERIFY(canvas.containerSelected());
+  canvas.hover(headerPoint);
+  QVERIFY(canvas.presentationToolboxCandidate());
+  QCOMPARE(canvas.presentationToolboxPresentationId(), container.id);
+  QCOMPARE(canvas.presentationToolboxKind(), QStringLiteral("container"));
+  QCOMPARE(canvas.presentationToolboxViewAnchor(),
+           QPointF(container.geometry.center().x() + viewPan.x(),
+                   container.geometry.top() + viewPan.y()));
+
+  edits.clear();
+  canvas.editSelectedPresentationName();
+  QCOMPARE(edits.count(), 1);
+  QCOMPARE(edits.first().at(0).toString(), folderId);
+  QCOMPARE(edits.first().at(1).toString(), QStringLiteral("name"));
+
+  // Container interiors remain diagram workspace; only the selected frame
+  // header advertises container-level commands.
+  canvas.hover(container.geometry.center() + viewPan, headerPoint);
+  QVERIFY(!canvas.presentationToolboxCandidate());
+  canvas.hover(headerPoint, container.geometry.center() + viewPan);
+  QVERIFY(canvas.presentationToolboxCandidate());
+  canvas.key(Qt::Key_Escape);
+  QVERIFY(!canvas.presentationToolboxCandidate());
 }
 
 void DiagramCanvasTests::connectorEndpointsDragToReattachAndCancel() {

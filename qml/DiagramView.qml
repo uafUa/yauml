@@ -176,6 +176,7 @@ Item {
             root.dismissRelationshipToolbox()
             arrangementToolbox.dismiss()
             connectorToolbox.dismiss()
+            presentationToolbox.dismiss()
         }
 
         function onCanvasSelectionChanged() {
@@ -186,12 +187,16 @@ Item {
                 arrangementToolbox.dismiss()
             if (!canvas.connectorSelected)
                 connectorToolbox.dismiss()
+            if (canvas.selectedNodeCount !== 1
+                    && !canvas.containerSelected)
+                presentationToolbox.dismiss()
         }
 
         function onContextToolboxesDismissRequested() {
             root.dismissRelationshipToolbox()
             arrangementToolbox.dismiss()
             connectorToolbox.dismiss()
+            presentationToolbox.dismiss()
         }
     }
 
@@ -249,6 +254,16 @@ Item {
         onStyleChosen: function(styleId) {
             canvas.assignStyleToSelection(styleId)
         }
+    }
+
+    StyleAssignmentMenu {
+        id: presentationStyleQuickMenu
+        assignedStyleId: canvas.selectedStyleId
+        onStyleChosen: function(styleId) {
+            canvas.assignStyleToSelection(styleId)
+        }
+        onManageRequested: presentationStyleDialog.openFor(
+                               canvas.selectedStyleId)
     }
 
     ProjectStereotypeDialog {
@@ -902,6 +917,92 @@ Item {
                 ToolTip.text: Accessible.name
                 onClicked: {
                     canvas.resetSelectedConnectorAnnotationPositions()
+                    canvas.forceActiveFocus()
+                }
+            }
+        }
+    }
+
+    ContextToolboxFrame {
+        id: presentationToolbox
+        objectName: "presentationToolbox"
+        candidate: canvas.presentationToolboxCandidate
+                   && !editor.visible
+        candidateKey: canvas.presentationToolboxKind + ":"
+                      + canvas.presentationToolboxPresentationId
+        anchor: canvas.presentationToolboxViewAnchor
+        placement: "top"
+        trackAnchorWhileShown: true
+
+        Row {
+            spacing: 2
+
+            ToolButton {
+                width: 38
+                height: 32
+                text: qsTr("Aa")
+                Accessible.name: qsTr("Edit name")
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: {
+                    canvas.editSelectedPresentationName()
+                    presentationToolbox.dismiss()
+                }
+            }
+
+            CatalogToolButton {
+                catalogId: "arrange.fitToContent"
+                width: 38
+                height: 32
+                text: qsTr("Fit")
+                display: icon.source.toString().length > 0
+                         ? AbstractButton.IconOnly
+                         : AbstractButton.TextOnly
+                Accessible.name: fitSelectionAction.text
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: {
+                    fitSelectionAction.trigger()
+                    canvas.forceActiveFocus()
+                }
+            }
+
+            CatalogToolButton {
+                id: presentationStyleButton
+                catalogId: "style.assignNamed"
+                width: 38
+                height: 32
+                text: qsTr("Style")
+                display: icon.source.toString().length > 0
+                         ? AbstractButton.IconOnly
+                         : AbstractButton.TextOnly
+                Accessible.name: qsTr("Choose style")
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: {
+                    const menuPoint = mapToItem(root, 0, height)
+                    presentationStyleQuickMenu.x = menuPoint.x
+                    presentationStyleQuickMenu.y = menuPoint.y
+                    presentationToolbox.dismiss()
+                    presentationStyleQuickMenu.open()
+                }
+            }
+
+            CatalogToolButton {
+                catalogId: "presentation.wrapInNamespace"
+                visible: canvas.presentationToolboxKind === "node"
+                         && canvas.canWrapSelectionInPackage
+                width: visible ? 38 : 0
+                height: 32
+                text: qsTr("Wrap")
+                display: icon.source.toString().length > 0
+                         ? AbstractButton.IconOnly
+                         : AbstractButton.TextOnly
+                Accessible.name: qsTr("Wrap in parent namespace")
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: {
+                    canvas.wrapSelectionInPackage()
                     canvas.forceActiveFocus()
                 }
             }

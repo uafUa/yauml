@@ -96,6 +96,16 @@ class DiagramCanvas : public QQuickItem {
           NOTIFY connectorToolboxCandidateChanged)
   Q_PROPERTY(QPointF connectorToolboxViewAnchor READ connectorToolboxViewAnchor
                  NOTIFY connectorToolboxCandidateChanged)
+  Q_PROPERTY(bool presentationToolboxCandidate READ presentationToolboxCandidate
+                 NOTIFY presentationToolboxCandidateChanged)
+  Q_PROPERTY(QString presentationToolboxPresentationId READ
+                 presentationToolboxPresentationId NOTIFY
+                     presentationToolboxCandidateChanged)
+  Q_PROPERTY(QString presentationToolboxKind READ presentationToolboxKind NOTIFY
+                 presentationToolboxCandidateChanged)
+  Q_PROPERTY(
+      QPointF presentationToolboxViewAnchor READ presentationToolboxViewAnchor
+          NOTIFY presentationToolboxCandidateChanged)
 
 public:
   explicit DiagramCanvas(QQuickItem *parent = nullptr);
@@ -143,6 +153,10 @@ public:
   bool connectorToolboxCandidate() const;
   QString connectorToolboxConnectorId() const;
   QPointF connectorToolboxViewAnchor() const;
+  bool presentationToolboxCandidate() const;
+  QString presentationToolboxPresentationId() const;
+  QString presentationToolboxKind() const;
+  QPointF presentationToolboxViewAnchor() const;
 
   Q_INVOKABLE void fitToContent();
   Q_INVOKABLE void addElementsAt(const QStringList &elementIds, qreal x,
@@ -161,6 +175,7 @@ public:
   Q_INVOKABLE void resetSelectedConnectorAnnotationPositions();
   Q_INVOKABLE void
   editSelectedConnectorAnnotation(const QString &annotationField);
+  Q_INVOKABLE void editSelectedPresentationName();
   Q_INVOKABLE void setSelectedConnectorRouting(const QString &routing);
   Q_INVOKABLE void setSelectedPortSnapPoints(int horizontalPointCount,
                                              int verticalPointCount);
@@ -197,6 +212,7 @@ signals:
   void relationshipToolboxCandidateChanged();
   void arrangementToolboxCandidateChanged();
   void connectorToolboxCandidateChanged();
+  void presentationToolboxCandidateChanged();
   // Actual pointer/selection interactions dismiss every contextual surface.
   // Model state changes deliberately do not: a toolbox remains usable for a
   // sequence of compact commands while the selection stays unchanged.
@@ -309,6 +325,9 @@ private:
   void updateConnectorToolboxCandidate(const QPointF &viewPoint);
   void refreshConnectorToolboxAnchor();
   void clearConnectorToolboxCandidate(bool clearAnchor = false);
+  void updatePresentationToolboxCandidate(const QPointF &viewPoint);
+  void refreshPresentationToolboxAnchor();
+  void clearPresentationToolboxCandidate(bool clearAnchor = false);
   void updateConnectorGesture(const QPointF &scenePoint, bool suppressSnapping);
   void commitConnectorGesture(const QPointF &scenePoint, bool suppressSnapping);
   void cancelConnectorGesture();
@@ -402,6 +421,10 @@ private:
   bool m_connectorToolboxCandidate = false;
   QString m_connectorToolboxConnectorId;
   QPointF m_connectorToolboxViewAnchor;
+  bool m_presentationToolboxCandidate = false;
+  QString m_presentationToolboxPresentationId;
+  QString m_presentationToolboxKind;
+  QPointF m_presentationToolboxViewAnchor;
   QVector<QLineF> m_alignmentGuides;
   quint64 m_themeRevision = 0;
 };
