@@ -35,10 +35,11 @@ std::optional<ArrangementOperation>
 arrangementOperationFromKey(const QString &key);
 QString arrangementDescription(ArrangementOperation operation);
 
-// Alignment uses the selected set's outer bounds. Size matching uses the last
-// node in selection order as the reference. Distribution keeps the first
-// spatial node fixed and uses the smallest positive adjacent edge-to-edge gap;
-// the supplied fallback is used when all selected nodes overlap or touch.
+// Alignment and size matching use the last node in selection order as the
+// reference, allowing the user to choose the key object by selecting or
+// clicking it last. Distribution is spatial: it keeps the first positioned
+// node fixed and uses the smallest positive adjacent edge-to-edge gap; the
+// supplied fallback is used when all selected nodes overlap or touch.
 QList<DiagramNodeGeometry>
 arrangeDiagramNodes(const QList<DiagramNodeGeometry> &nodes,
                     ArrangementOperation operation,

@@ -41,13 +41,6 @@ constexpr std::array kOperations = {
                    "Distribute vertically"},
 };
 
-QRectF selectionBounds(const QList<DiagramNodeGeometry> &nodes) {
-  QRectF bounds = nodes.first().geometry;
-  for (qsizetype index = 1; index < nodes.size(); ++index)
-    bounds = bounds.united(nodes.at(index).geometry);
-  return bounds;
-}
-
 template <typename Center, typename Start, typename End, typename Move>
 void distribute(QList<DiagramNodeGeometry> &nodes, Center center, Start start,
                 End end, Move move, qreal fallbackGap) {
@@ -112,47 +105,46 @@ arrangeDiagramNodes(const QList<DiagramNodeGeometry> &nodes,
     return nodes;
 
   QList<DiagramNodeGeometry> result = nodes;
-  const QRectF bounds = selectionBounds(nodes);
-  const QRectF &sizeReference = nodes.last().geometry;
+  const QRectF &reference = nodes.last().geometry;
 
   switch (operation) {
   case ArrangementOperation::AlignLeft:
     for (auto &node : result)
-      node.geometry.moveLeft(bounds.left());
+      node.geometry.moveLeft(reference.left());
     break;
   case ArrangementOperation::AlignHorizontalCenter:
     for (auto &node : result)
       node.geometry.moveCenter(
-          {bounds.center().x(), node.geometry.center().y()});
+          {reference.center().x(), node.geometry.center().y()});
     break;
   case ArrangementOperation::AlignRight:
     for (auto &node : result)
-      node.geometry.moveRight(bounds.right());
+      node.geometry.moveRight(reference.right());
     break;
   case ArrangementOperation::AlignTop:
     for (auto &node : result)
-      node.geometry.moveTop(bounds.top());
+      node.geometry.moveTop(reference.top());
     break;
   case ArrangementOperation::AlignVerticalCenter:
     for (auto &node : result)
       node.geometry.moveCenter(
-          {node.geometry.center().x(), bounds.center().y()});
+          {node.geometry.center().x(), reference.center().y()});
     break;
   case ArrangementOperation::AlignBottom:
     for (auto &node : result)
-      node.geometry.moveBottom(bounds.bottom());
+      node.geometry.moveBottom(reference.bottom());
     break;
   case ArrangementOperation::MatchWidth:
     for (auto &node : result)
-      node.geometry.setWidth(sizeReference.width());
+      node.geometry.setWidth(reference.width());
     break;
   case ArrangementOperation::MatchHeight:
     for (auto &node : result)
-      node.geometry.setHeight(sizeReference.height());
+      node.geometry.setHeight(reference.height());
     break;
   case ArrangementOperation::MatchSize:
     for (auto &node : result)
-      node.geometry.setSize(sizeReference.size());
+      node.geometry.setSize(reference.size());
     break;
   case ArrangementOperation::DistributeHorizontally:
     distribute(

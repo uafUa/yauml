@@ -74,6 +74,7 @@ struct RenderNode {
   QStringList enumLiterals;
   RenderElementStyle style;
   bool selected = false;
+  bool selectionReference = false;
   QRectF clipRect;
   bool hasClip = false;
 };
@@ -1328,8 +1329,10 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
         vertices,
         {node.rect.left(), node.rect.top(), node.rect.width(), headerHeight},
         headerFill, node.clipRect, node.hasClip);
-    appendClippedBorder(vertices, node.rect, (node.selected ? 3.0 : 1.2) / zoom,
-                        border, node.clipRect, node.hasClip);
+    const qreal borderWidth =
+        node.selectionReference ? 4.5 : (node.selected ? 3.0 : 1.2);
+    appendClippedBorder(vertices, node.rect, borderWidth / zoom, border,
+                        node.clipRect, node.hasClip);
     if (detail > 0) {
       appendClippedAxisLine(
           vertices, QPointF(node.rect.left(), node.rect.top() + headerHeight),
@@ -1346,7 +1349,7 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
                               divider, node.clipRect, node.hasClip);
     }
     if (node.selected) {
-      const qreal handle = 9.0 / zoom;
+      const qreal handle = (node.selectionReference ? 11.0 : 9.0) / zoom;
       appendClippedRect(vertices,
                         {node.rect.right() - handle,
                          node.rect.bottom() - handle, handle, handle},
@@ -3006,7 +3009,10 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
              (*element)->enumLiterals,
              renderElementStyle(
                  project_style::effectiveStyleForNode(projectData, node)),
-             m_selectedNodes.contains(node.id), clip.rect, clip.active});
+             m_selectedNodes.contains(node.id),
+             m_selectedNodes.size() > 1 &&
+                 node.id == m_selectedNodeOrder.constLast(),
+             clip.rect, clip.active});
       }
       for (const auto &connector : d->connectors) {
         const auto relationship =
@@ -4796,6 +4802,12 @@ void DiagramCanvas::selectNode(const QString &nodeId, bool toggle) {
   } else if (!m_selectedNodes.contains(nodeId)) {
     m_selectedNodes = {nodeId};
     m_selectedNodeOrder = {nodeId};
+  } else {
+    // A plain click inside an existing multi-selection promotes that node to
+    // the reference position without discarding the rest of the selection.
+    // Alignment and size matching use the last selected node as their key.
+    m_selectedNodeOrder.removeAll(nodeId);
+    m_selectedNodeOrder.append(nodeId);
   }
   if (!toggle) {
     m_selectedConnector.clear();

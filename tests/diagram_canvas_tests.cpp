@@ -154,9 +154,16 @@ void DiagramCanvasTests::arrangementGeometryRulesAreDeterministic() {
 
   const auto aligned = ui::arrangeDiagramNodes(
       nodes, ui::ArrangementOperation::AlignHorizontalCenter, 10.0);
-  QCOMPARE(aligned.at(0).geometry.center().x(), 355.0);
-  QCOMPARE(aligned.at(1).geometry.center().x(), 355.0);
-  QCOMPARE(aligned.at(2).geometry.center().x(), 355.0);
+  QCOMPARE(aligned.at(0).geometry.center().x(), 600.0);
+  QCOMPARE(aligned.at(1).geometry.center().x(), 600.0);
+  QCOMPARE(aligned.at(2).geometry.center().x(), 600.0);
+
+  QList<ui::DiagramNodeGeometry> reversed = nodes;
+  std::reverse(reversed.begin(), reversed.end());
+  const auto alignedToReversedReference = ui::arrangeDiagramNodes(
+      reversed, ui::ArrangementOperation::AlignTop, 10.0);
+  for (const auto &node : alignedToReversedReference)
+    QCOMPARE(node.geometry.top(), nodes.first().geometry.top());
 
   const auto sameSize =
       ui::arrangeDiagramNodes(nodes, ui::ArrangementOperation::MatchSize, 10.0);
@@ -629,9 +636,9 @@ void DiagramCanvasTests::arrangementAndNudgingAreUndoableTransactions() {
 
   canvas.arrangeSelection(QStringLiteral("alignTop"));
   const auto &aligned = controller.data().diagrams.first().nodes;
-  QCOMPARE(aligned.at(0).geometry.top(), 50.0);
-  QCOMPARE(aligned.at(1).geometry.top(), 50.0);
-  QCOMPARE(aligned.at(2).geometry.top(), 50.0);
+  QCOMPARE(aligned.at(0).geometry.top(), 160.0);
+  QCOMPARE(aligned.at(1).geometry.top(), 160.0);
+  QCOMPARE(aligned.at(2).geometry.top(), 160.0);
   QCOMPARE(controller.undoText(), QStringLiteral("Align top"));
   controller.undo();
   QCOMPARE(controller.data().diagrams.first().nodes, beforeArrangement);
@@ -1160,10 +1167,23 @@ void DiagramCanvasTests::multiSelectionToolboxTracksArrangementCommands() {
   // The anchor follows the hovered item through committed geometry changes so
   // several operations can be performed without reselecting the group.
   canvas.arrangeSelection(QStringLiteral("alignLeft"));
-  QCOMPARE(canvas.arrangementToolboxViewAnchor(), QPointF(190.0, 80.0));
+  QCOMPARE(canvas.arrangementToolboxViewAnchor(), QPointF(440.0, 80.0));
+  const auto &alignedToLast = controller.data().diagrams.first().nodes;
+  QCOMPARE(alignedToLast.at(0).geometry.left(), nodes.at(1).geometry.left());
+  QCOMPARE(alignedToLast.at(1).geometry.left(), nodes.at(1).geometry.left());
   QVERIFY(controller.canUndo());
   controller.undo();
   QCOMPARE(canvas.arrangementToolboxViewAnchor(), QPointF(440.0, 80.0));
+
+  // Clicking an already-selected node makes it the new reference without
+  // dropping the rest of the selection.
+  canvas.press({190.0, 140.0});
+  canvas.release({190.0, 140.0});
+  QCOMPARE(canvas.selectedNodeCount(), 2);
+  canvas.arrangeSelection(QStringLiteral("alignLeft"));
+  const auto &alignedToPromoted = controller.data().diagrams.first().nodes;
+  QCOMPARE(alignedToPromoted.at(0).geometry.left(), nodes.at(0).geometry.left());
+  QCOMPARE(alignedToPromoted.at(1).geometry.left(), nodes.at(0).geometry.left());
 
   canvas.clearCanvasSelection();
   QVERIFY(!canvas.arrangementToolboxCandidate());
