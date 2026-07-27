@@ -173,6 +173,11 @@ is never overwritten.
 
 ## Diagram interaction
 
+- Type in the search field above the project tree to filter it incrementally.
+  Matching is case-insensitive and checks both visible labels and qualified
+  names. Use `*` for any sequence and `?` for one character; `Ctrl+F` focuses
+  the field and `Escape` clears it. Matching descendants retain their visible
+  hierarchy, and dragging a matched container still includes all its contents.
 - Use Ctrl-click or Shift-click in the project tree to select multiple model
   types, then drag any selected row onto a diagram. The types are placed as a
   grid at the drop point in one undoable action; relationships appear when both

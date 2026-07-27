@@ -104,6 +104,7 @@ private slots:
   void diagramDropSizingModes();
   void diagramLabelsReflectPackageContext();
   void projectTreeExtendedSelection();
+  void projectTreeIncrementalWildcardSearch();
   void projectTreeDeletionAndOrdering();
   void projectTreeQualifiedHierarchy();
   void nestedTypeReassignmentIsSemanticAndUndoable();
@@ -1722,6 +1723,85 @@ void CoreTests::projectTreeExtendedSelection() {
   tree->selectWithModifiers(&selection, third, Qt::ShiftModifier);
   QCOMPARE(tree->elementIdsForIndexes(selection.selectedRows()),
            QStringList({firstElement, secondElement, thirdElement}));
+}
+
+void CoreTests::projectTreeIncrementalWildcardSearch() {
+  ProjectController controller;
+  const auto addNamedElement = [&](const QString &type, const QString &name) {
+    const QString id = controller.addElement(type);
+    controller.selectObject(id, QStringLiteral("element"));
+    controller.setSelectedName(name);
+    return id;
+  };
+  const QString outer =
+      addNamedElement(QStringLiteral("class"), QStringLiteral("demo::Outer"));
+  const QString inner = addNamedElement(QStringLiteral("struct"),
+                                        QStringLiteral("demo::Outer::Inner"));
+  const QString service =
+      addNamedElement(QStringLiteral("class"), QStringLiteral("demo::Service"));
+  const QString other =
+      addNamedElement(QStringLiteral("class"), QStringLiteral("other::Thing"));
+  const QString diagramId = controller.data().diagrams.first().id;
+  controller.renameDiagram(diagramId, QStringLiteral("API Overview"));
+
+  ProjectTreeModel *tree = controller.treeModel();
+  QSignalSpy patternChanged(tree, &ProjectTreeModel::searchPatternChanged);
+  QCOMPARE(tree->rowCount(), 2);
+
+  tree->setSearchPattern(QStringLiteral("inner"));
+  QCOMPARE(patternChanged.count(), 1);
+  QCOMPARE(tree->searchPattern(), QStringLiteral("inner"));
+  QCOMPARE(tree->rowCount(), 1);
+  const QModelIndex modelRoot = tree->index(0, 0);
+  QCOMPARE(tree->data(modelRoot, Qt::DisplayRole).toString(),
+           QStringLiteral("Model"));
+  QVERIFY(tree->indexForObject(inner, QStringLiteral("element")).isValid());
+  QVERIFY(!tree->indexForObject(service, QStringLiteral("element")).isValid());
+  QVERIFY(
+      !tree->indexForObject(diagramId, QStringLiteral("diagram")).isValid());
+
+  // Ancestors remain visible for context. Their drag semantics continue to
+  // include hidden descendants, so search never changes the represented model.
+  const QModelIndex outerIndex =
+      tree->indexForObject(outer, QStringLiteral("element"));
+  QVERIFY(outerIndex.isValid());
+  const QModelIndex demoNamespace = outerIndex.parent();
+  QVERIFY(demoNamespace.isValid());
+  QCOMPARE(tree->elementIdsForIndexes({demoNamespace}),
+           QStringList({outer, inner, service}));
+
+  tree->setSearchPattern(QStringLiteral("*serv?ce"));
+  QVERIFY(tree->indexForObject(service, QStringLiteral("element")).isValid());
+  QVERIFY(!tree->indexForObject(inner, QStringLiteral("element")).isValid());
+  QVERIFY(!tree->indexForObject(other, QStringLiteral("element")).isValid());
+
+  // Qualified paths can be searched even though tree rows show only their
+  // unqualified labels.
+  tree->setSearchPattern(QStringLiteral("DEMO::*"));
+  QVERIFY(tree->indexForObject(outer, QStringLiteral("element")).isValid());
+  QVERIFY(tree->indexForObject(inner, QStringLiteral("element")).isValid());
+  QVERIFY(tree->indexForObject(service, QStringLiteral("element")).isValid());
+  QVERIFY(!tree->indexForObject(other, QStringLiteral("element")).isValid());
+
+  tree->setSearchPattern(QStringLiteral("api overview"));
+  QCOMPARE(tree->rowCount(), 1);
+  const QModelIndex diagramRoot = tree->index(0, 0);
+  QCOMPARE(tree->data(diagramRoot, Qt::DisplayRole).toString(),
+           QStringLiteral("Diagrams"));
+  QVERIFY(tree->indexForObject(diagramId, QStringLiteral("diagram")).isValid());
+  QVERIFY(!tree->indexForObject(outer, QStringLiteral("element")).isValid());
+
+  tree->setSearchPattern(QStringLiteral("no such item"));
+  QCOMPARE(tree->rowCount(), 0);
+  QVERIFY(
+      !tree->indexForObject(diagramId, QStringLiteral("diagram")).isValid());
+
+  tree->setSearchPattern({});
+  QCOMPARE(tree->rowCount(), 2);
+  QVERIFY(tree->indexForObject(outer, QStringLiteral("element")).isValid());
+  QVERIFY(tree->indexForObject(other, QStringLiteral("element")).isValid());
+  QVERIFY(tree->indexForObject(diagramId, QStringLiteral("diagram")).isValid());
+  QCOMPARE(patternChanged.count(), 6);
 }
 
 void CoreTests::projectTreeDeletionAndOrdering() {

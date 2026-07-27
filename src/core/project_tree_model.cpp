@@ -32,6 +32,9 @@ struct ProjectTreeModel::TreeNode {
   bool nested = false;
   TreeNode *parent = nullptr;
   std::vector<TreeNode *> children;
+  // Search changes only this derived view. The complete hierarchy remains in
+  // children so dragging a visible container still represents all descendants.
+  std::vector<TreeNode *> visibleChildren;
 };
 
 ProjectTreeModel::ProjectTreeModel(ProjectController *controller)
@@ -51,11 +54,12 @@ ProjectTreeModel::TreeNode *ProjectTreeModel::createNode() {
 QModelIndex ProjectTreeModel::indexForNode(const TreeNode *node) const {
   if (!node || !node->parent)
     return {};
-  const auto &siblings = node->parent->children;
-  const auto position = std::find(siblings.cbegin(), siblings.cend(), node);
-  if (position == siblings.cend())
+  const auto &visibleSiblings = node->parent->visibleChildren;
+  const auto position =
+      std::find(visibleSiblings.cbegin(), visibleSiblings.cend(), node);
+  if (position == visibleSiblings.cend())
     return {};
-  return createIndex(static_cast<int>(position - siblings.cbegin()), 0,
+  return createIndex(static_cast<int>(position - visibleSiblings.cbegin()), 0,
                      const_cast<TreeNode *>(node));
 }
 
@@ -288,6 +292,46 @@ void ProjectTreeModel::rebuildTree() {
     m_diagramNodes.insert(diagram.id, node);
     attach(m_diagramRoot, node);
   }
+  rebuildVisibleTree();
+}
+
+void ProjectTreeModel::rebuildVisibleTree() {
+  const QString pattern = m_searchPattern.trimmed();
+  if (pattern.isEmpty()) {
+    updateVisibleChildren(m_invisibleRoot, {}, false);
+    return;
+  }
+
+  QString expressionText;
+  expressionText.reserve(pattern.size() * 2);
+  for (const QChar character : pattern) {
+    if (character == u'*')
+      expressionText += QStringLiteral(".*");
+    else if (character == u'?')
+      expressionText += u'.';
+    else
+      expressionText += QRegularExpression::escape(QString(character));
+  }
+  const QRegularExpression expression(
+      expressionText, QRegularExpression::CaseInsensitiveOption |
+                          QRegularExpression::UseUnicodePropertiesOption);
+  updateVisibleChildren(m_invisibleRoot, expression, true);
+}
+
+bool ProjectTreeModel::updateVisibleChildren(
+    TreeNode *node, const QRegularExpression &expression, bool filtering) {
+  node->visibleChildren.clear();
+  for (TreeNode *child : node->children) {
+    const bool descendantMatches =
+        updateVisibleChildren(child, expression, filtering);
+    const bool childMatches =
+        filtering && child->kind != QStringLiteral("root") &&
+        (expression.match(child->label).hasMatch() ||
+         expression.match(child->qualifiedPath).hasMatch());
+    if (!filtering || childMatches || descendantMatches)
+      node->visibleChildren.push_back(child);
+  }
+  return !node->visibleChildren.empty();
 }
 
 QModelIndex ProjectTreeModel::index(int row, int column,
@@ -296,9 +340,10 @@ QModelIndex ProjectTreeModel::index(int row, int column,
     return {};
   TreeNode *parentNode =
       parentIndex.isValid() ? nodeForIndex(parentIndex) : m_invisibleRoot;
-  if (!parentNode || row >= static_cast<int>(parentNode->children.size()))
+  if (!parentNode ||
+      row >= static_cast<int>(parentNode->visibleChildren.size()))
     return {};
-  return createIndex(row, column, parentNode->children.at(row));
+  return createIndex(row, column, parentNode->visibleChildren.at(row));
 }
 
 QModelIndex ProjectTreeModel::parent(const QModelIndex &child) const {
@@ -313,7 +358,7 @@ int ProjectTreeModel::rowCount(const QModelIndex &parentIndex) const {
     return 0;
   const TreeNode *parentNode =
       parentIndex.isValid() ? nodeForIndex(parentIndex) : m_invisibleRoot;
-  return parentNode ? static_cast<int>(parentNode->children.size()) : 0;
+  return parentNode ? static_cast<int>(parentNode->visibleChildren.size()) : 0;
 }
 
 int ProjectTreeModel::columnCount(const QModelIndex &) const { return 1; }
@@ -537,6 +582,19 @@ void ProjectTreeModel::startTreeDrag(const QModelIndexList &indexes) {
   drag.setPixmap(preview);
   drag.setHotSpot({12, 12});
   drag.exec(Qt::CopyAction, Qt::CopyAction);
+}
+
+QString ProjectTreeModel::searchPattern() const { return m_searchPattern; }
+
+void ProjectTreeModel::setSearchPattern(const QString &pattern) {
+  if (m_searchPattern == pattern)
+    return;
+  m_searchPattern = pattern;
+  m_selectionAnchor = {};
+  beginResetModel();
+  rebuildVisibleTree();
+  endResetModel();
+  emit searchPatternChanged();
 }
 
 void ProjectTreeModel::reset() {

@@ -206,8 +206,11 @@ int main(int argc, char *argv[]) {
       [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
   engine.loadFromModule(QStringLiteral("Uuml"), QStringLiteral("Main"));
   if (application.arguments().contains(QStringLiteral("--smoke-test"))) {
-    if (!iconRegistry.isValid())
+    if (!iconRegistry.isValid()) {
+      qWarning().noquote() << QStringLiteral("Icon registry errors:\n%1")
+                                  .arg(iconRegistry.errors().join(u'\n'));
       return 1;
+    }
     const bool supportsDetachedWindows =
         QGuiApplication::platformName() != QStringLiteral("offscreen") &&
         QGuiApplication::platformName() != QStringLiteral("minimal");

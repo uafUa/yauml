@@ -164,6 +164,11 @@ history memory grow with total project size rather than the size of each edit.
   the browser. Namespace and owning-type drags expand recursively to a stable,
   de-duplicated list of contained model types; selecting both a container and
   one of its children never creates duplicate presentations.
+- Incremental project-tree search is implemented above the browser. It matches
+  labels and qualified names case-insensitively, supports `*` and `?`
+  wildcards, retains ancestor context, and leaves container drag semantics
+  based on the complete unfiltered subtree. `Ctrl+F` focuses the search and
+  `Escape` clears it.
 - Custom browser folders are persisted as project data and can be created at
   the model root or inside namespaces, types, and other folders. Native tree
   drag/drop reorganizes selected elements or folders with cycle protection;

@@ -5,6 +5,7 @@
 #include <QHash>
 #include <QItemSelectionModel>
 #include <QPersistentModelIndex>
+#include <QRegularExpression>
 #include <QSet>
 #include <memory>
 #include <vector>
@@ -15,6 +16,8 @@ class ProjectController;
 
 class ProjectTreeModel final : public QAbstractItemModel {
   Q_OBJECT
+  Q_PROPERTY(QString searchPattern READ searchPattern WRITE setSearchPattern
+                 NOTIFY searchPatternChanged)
 public:
   enum Role { IdRole = Qt::UserRole + 1, KindRole, TypeRole, NestedRole };
   Q_ENUM(Role)
@@ -40,9 +43,14 @@ public:
                            const QModelIndex &item,
                            Qt::KeyboardModifiers modifiers);
   Q_INVOKABLE void startTreeDrag(const QModelIndexList &indexes);
+  QString searchPattern() const;
+  void setSearchPattern(const QString &pattern);
 
 public slots:
   void reset();
+
+signals:
+  void searchPatternChanged();
 
 private:
   struct TreeNode;
@@ -51,9 +59,14 @@ private:
   QModelIndex indexForNode(const TreeNode *node) const;
   TreeNode *nodeForIndex(const QModelIndex &index) const;
   void rebuildTree();
+  void rebuildVisibleTree();
+  bool updateVisibleChildren(TreeNode *node,
+                             const QRegularExpression &expression,
+                             bool filtering);
   void collectElementIds(const TreeNode *node, QSet<QString> &ids) const;
 
   ProjectController *m_controller;
+  QString m_searchPattern;
   QPersistentModelIndex m_selectionAnchor;
   std::vector<std::unique_ptr<TreeNode>> m_nodes;
   TreeNode *m_invisibleRoot = nullptr;

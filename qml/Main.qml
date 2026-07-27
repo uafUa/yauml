@@ -369,6 +369,38 @@ ApplicationWindow {
                         }
                     }
                 }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Layout.leftMargin: 6
+                    Layout.rightMargin: 4
+                    Layout.topMargin: 6
+                    Layout.bottomMargin: 6
+                    spacing: 2
+
+                    TextField {
+                        id: projectTreeSearch
+                        objectName: "projectTreeSearch"
+                        Layout.fillWidth: true
+                        placeholderText: qsTr("Search (* and ? wildcards)")
+                        text: projectController.treeModel.searchPattern
+                        Accessible.name: qsTr("Search project tree")
+                        onTextChanged:
+                            projectController.treeModel.searchPattern = text
+                        Keys.onEscapePressed: clear()
+                    }
+                    ToolButton {
+                        objectName: "clearProjectTreeSearch"
+                        text: "×"
+                        visible: projectTreeSearch.text.length > 0
+                        Accessible.name: qsTr("Clear project-tree search")
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Clear search")
+                        onClicked: {
+                            projectTreeSearch.clear()
+                            projectTreeSearch.forceActiveFocus()
+                        }
+                    }
+                }
                 TreeView {
                     id: projectTree
                     Layout.fillWidth: true
@@ -448,7 +480,23 @@ ApplicationWindow {
                         function onModelReset() {
                             // Model edits replace rows, but should not destroy
                             // the user's navigation context.
-                            Qt.callLater(function() { projectTree.expandRecursively() })
+                            Qt.callLater(function() {
+                                projectTree.expandRecursively()
+                                const itemIndex =
+                                        projectController.treeModel.indexForObject(
+                                            projectController.selectedId,
+                                            projectController.selectedKind)
+                                if (projectController.selectedKind === "element"
+                                        && itemIndex.valid) {
+                                    projectTreeSelection.select(
+                                                itemIndex,
+                                                ItemSelectionModel.ClearAndSelect
+                                                | ItemSelectionModel.Rows)
+                                    projectTreeSelection.setCurrentIndex(
+                                                itemIndex,
+                                                ItemSelectionModel.NoUpdate)
+                                }
+                            })
                         }
                     }
                     Connections {
@@ -720,6 +768,15 @@ ApplicationWindow {
                         }
                     }
                 }
+            }
+        }
+
+        Shortcut {
+            sequences: [StandardKey.Find]
+            onActivated: {
+                root.leftPanelVisible = true
+                projectTreeSearch.forceActiveFocus()
+                projectTreeSearch.selectAll()
             }
         }
 
