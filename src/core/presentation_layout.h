@@ -28,6 +28,8 @@ inline constexpr qreal kMinimumContainerHeight = 100.0;
 
 QSizeF nodeContentSize(const ModelElement &element);
 QSizeF nodeContentSize(const ProjectData &project, const ModelElement &element);
+QSizeF nodeContentSize(const ProjectData &project, const ModelElement &element,
+                       bool showAttributes, bool showOperations);
 QSizeF nodePlacementSize(const ModelElement &element,
                          const QString &sizingMode);
 QSizeF nodePlacementSize(const ProjectData &project,

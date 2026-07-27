@@ -200,11 +200,13 @@ ApplicationWindow {
             }
             CatalogAction {
                 catalogId: "project.configureCppSource"
-                text: cppImportController.configuredSourceRoot.length > 0
-                      ? qsTr("Change C++ source…")
+                text: cppImportController.configuredSourceRoots.length > 0
+                      ? qsTr("Change C++ sources…")
                       : qsTr("Import C++…")
                 enabled: !cppImportController.busy
-                onTriggered: cppImportFolderDialog.open()
+                onTriggered: sourceFolderPicker.open(
+                                 root,
+                                 cppImportController.configuredSourceRoots)
             }
             MenuSeparator {}
             CatalogAction {
@@ -1945,10 +1947,16 @@ ApplicationWindow {
             }
             Label {
                 Layout.fillWidth: true
-                visible: cppImportController.previewSourceRoot.length > 0
-                text: qsTr("Source: %1")
-                      .arg(cppImportController.previewSourceRoot)
+                visible: cppImportController.previewSourceRoots.length > 0
+                text: cppImportController.previewSourceRoots.length === 1
+                      ? qsTr("Source: %1").arg(
+                            cppImportController.previewSourceRoot)
+                      : qsTr("Sources (%1):\n%2")
+                            .arg(cppImportController.previewSourceRoots.length)
+                            .arg(cppImportController.previewSourceRootsText)
                 color: uiTheme.mutedText
+                wrapMode: Text.Wrap
+                maximumLineCount: 4
                 elide: Text.ElideMiddle
             }
             Label {
@@ -2089,6 +2097,17 @@ ApplicationWindow {
         function onAttentionRequired() { logPopup.open() }
     }
 
+    Connections {
+        target: sourceFolderPicker
+        function onFoldersSelected(folders) {
+            cppImportDialog.open()
+            cppImportController.previewSources(folders)
+        }
+        function onFallbackRequested() {
+            cppImportFolderDialog.open()
+        }
+    }
+
     FolderDialog {
         id: openDialog
         title: qsTr("Open u uml project directory")
@@ -2116,7 +2135,7 @@ ApplicationWindow {
         title: qsTr("Choose C++ source directory")
         onAccepted: {
             cppImportDialog.open()
-            cppImportController.preview(selectedFolder)
+            cppImportController.previewSources([selectedFolder])
         }
     }
 

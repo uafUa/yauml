@@ -1,4 +1,5 @@
 #include "app/icon_registry.h"
+#include "app/source_folder_picker.h"
 #include "core/application_settings.h"
 #include "core/cpp_import.h"
 #include "core/cpp_import_controller.h"
@@ -65,7 +66,7 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   const QStringList arguments = application.arguments();
   if (arguments.size() < 3) {
     err << "Usage: uuml " << (apply ? "cpp-import" : "cpp-preview")
-        << " <project-directory> [source-directory]\n";
+        << " <project-directory> [source-directory ...]\n";
     return 64;
   }
 
@@ -74,11 +75,11 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   writeDiagnostics(load.diagnostics, out, err);
   if (!load.ok)
     return 2;
-  const QString sourcePath = arguments.size() >= 4
-                                 ? arguments.at(3)
-                                 : load.project.cppImport.sourceRoot;
-  if (sourcePath.isEmpty()) {
-    err << "No C++ source directory was provided or configured for this "
+  const QStringList sourcePaths = arguments.size() >= 4
+                                      ? arguments.mid(3)
+                                      : load.project.cppImport.sourceRoots;
+  if (sourcePaths.isEmpty()) {
+    err << "No C++ source directories were provided or configured for this "
            "project\n";
     return 64;
   }
@@ -90,7 +91,7 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   options.sharedPointerTypes = settings.cppSharedPointerTypes();
   uuml::configureCppImportStereotypes(options, load.project);
   uuml::CppImportPreview preview = uuml::CppImportService::preview(
-      sourcePath, load.project.elements, load.project.relationships, options);
+      sourcePaths, load.project.elements, load.project.relationships, options);
   writeDiagnostics(preview.diagnostics, out, err);
   for (const auto &item : preview.items) {
     out << uuml::toString(item.action).toUpper() << " "
@@ -128,9 +129,10 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   }
 
   uuml::ProjectData imported = load.project;
-  const QString previousSourceRoot = imported.cppImport.sourceRoot;
+  const QStringList previousSourceRoots = imported.cppImport.sourceRoots;
   const int appliedCount = uuml::CppImportService::apply(imported, preview);
-  if (appliedCount > 0 || imported.cppImport.sourceRoot != previousSourceRoot) {
+  if (appliedCount > 0 ||
+      imported.cppImport.sourceRoots != previousSourceRoots) {
     const auto save = uuml::ProjectSerializer::save(projectPath, imported);
     writeDiagnostics(save.diagnostics, out, err);
     if (!save.ok)
@@ -175,6 +177,7 @@ int main(int argc, char *argv[]) {
   uuml::ApplicationSettings applicationSettings;
   uuml::CppImportController cppImport(&project, &applicationSettings);
   uuml::WorkspaceController workspace(&project, true);
+  uuml::ui::SourceFolderPicker sourceFolderPicker;
   uuml::ui::IconRegistry iconRegistry;
   uuml::ui::UiTheme uiTheme;
   for (const QString &error : iconRegistry.errors())
@@ -182,6 +185,11 @@ int main(int argc, char *argv[]) {
   QObject::connect(&project, &uuml::ProjectController::projectOpened,
                    &applicationSettings,
                    &uuml::ApplicationSettings::addRecentProject);
+  QObject::connect(
+      &sourceFolderPicker, &uuml::ui::SourceFolderPicker::errorOccurred,
+      &project, [&project](const QString &message) {
+        project.diagnostics()->addError(QStringLiteral("cpp-import"), message);
+      });
   if (application.arguments().size() > 1) {
     const QString candidate = application.arguments().at(1);
     if (!candidate.startsWith(u'-'))
@@ -198,6 +206,8 @@ int main(int argc, char *argv[]) {
       QStringLiteral("applicationSettings"), &applicationSettings);
   engine.rootContext()->setContextProperty(
       QStringLiteral("cppImportController"), &cppImport);
+  engine.rootContext()->setContextProperty(QStringLiteral("sourceFolderPicker"),
+                                           &sourceFolderPicker);
   engine.rootContext()->setContextProperty(QStringLiteral("uiTheme"), &uiTheme);
   engine.rootContext()->setContextProperty(QStringLiteral("iconRegistry"),
                                            &iconRegistry);

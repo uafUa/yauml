@@ -115,26 +115,30 @@ Preview or apply C++ imports without opening the GUI:
 
 ```powershell
 .\build-release\Release\uuml.exe cpp-preview `
-  .\examples\sample.uuml C:\path\to\cpp-project
+  .\examples\sample.uuml C:\path\to\public-api C:\path\to\shared-types
 .\build-release\Release\uuml.exe cpp-import `
-  .\examples\sample.uuml C:\path\to\cpp-project
+  .\examples\sample.uuml C:\path\to\public-api C:\path\to\shared-types
 ```
 
-Select the C++ source root; no configure or build step is required. uuml scans
-common C++ source and header extensions recursively and infers the source root
-plus common `src` and `include` include paths. When a `compile_commands.json` is
-available in or below the selected folder, uuml uses it automatically for more
-accurate compiler flags instead. `cpp-import` saves non-conflicting changes and
-returns exit code `3` when conflicts need attention; user-edited model content
-is never overwritten.
+Select one or more C++ source folders; no configure or build step is required.
+On Windows the source picker supports Ctrl-click and Shift-click selection, so
+unrelated subfolders can be included without importing their parent tree. uuml
+deduplicates overlapping selections, scans common C++ source and header
+extensions recursively, and infers shared include paths. When a
+`compile_commands.json` is available in or above a selected folder, uuml uses
+it automatically for more accurate compiler flags. `cpp-import` accepts the
+same list of folders, saves non-conflicting changes, and returns exit code `3`
+when conflicts need attention; user-edited model content is never overwritten.
 
 ## C++ import
 
-- Choose **File > Import C++…**, then select the project's source folder. That
-  is the complete normal workflow: CMake files, a configured build, and a
-  compilation database are optional. Discovery runs outside the UI thread and
-  presents every create, update, conflict, unchanged, user-owned, or
-  missing-source result before import.
+- Choose **File > Import C++…**, then select the project's source folders. Use
+  Ctrl-click or Shift-click when only particular sibling folders should be
+  imported. That is the complete normal workflow: CMake files, a configured
+  build, and a compilation database are optional. The selected folder list is
+  stored in the project and reused by **Synchronize C++**. Discovery runs
+  outside the UI thread and presents every create, update, conflict, unchanged,
+  user-owned, or missing-source result before import.
 - Folder-only discovery parses implementation files first and then standalone
   headers not already reached through them. Build outputs, version-control
   metadata, vendored dependencies, and directory symlink loops are skipped.
@@ -187,6 +191,16 @@ is never overwritten.
   to add to the current selection or `Ctrl` to toggle intersecting elements.
 - Right-click empty space, an element, a connector, or a diagram tab for the
   commands that apply to that exact target.
+- Use **Compartment visibility** on empty diagram space to choose whether type
+  presentations show attributes and operations by default. An individual
+  type's **Attributes** and **Operations** menus can inherit that default or
+  explicitly show/hide the compartment. These choices are project data and
+  participate in normal undo, save, and reload behavior.
+- On a type presentation, choose **Add types that depend on this** or
+  **Add types this depends on** to expand the incoming or outgoing semantic
+  relationship neighborhood. The hover toolbox exposes the same two actions.
+  Existing presentations are not duplicated, and newly completed relationships
+  gain their connector automatically in the same undoable command.
 - Drag any selected element to move the complete selection as one undoable
   command. Press `Delete` to remove selected presentations from the diagram;
   deleting a selected connector removes its relationship.

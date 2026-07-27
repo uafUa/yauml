@@ -178,6 +178,48 @@ QStringList browserItemKeysFromJson(const ProjectData &project,
   return keys;
 }
 
+QStringList missingRelatedTypeIds(const ProjectData &project,
+                                  const Diagram &diagram,
+                                  const QString &elementId, bool incoming) {
+  QSet<QString> presentedElementIds;
+  presentedElementIds.reserve(diagram.nodes.size());
+  for (const auto &node : diagram.nodes)
+    presentedElementIds.insert(node.elementId);
+
+  QStringList result;
+  QSet<QString> seen;
+  for (const auto &relationship : project.relationships) {
+    if ((incoming ? relationship.targetId : relationship.sourceId) !=
+        elementId) {
+      continue;
+    }
+    const QString relatedId =
+        incoming ? relationship.sourceId : relationship.targetId;
+    const auto *related = findElement(project, relatedId);
+    if (!related || related->type == ElementType::Package ||
+        relatedId == elementId || presentedElementIds.contains(relatedId) ||
+        seen.contains(relatedId)) {
+      continue;
+    }
+    seen.insert(relatedId);
+    result.append(relatedId);
+  }
+  return result;
+}
+
+QSizeF nodePlacementSizeForDiagram(const ProjectData &project,
+                                   const Diagram &diagram,
+                                   const ModelElement &element,
+                                   const QString &sizingMode) {
+  if (sizingMode.trimmed().compare(QStringLiteral("fixed"),
+                                   Qt::CaseInsensitive) == 0) {
+    return {presentation_layout::kFixedNodeWidth,
+            presentation_layout::kFixedNodeHeight};
+  }
+  return presentation_layout::nodeContentSize(
+      project, element, diagram.showAttributes, diagram.showOperations);
+}
+
 QString packageIdForBrowserTarget(const ProjectData &project,
                                   const QString &targetKind,
                                   const QString &targetId) {
@@ -1300,16 +1342,20 @@ int ProjectController::applyCppImportPlan(const CppImportPreview &preview) {
   for (const auto &item : preview.relationshipItems)
     if (item.isApplicable())
       desiredRelationships.append(item.desiredRelationship);
-  const bool sourceRootChanged =
-      !preview.sourceRoot.isEmpty() &&
-      preview.sourceRoot != m_data.cppImport.sourceRoot;
+  const QStringList sourceRoots =
+      !preview.sourceRoots.isEmpty()
+          ? preview.sourceRoots
+          : (preview.sourceRoot.isEmpty() ? QStringList{}
+                                          : QStringList{preview.sourceRoot});
+  const bool sourceRootsChanged =
+      !sourceRoots.isEmpty() && sourceRoots != m_data.cppImport.sourceRoots;
   if (desiredElements.isEmpty() && desiredRelationships.isEmpty() &&
-      !sourceRootChanged)
+      !sourceRootsChanged)
     return 0;
   const int count = desiredElements.size() + desiredRelationships.size();
   pushCommand(std::make_unique<ApplyCppImportCommand>(
       this, m_data, std::move(desiredElements), std::move(desiredRelationships),
-      preview.sourceRoot));
+      sourceRoots));
   return count;
 }
 
@@ -1386,8 +1432,8 @@ QString ProjectController::addElementAtImpl(const QString &type,
       NodePresentation node;
       node.id = newId();
       node.elementId = element.id;
-      const QSizeF contentSize =
-          presentation_layout::nodeContentSize(m_data, element);
+      const QSizeF contentSize = presentation_layout::nodeContentSize(
+          m_data, element, diagram->showAttributes, diagram->showOperations);
       if (std::isfinite(x) && std::isfinite(y)) {
         node.geometry = QRectF(QPointF(x, y), contentSize);
         if (coordinatesAreCenter)
@@ -1875,8 +1921,8 @@ int ProjectController::addElementsToDiagram(const QString &diagramId,
   qreal placementWidth = 0.0;
   qreal placementHeight = 0.0;
   for (const QString &elementId : acceptedIds) {
-    const QSizeF size = presentation_layout::nodePlacementSize(
-        m_data, *findElement(m_data, elementId), sizingMode);
+    const QSizeF size = nodePlacementSizeForDiagram(
+        m_data, *diagram, *findElement(m_data, elementId), sizingMode);
     contentSizeByElement.insert(elementId, size);
     placementWidth = std::max(placementWidth, size.width() + 24.0);
     placementHeight = std::max(placementHeight, size.height() + 24.0);
@@ -1916,6 +1962,69 @@ int ProjectController::addElementsToDiagram(const QString &diagramId,
             .arg(duplicateCount));
   }
   return acceptedIds.size();
+}
+
+int ProjectController::relatedElementCountForDiagram(
+    const QString &diagramId, const QString &nodeId,
+    const QString &direction) const {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *node = diagram ? findNode(*diagram, nodeId) : nullptr;
+  if (!node)
+    return 0;
+  const bool incoming = direction == QStringLiteral("incoming");
+  if (!incoming && direction != QStringLiteral("outgoing"))
+    return 0;
+  return missingRelatedTypeIds(m_data, *diagram, node->elementId, incoming)
+      .size();
+}
+
+int ProjectController::addRelatedElementsToDiagram(const QString &diagramId,
+                                                   const QString &nodeId,
+                                                   const QString &direction,
+                                                   const QString &sizingMode) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *node = diagram ? findNode(*diagram, nodeId) : nullptr;
+  if (!node)
+    return 0;
+  const bool incoming = direction == QStringLiteral("incoming");
+  if (!incoming && direction != QStringLiteral("outgoing")) {
+    m_diagnostics.addError(
+        QStringLiteral("command"),
+        QStringLiteral("Unknown relationship direction: %1").arg(direction));
+    return 0;
+  }
+
+  const QStringList relatedIds =
+      missingRelatedTypeIds(m_data, *diagram, node->elementId, incoming);
+  if (relatedIds.isEmpty()) {
+    m_diagnostics.addInfo(
+        QStringLiteral("command"),
+        incoming
+            ? QStringLiteral(
+                  "All types that depend on this type are already shown")
+            : QStringLiteral(
+                  "All types on which this type depends are already shown"));
+    return 0;
+  }
+
+  constexpr int kBulkPlacementColumns = 5;
+  qreal x = node->geometry.right() + 80.0;
+  if (incoming) {
+    qreal widest = 0.0;
+    for (const QString &relatedId : relatedIds) {
+      if (const auto *element = findElement(m_data, relatedId)) {
+        widest = std::max(widest, nodePlacementSizeForDiagram(
+                                      m_data, *diagram, *element, sizingMode)
+                                          .width() +
+                                      24.0);
+      }
+    }
+    const int columns =
+        std::min(static_cast<int>(relatedIds.size()), kBulkPlacementColumns);
+    x = node->geometry.left() - columns * widest - 80.0;
+  }
+  return addElementsToDiagram(diagramId, relatedIds, x, node->geometry.top(),
+                              sizingMode);
 }
 
 int ProjectController::addTreeItemsToDiagram(const QString &diagramId,
@@ -2071,7 +2180,7 @@ int ProjectController::addTreeItemsToDiagram(const QString &diagramId,
     if (!element)
       continue;
     const QSizeF size =
-        presentation_layout::nodePlacementSize(m_data, *element, sizingMode);
+        nodePlacementSizeForDiagram(m_data, *diagram, *element, sizingMode);
     contentSizeByElement.insert(elementId, size);
     placementWidth = std::max(placementWidth, size.width() + 24.0);
     placementHeight = std::max(placementHeight, size.height() + 24.0);
@@ -2567,6 +2676,49 @@ void ProjectController::setNodePortSnapPoints(const QString &diagramId,
   pushCommand(std::make_unique<SetNodePortSnapPointsCommand>(
       this, diagramId, nodeId, node->horizontalPortSnapPoints,
       node->verticalPortSnapPoints, horizontal, vertical));
+}
+
+void ProjectController::setDiagramCompartmentVisible(const QString &diagramId,
+                                                     const QString &compartment,
+                                                     bool visible) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram)
+    return;
+  const bool attributes = compartment == QStringLiteral("attributes");
+  if (!attributes && compartment != QStringLiteral("operations"))
+    return;
+  const bool before =
+      attributes ? diagram->showAttributes : diagram->showOperations;
+  if (before == visible)
+    return;
+  pushCommand(std::make_unique<SetDiagramCompartmentVisibilityCommand>(
+      this, diagramId, attributes, before, visible));
+}
+
+void ProjectController::setNodeCompartmentVisibility(
+    const QString &diagramId, const QString &nodeId, const QString &compartment,
+    const QString &visibility) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *node = diagram ? findNode(*diagram, nodeId) : nullptr;
+  if (!node)
+    return;
+  const bool attributes = compartment == QStringLiteral("attributes");
+  if (!attributes && compartment != QStringLiteral("operations"))
+    return;
+
+  std::optional<bool> after;
+  if (visibility == QStringLiteral("show"))
+    after = true;
+  else if (visibility == QStringLiteral("hide"))
+    after = false;
+  else if (visibility != QStringLiteral("inherit"))
+    return;
+  const std::optional<bool> before =
+      attributes ? node->showAttributes : node->showOperations;
+  if (before == after)
+    return;
+  pushCommand(std::make_unique<SetNodeCompartmentVisibilityCommand>(
+      this, diagramId, nodeId, attributes, before, after));
 }
 
 void ProjectController::updatePresentationGeometries(

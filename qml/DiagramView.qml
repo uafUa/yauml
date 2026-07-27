@@ -318,6 +318,26 @@ Item {
             }
         }
         MenuSeparator {}
+        Menu {
+            title: qsTr("Compartment visibility")
+            MenuItem {
+                text: qsTr("Show attributes")
+                checkable: true
+                checked: canvas.diagramAttributesVisible
+                onTriggered: canvas.setDiagramCompartmentVisible(
+                                 "attributes",
+                                 !canvas.diagramAttributesVisible)
+            }
+            MenuItem {
+                text: qsTr("Show operations")
+                checkable: true
+                checked: canvas.diagramOperationsVisible
+                onTriggered: canvas.setDiagramCompartmentVisible(
+                                 "operations",
+                                 !canvas.diagramOperationsVisible)
+            }
+        }
+        MenuSeparator {}
         MenuItem { action: fitDiagramAction }
     }
 
@@ -364,6 +384,72 @@ Item {
                 catalogId: "createRelationship.containment"
                 text: qsTr("Containment (nesting)")
                 onTriggered: canvas.createRelationship("containment")
+            }
+        }
+        MenuSeparator {}
+        CatalogMenuItem {
+            catalogId: "presentation.addIncomingRelatedTypes"
+            text: qsTr("Add types that depend on this")
+            enabled: canvas.selectedNodeCount === 1
+                     && canvas.incomingRelatedTypeCount > 0
+            onTriggered: canvas.addRelatedTypes("incoming")
+        }
+        CatalogMenuItem {
+            catalogId: "presentation.addOutgoingRelatedTypes"
+            text: qsTr("Add types this depends on")
+            enabled: canvas.selectedNodeCount === 1
+                     && canvas.outgoingRelatedTypeCount > 0
+            onTriggered: canvas.addRelatedTypes("outgoing")
+        }
+        MenuSeparator {}
+        Menu {
+            title: qsTr("Attributes")
+            enabled: canvas.selectedNodeCount === 1
+            MenuItem {
+                text: qsTr("Inherit diagram setting")
+                checkable: true
+                checked: canvas.selectedAttributesVisibility === "inherit"
+                onTriggered: canvas.setSelectedCompartmentVisibility(
+                                 "attributes", "inherit")
+            }
+            MenuItem {
+                text: qsTr("Show")
+                checkable: true
+                checked: canvas.selectedAttributesVisibility === "show"
+                onTriggered: canvas.setSelectedCompartmentVisibility(
+                                 "attributes", "show")
+            }
+            MenuItem {
+                text: qsTr("Hide")
+                checkable: true
+                checked: canvas.selectedAttributesVisibility === "hide"
+                onTriggered: canvas.setSelectedCompartmentVisibility(
+                                 "attributes", "hide")
+            }
+        }
+        Menu {
+            title: qsTr("Operations")
+            enabled: canvas.selectedNodeCount === 1
+            MenuItem {
+                text: qsTr("Inherit diagram setting")
+                checkable: true
+                checked: canvas.selectedOperationsVisibility === "inherit"
+                onTriggered: canvas.setSelectedCompartmentVisibility(
+                                 "operations", "inherit")
+            }
+            MenuItem {
+                text: qsTr("Show")
+                checkable: true
+                checked: canvas.selectedOperationsVisibility === "show"
+                onTriggered: canvas.setSelectedCompartmentVisibility(
+                                 "operations", "show")
+            }
+            MenuItem {
+                text: qsTr("Hide")
+                checkable: true
+                checked: canvas.selectedOperationsVisibility === "hide"
+                onTriggered: canvas.setSelectedCompartmentVisibility(
+                                 "operations", "hide")
             }
         }
         MenuSeparator {}
@@ -985,6 +1071,44 @@ Item {
                     presentationStyleQuickMenu.y = menuPoint.y
                     presentationToolbox.dismiss()
                     presentationStyleQuickMenu.open()
+                }
+            }
+
+            CatalogToolButton {
+                catalogId: "presentation.addIncomingRelatedTypes"
+                visible: canvas.presentationToolboxKind === "node"
+                width: visible ? 38 : 0
+                height: 32
+                text: qsTr("←+")
+                enabled: canvas.incomingRelatedTypeCount > 0
+                display: icon.source.toString().length > 0
+                         ? AbstractButton.IconOnly
+                         : AbstractButton.TextOnly
+                Accessible.name: qsTr("Add types that depend on this")
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: {
+                    canvas.addRelatedTypes("incoming")
+                    canvas.forceActiveFocus()
+                }
+            }
+
+            CatalogToolButton {
+                catalogId: "presentation.addOutgoingRelatedTypes"
+                visible: canvas.presentationToolboxKind === "node"
+                width: visible ? 38 : 0
+                height: 32
+                text: qsTr("+→")
+                enabled: canvas.outgoingRelatedTypeCount > 0
+                display: icon.source.toString().length > 0
+                         ? AbstractButton.IconOnly
+                         : AbstractButton.TextOnly
+                Accessible.name: qsTr("Add types this depends on")
+                ToolTip.visible: hovered
+                ToolTip.text: Accessible.name
+                onClicked: {
+                    canvas.addRelatedTypes("outgoing")
+                    canvas.forceActiveFocus()
                 }
             }
 

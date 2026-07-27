@@ -98,6 +98,11 @@ history memory grow with total project size rather than the size of each edit.
   items are added from the project tree. Bulk drops use compact content-aware
   spacing. Diagram context menus expose an undoable **Fit to content** action
   for both elements and container frames.
+- Diagram-level attribute and operation visibility defaults are implemented,
+  with independent presentation-level inherit/show/hide overrides. The
+  effective visibility drives scene-graph rendering, in-place hit testing, and
+  fit-to-content sizing; all settings persist in diagram JSON5 and use compact
+  undo commands.
 - Treat a multi-object operation as one undoable transaction.
 
 ### 3.5 Connector routing and direct interaction — implemented
@@ -283,6 +288,11 @@ customization planned
   container bodies do not claim hover from their children. Destructive and
   modal commands remain in context menus until usage proves that placing them
   in a hover surface is beneficial.
+- A selected type also exposes directional model expansion: add every missing
+  type that depends on it, or every missing type on which it depends. Both
+  actions reuse semantic relationship direction, skip packages and existing
+  presentations, place the new neighborhood beside the selected type, and
+  materialize all newly complete connectors in one undoable command.
 - Use one shared visibility state machine: the toolbox appears only for the
   currently selected target, remains open while the pointer crosses a
   hover-safe bridge to the toolbox, stays open during a drag gesture, and
@@ -352,13 +362,15 @@ customization planned
 
 ## Phase 4: C++ import and synchronization — in progress
 
-- Folder-first libclang AST indexing is implemented for classes, structs,
+- Multi-folder-first libclang AST indexing is implemented for classes, structs,
   fields, methods, base relationships, member types, and operation-signature
-  types. A user selects only the source
-  root: the importer recursively discovers C++ files, infers common include
-  roots, tolerates missing external dependencies, and avoids build or vendored
-  trees. If a compilation database is present, it is discovered and used
-  automatically for higher accuracy. A persisted, validated interface-name
+  types. A user selects one or more source folders: the Windows picker supports
+  standard multi-selection, overlapping parent/child roots are deduplicated,
+  and unrelated sibling roots remain independently scoped. The importer
+  recursively discovers C++ files, infers common include roots, tolerates
+  missing external dependencies, and avoids build or vendored trees. If a
+  compilation database is present for a selected root, it is discovered and
+  used automatically for higher accuracy. A persisted, validated interface-name
   regular expression classifies matching bases as UML realizations and other
   bases as generalizations. System declarations are excluded and repeated
   header discoveries are deduplicated by Clang symbol identity.
@@ -393,11 +405,12 @@ customization planned
   and custom stereotype assignments remain intact. Existing projects gain the
   three editable definitions through a duplicate-safe schema migration.
 - Per-project repeatable synchronization controls are implemented. Applying a
-  successful preview persists its source root in the project manifest as part
+  successful preview persists its source-root list in the project manifest as part
   of the same compact undo command as semantic changes. **Synchronize C++**
-  reruns discovery without another folder prompt, **Change C++ source…**
+  reruns discovery without another folder prompt, **Change C++ sources…**
   reconfigures it through preview, and headless `cpp-preview`/`cpp-import` may
-  omit the source argument once a project has one configured.
+  omit source arguments once a project has roots configured. Older manifests
+  containing the singular `sourceRoot` key load into the new list form.
 - Add explicit conflict-resolution choices and rename/move matching in
   subsequent slices.
 

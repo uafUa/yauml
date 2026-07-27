@@ -105,6 +105,10 @@ struct CppRelationshipImportItem {
 
 struct CppImportPreview {
   QString compilationDatabasePath;
+  QStringList compilationDatabasePaths;
+  // The exact roots selected by the user. sourceRoot remains the common
+  // discovery root for compatibility with older callers and diagnostics.
+  QStringList sourceRoots;
   QString sourceRoot;
   QList<CppSourceSymbol> symbols;
   QList<CppSourceRelationship> relationships;
@@ -131,6 +135,11 @@ public:
   static bool available();
   static CppImportPreview
   preview(const QString &searchPath,
+          const QList<ModelElement> &existingElements,
+          const QList<Relationship> &existingRelationships = {},
+          const CppImportOptions &options = {});
+  static CppImportPreview
+  preview(const QStringList &searchPaths,
           const QList<ModelElement> &existingElements,
           const QList<Relationship> &existingRelationships = {},
           const CppImportOptions &options = {});

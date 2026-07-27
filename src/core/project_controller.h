@@ -179,6 +179,12 @@ public:
   addElementsToDiagram(const QString &diagramId, const QStringList &elementIds,
                        qreal x, qreal y,
                        const QString &sizingMode = QStringLiteral("content"));
+  int relatedElementCountForDiagram(const QString &diagramId,
+                                    const QString &nodeId,
+                                    const QString &direction) const;
+  int addRelatedElementsToDiagram(
+      const QString &diagramId, const QString &nodeId, const QString &direction,
+      const QString &sizingMode = QStringLiteral("content"));
   Q_INVOKABLE int
   addTreeItemsToDiagram(const QString &diagramId, const QStringList &elementIds,
                         const QString &subjectsJson, qreal x, qreal y,
@@ -211,6 +217,13 @@ public:
                                          const QString &nodeId,
                                          int horizontalPointCount,
                                          int verticalPointCount);
+  Q_INVOKABLE void setDiagramCompartmentVisible(const QString &diagramId,
+                                                const QString &compartment,
+                                                bool visible);
+  Q_INVOKABLE void setNodeCompartmentVisibility(const QString &diagramId,
+                                                const QString &nodeId,
+                                                const QString &compartment,
+                                                const QString &visibility);
   void updatePresentationGeometries(const QString &diagramId,
                                     const QVariantList &geometries,
                                     const QString &description);

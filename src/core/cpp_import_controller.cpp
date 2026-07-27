@@ -26,21 +26,39 @@ bool CppImportController::busy() const { return m_busy; }
 bool CppImportController::canApply() const {
   return !m_busy && m_preview.ok &&
          (m_preview.applicableCount() > 0 ||
-          (!m_preview.sourceRoot.isEmpty() &&
-           m_preview.sourceRoot != configuredSourceRoot()));
+          (!m_preview.sourceRoots.isEmpty() &&
+           m_preview.sourceRoots != configuredSourceRoots()));
 }
 
 bool CppImportController::canSynchronize() const {
-  return !m_busy && !configuredSourceRoot().isEmpty();
+  return !m_busy && !configuredSourceRoots().isEmpty();
+}
+
+QStringList CppImportController::configuredSourceRoots() const {
+  return m_project ? m_project->data().cppImport.sourceRoots : QStringList{};
 }
 
 QString CppImportController::configuredSourceRoot() const {
-  return m_project ? m_project->data().cppImport.sourceRoot : QString{};
+  const QStringList roots = configuredSourceRoots();
+  return roots.isEmpty() ? QString{} : roots.first();
+}
+
+QString CppImportController::configuredSourceRootsText() const {
+  return configuredSourceRoots().join(u'\n');
+}
+
+QStringList CppImportController::previewSourceRoots() const {
+  return !m_preview.sourceRoots.isEmpty() ? m_preview.sourceRoots
+                                          : m_requestedSourcePaths;
 }
 
 QString CppImportController::previewSourceRoot() const {
-  return !m_preview.sourceRoot.isEmpty() ? m_preview.sourceRoot
-                                         : m_requestedSourcePath;
+  const QStringList roots = previewSourceRoots();
+  return roots.isEmpty() ? QString{} : roots.first();
+}
+
+QString CppImportController::previewSourceRootsText() const {
+  return previewSourceRoots().join(u'\n');
 }
 
 QString CppImportController::summary() const { return m_summary; }
@@ -54,15 +72,39 @@ QVariantList CppImportController::previewItems() const {
 }
 
 void CppImportController::preview(const QUrl &sourceOrBuildDirectory) {
-  if (m_busy || !m_project)
-    return;
   const QString path = sourceOrBuildDirectory.isLocalFile()
                            ? sourceOrBuildDirectory.toLocalFile()
                            : sourceOrBuildDirectory.toString();
-  if (path.trimmed().isEmpty())
+  previewPaths({path});
+}
+
+void CppImportController::previewSources(
+    const QVariantList &sourceDirectories) {
+  QStringList paths;
+  paths.reserve(sourceDirectories.size());
+  for (const QVariant &value : sourceDirectories) {
+    const QUrl url = value.canConvert<QUrl>() ? value.toUrl() : QUrl{};
+    const QString path =
+        url.isValid() ? (url.isLocalFile() ? url.toLocalFile() : url.toString())
+                      : value.toString();
+    if (!path.trimmed().isEmpty())
+      paths.append(path);
+  }
+  previewPaths(paths);
+}
+
+void CppImportController::previewPaths(const QStringList &sourceDirectories) {
+  if (m_busy || !m_project)
+    return;
+  QStringList paths;
+  for (const QString &path : sourceDirectories) {
+    if (!path.trimmed().isEmpty())
+      paths.append(QFileInfo(path).absoluteFilePath());
+  }
+  if (paths.isEmpty())
     return;
 
-  m_requestedSourcePath = QFileInfo(path).absoluteFilePath();
+  m_requestedSourcePaths = paths;
   m_preview = {};
   m_previewItems.clear();
   m_summary = QStringLiteral("Discovering C++ declarations…");
@@ -81,16 +123,16 @@ void CppImportController::preview(const QUrl &sourceOrBuildDirectory) {
   options.owningPointerTypes = m_settings->cppOwningPointerTypes();
   options.sharedPointerTypes = m_settings->cppSharedPointerTypes();
   configureCppImportStereotypes(options, m_project->data());
-  m_watcher.setFuture(QtConcurrent::run([path, elements, relationships,
+  m_watcher.setFuture(QtConcurrent::run([paths, elements, relationships,
                                          options] {
-    return CppImportService::preview(path, elements, relationships, options);
+    return CppImportService::preview(paths, elements, relationships, options);
   }));
 }
 
 void CppImportController::synchronize() {
   if (!canSynchronize())
     return;
-  preview(QUrl::fromLocalFile(configuredSourceRoot()));
+  previewPaths(configuredSourceRoots());
 }
 
 void CppImportController::applyPreview() {
@@ -113,8 +155,8 @@ void CppImportController::applyPreview() {
     emit attentionRequired();
 
   const bool sourceConfigured =
-      !currentPlan.sourceRoot.isEmpty() &&
-      currentPlan.sourceRoot != configuredSourceRoot();
+      !currentPlan.sourceRoots.isEmpty() &&
+      currentPlan.sourceRoots != configuredSourceRoots();
   const int applied = m_project->applyCppImportPlan(currentPlan);
   if (applied > 0) {
     m_project->diagnostics()->addInfo(
@@ -123,8 +165,11 @@ void CppImportController::applyPreview() {
   } else if (sourceConfigured) {
     m_project->diagnostics()->addInfo(
         QStringLiteral("cpp-import"),
-        QStringLiteral("Configured C++ synchronization from %1")
-            .arg(currentPlan.sourceRoot));
+        QStringLiteral("Configured C++ synchronization from %1 source "
+                       "director%2")
+            .arg(currentPlan.sourceRoots.size())
+            .arg(currentPlan.sourceRoots.size() == 1 ? QStringLiteral("y")
+                                                     : QStringLiteral("ies")));
   }
   m_preview = CppImportService::replan(currentPlan, m_project->data().elements,
                                        m_project->data().relationships);
@@ -139,7 +184,7 @@ void CppImportController::clearPreview() {
   m_preview = {};
   m_previewItems.clear();
   m_summary.clear();
-  m_requestedSourcePath.clear();
+  m_requestedSourcePaths.clear();
   emit previewChanged();
 }
 

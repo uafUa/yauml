@@ -1739,6 +1739,58 @@ int DiagramCanvas::selectedVerticalPortSnapPoints() const {
               : connector_ports::kDefaultSnapPointCount;
 }
 
+bool DiagramCanvas::diagramAttributesVisible() const {
+  const auto *currentDiagram = diagram();
+  return !currentDiagram || currentDiagram->showAttributes;
+}
+
+bool DiagramCanvas::diagramOperationsVisible() const {
+  const auto *currentDiagram = diagram();
+  return !currentDiagram || currentDiagram->showOperations;
+}
+
+QString DiagramCanvas::selectedAttributesVisibility() const {
+  if (m_selectedNodeOrder.size() != 1)
+    return {};
+  const auto *currentDiagram = diagram();
+  const auto *node = currentDiagram ? findNode(*currentDiagram,
+                                               m_selectedNodeOrder.constFirst())
+                                    : nullptr;
+  if (!node || !node->showAttributes)
+    return node ? QStringLiteral("inherit") : QString{};
+  return *node->showAttributes ? QStringLiteral("show")
+                               : QStringLiteral("hide");
+}
+
+QString DiagramCanvas::selectedOperationsVisibility() const {
+  if (m_selectedNodeOrder.size() != 1)
+    return {};
+  const auto *currentDiagram = diagram();
+  const auto *node = currentDiagram ? findNode(*currentDiagram,
+                                               m_selectedNodeOrder.constFirst())
+                                    : nullptr;
+  if (!node || !node->showOperations)
+    return node ? QStringLiteral("inherit") : QString{};
+  return *node->showOperations ? QStringLiteral("show")
+                               : QStringLiteral("hide");
+}
+
+int DiagramCanvas::incomingRelatedTypeCount() const {
+  return m_project && m_selectedNodeOrder.size() == 1
+             ? m_project->relatedElementCountForDiagram(
+                   m_diagramId, m_selectedNodeOrder.constFirst(),
+                   QStringLiteral("incoming"))
+             : 0;
+}
+
+int DiagramCanvas::outgoingRelatedTypeCount() const {
+  return m_project && m_selectedNodeOrder.size() == 1
+             ? m_project->relatedElementCountForDiagram(
+                   m_diagramId, m_selectedNodeOrder.constFirst(),
+                   QStringLiteral("outgoing"))
+             : 0;
+}
+
 bool DiagramCanvas::canWrapSelectionInPackage() const {
   return m_project && m_selectedNodeOrder.size() == 1 &&
          m_project->canWrapPresentationInPackage(m_diagramId,
@@ -2937,13 +2989,18 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
           continue;
         const ui::PresentationClip clip =
             clipLayout.clipFor(node.id, detachedDragRoots);
+        const bool showAttributes =
+            node.showAttributes.value_or(d->showAttributes);
+        const bool showOperations =
+            node.showOperations.value_or(d->showOperations);
         snapshot.nodes.append(
             {rect, (*element)->type,
              presentation_layout::elementDisplayNameInPackage(
                  projectData, **element, containingPackageId(node.id)),
              stereotype_catalog::displayText(projectData,
                                              (*element)->stereotypeIds),
-             (*element)->attributes, (*element)->operations,
+             showAttributes ? (*element)->attributes : QStringList{},
+             showOperations ? (*element)->operations : QStringList{},
              (*element)->enumLiterals,
              renderElementStyle(
                  project_style::effectiveStyleForNode(projectData, node)),
@@ -3253,16 +3310,24 @@ DiagramCanvas::TextHit DiagramCanvas::hitText(const QPointF &scenePoint) const {
                   element->enumLiterals.at(i),
                   textLineRect(rect, line, headerHeight)};
     } else {
-      for (int i = 0; i < element->attributes.size(); ++i, ++line)
-        if (textLineRect(rect, line, headerHeight).contains(scenePoint))
-          return {element->id, QStringLiteral("attribute"), i,
-                  element->attributes.at(i),
-                  textLineRect(rect, line, headerHeight)};
-      for (int i = 0; i < element->operations.size(); ++i, ++line)
-        if (textLineRect(rect, line, headerHeight).contains(scenePoint))
-          return {element->id, QStringLiteral("operation"), i,
-                  element->operations.at(i),
-                  textLineRect(rect, line, headerHeight)};
+      const bool showAttributes =
+          node->showAttributes.value_or(d->showAttributes);
+      const bool showOperations =
+          node->showOperations.value_or(d->showOperations);
+      if (showAttributes) {
+        for (int i = 0; i < element->attributes.size(); ++i, ++line)
+          if (textLineRect(rect, line, headerHeight).contains(scenePoint))
+            return {element->id, QStringLiteral("attribute"), i,
+                    element->attributes.at(i),
+                    textLineRect(rect, line, headerHeight)};
+      }
+      if (showOperations) {
+        for (int i = 0; i < element->operations.size(); ++i, ++line)
+          if (textLineRect(rect, line, headerHeight).contains(scenePoint))
+            return {element->id, QStringLiteral("operation"), i,
+                    element->operations.at(i),
+                    textLineRect(rect, line, headerHeight)};
+      }
     }
   }
   if (const auto *container = hitContainer(scenePoint)) {
@@ -4365,6 +4430,28 @@ void DiagramCanvas::setSelectedPortSnapPoints(int horizontalPointCount,
                                    horizontalPointCount, verticalPointCount);
 }
 
+void DiagramCanvas::setDiagramCompartmentVisible(const QString &compartment,
+                                                 bool visible) {
+  if (m_project)
+    m_project->setDiagramCompartmentVisible(m_diagramId, compartment, visible);
+}
+
+void DiagramCanvas::setSelectedCompartmentVisibility(
+    const QString &compartment, const QString &visibility) {
+  if (!m_project || m_selectedNodeOrder.size() != 1)
+    return;
+  m_project->setNodeCompartmentVisibility(
+      m_diagramId, m_selectedNodeOrder.constFirst(), compartment, visibility);
+}
+
+void DiagramCanvas::addRelatedTypes(const QString &direction) {
+  if (!m_project || m_selectedNodeOrder.size() != 1)
+    return;
+  m_project->addRelatedElementsToDiagram(m_diagramId,
+                                         m_selectedNodeOrder.constFirst(),
+                                         direction, m_diagramItemSizingMode);
+}
+
 void DiagramCanvas::fitSelectionToContent() {
   const auto *d = diagram();
   if (!m_project || !d)
@@ -4390,8 +4477,10 @@ void DiagramCanvas::fitSelectionToContent() {
     if (!node || !element)
       continue;
     QRectF fitted = node->geometry;
-    fitted.setSize(
-        presentation_layout::nodeContentSize(m_project->data(), *element));
+    fitted.setSize(presentation_layout::nodeContentSize(
+        m_project->data(), *element,
+        node->showAttributes.value_or(d->showAttributes),
+        node->showOperations.value_or(d->showOperations)));
     appendGeometry(nodeId, fitted);
   }
   if (!m_selectedContainer.isEmpty()) {

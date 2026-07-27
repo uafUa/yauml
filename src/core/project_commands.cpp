@@ -181,15 +181,15 @@ void CreateElementCommand::revert(ProjectData &project) {
 ApplyCppImportCommand::ApplyCppImportCommand(
     ProjectController *controller, const ProjectData &project,
     QList<ModelElement> desiredElements,
-    QList<Relationship> desiredRelationships, QString sourceRoot)
+    QList<Relationship> desiredRelationships, QStringList sourceRoots)
     : ProjectCommand(controller,
                      desiredElements.isEmpty() && desiredRelationships.isEmpty()
                          ? QStringLiteral("Configure C++ synchronization")
                          : QStringLiteral("Import C++ changes")),
-      m_sourceRootBefore(project.cppImport.sourceRoot),
-      m_sourceRootAfter(sourceRoot.isEmpty() ? project.cppImport.sourceRoot
-                                             : std::move(sourceRoot)),
-      m_sourceRootChanged(m_sourceRootBefore != m_sourceRootAfter) {
+      m_sourceRootsBefore(project.cppImport.sourceRoots),
+      m_sourceRootsAfter(sourceRoots.isEmpty() ? project.cppImport.sourceRoots
+                                               : std::move(sourceRoots)),
+      m_sourceRootsChanged(m_sourceRootsBefore != m_sourceRootsAfter) {
   m_changes.reserve(desiredElements.size());
   qsizetype nextInsertionIndex = project.elements.size();
   for (auto &desired : desiredElements) {
@@ -221,8 +221,8 @@ ApplyCppImportCommand::ApplyCppImportCommand(
 }
 
 void ApplyCppImportCommand::execute(ProjectData &project) {
-  if (m_sourceRootChanged)
-    project.cppImport.sourceRoot = m_sourceRootAfter;
+  if (m_sourceRootsChanged)
+    project.cppImport.sourceRoots = m_sourceRootsAfter;
   for (const auto &change : m_changes) {
     if (change.before) {
       if (auto *element = findElement(project, change.after.id))
@@ -262,8 +262,8 @@ void ApplyCppImportCommand::revert(ProjectData &project) {
       removeRecordedValue(project.elements, change->index, change->after.id);
     }
   }
-  if (m_sourceRootChanged)
-    project.cppImport.sourceRoot = m_sourceRootBefore;
+  if (m_sourceRootsChanged)
+    project.cppImport.sourceRoots = m_sourceRootsBefore;
 }
 
 CreateBrowserFolderCommand::CreateBrowserFolderCommand(
@@ -1019,6 +1019,70 @@ void SetNodePortSnapPointsCommand::apply(ProjectData &project, int horizontal,
     if (auto *node = findNode(*diagram, m_nodeId)) {
       node->horizontalPortSnapPoints = horizontal;
       node->verticalPortSnapPoints = vertical;
+    }
+  }
+}
+
+SetDiagramCompartmentVisibilityCommand::SetDiagramCompartmentVisibilityCommand(
+    ProjectController *controller, QString diagramId,
+    bool attributesCompartment, bool before, bool after)
+    : ProjectCommand(
+          controller,
+          QStringLiteral("%1 %2").arg(
+              after ? QStringLiteral("Show") : QStringLiteral("Hide"),
+              attributesCompartment ? QStringLiteral("attributes")
+                                    : QStringLiteral("operations"))),
+      m_diagramId(std::move(diagramId)),
+      m_attributesCompartment(attributesCompartment), m_before(before),
+      m_after(after) {}
+
+void SetDiagramCompartmentVisibilityCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void SetDiagramCompartmentVisibilityCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void SetDiagramCompartmentVisibilityCommand::apply(ProjectData &project,
+                                                   bool value) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    if (m_attributesCompartment)
+      diagram->showAttributes = value;
+    else
+      diagram->showOperations = value;
+  }
+}
+
+SetNodeCompartmentVisibilityCommand::SetNodeCompartmentVisibilityCommand(
+    ProjectController *controller, QString diagramId, QString nodeId,
+    bool attributesCompartment, std::optional<bool> before,
+    std::optional<bool> after)
+    : ProjectCommand(controller,
+                     QStringLiteral("Set presentation %1 visibility")
+                         .arg(attributesCompartment
+                                  ? QStringLiteral("attribute")
+                                  : QStringLiteral("operation"))),
+      m_diagramId(std::move(diagramId)), m_nodeId(std::move(nodeId)),
+      m_attributesCompartment(attributesCompartment), m_before(before),
+      m_after(after) {}
+
+void SetNodeCompartmentVisibilityCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void SetNodeCompartmentVisibilityCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void SetNodeCompartmentVisibilityCommand::apply(ProjectData &project,
+                                                std::optional<bool> value) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    if (auto *node = findNode(*diagram, m_nodeId)) {
+      if (m_attributesCompartment)
+        node->showAttributes = value;
+      else
+        node->showOperations = value;
     }
   }
 }

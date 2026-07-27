@@ -63,6 +63,18 @@ class DiagramCanvas : public QQuickItem {
                  selectedHorizontalPortSnapPoints NOTIFY canvasSelectionChanged)
   Q_PROPERTY(int selectedVerticalPortSnapPoints READ
                  selectedVerticalPortSnapPoints NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(bool diagramAttributesVisible READ diagramAttributesVisible NOTIFY
+                 canvasSelectionChanged)
+  Q_PROPERTY(bool diagramOperationsVisible READ diagramOperationsVisible NOTIFY
+                 canvasSelectionChanged)
+  Q_PROPERTY(QString selectedAttributesVisibility READ
+                 selectedAttributesVisibility NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(QString selectedOperationsVisibility READ
+                 selectedOperationsVisibility NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(int incomingRelatedTypeCount READ incomingRelatedTypeCount NOTIFY
+                 canvasSelectionChanged)
+  Q_PROPERTY(int outgoingRelatedTypeCount READ outgoingRelatedTypeCount NOTIFY
+                 canvasSelectionChanged)
   Q_PROPERTY(bool canWrapSelectionInPackage READ canWrapSelectionInPackage
                  NOTIFY canvasSelectionChanged)
   Q_PROPERTY(QString selectedStyleId READ selectedStyleId NOTIFY
@@ -138,6 +150,12 @@ public:
   QString selectedConnectorRouting() const;
   int selectedHorizontalPortSnapPoints() const;
   int selectedVerticalPortSnapPoints() const;
+  bool diagramAttributesVisible() const;
+  bool diagramOperationsVisible() const;
+  QString selectedAttributesVisibility() const;
+  QString selectedOperationsVisibility() const;
+  int incomingRelatedTypeCount() const;
+  int outgoingRelatedTypeCount() const;
   bool canWrapSelectionInPackage() const;
   QString selectedStyleId() const;
   QVariantMap relationshipGestureKeys() const;
@@ -179,6 +197,11 @@ public:
   Q_INVOKABLE void setSelectedConnectorRouting(const QString &routing);
   Q_INVOKABLE void setSelectedPortSnapPoints(int horizontalPointCount,
                                              int verticalPointCount);
+  Q_INVOKABLE void setDiagramCompartmentVisible(const QString &compartment,
+                                                bool visible);
+  Q_INVOKABLE void setSelectedCompartmentVisibility(const QString &compartment,
+                                                    const QString &visibility);
+  Q_INVOKABLE void addRelatedTypes(const QString &direction);
   Q_INVOKABLE void fitSelectionToContent();
   Q_INVOKABLE void wrapSelectionInPackage();
   Q_INVOKABLE void assignStyleToSelection(const QString &styleId);

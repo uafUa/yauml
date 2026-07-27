@@ -355,6 +355,14 @@ QJsonObject nodeToJson(const NodePresentation &node) {
                   node.verticalPortSnapPoints);
   else
     object.remove(QStringLiteral("verticalPortSnapPoints"));
+  if (node.showAttributes)
+    object.insert(QStringLiteral("showAttributes"), *node.showAttributes);
+  else
+    object.remove(QStringLiteral("showAttributes"));
+  if (node.showOperations)
+    object.insert(QStringLiteral("showOperations"), *node.showOperations);
+  else
+    object.remove(QStringLiteral("showOperations"));
   if (!node.styleId.isEmpty())
     object.insert(QStringLiteral("styleId"), node.styleId);
   else
@@ -497,11 +505,12 @@ QByteArray manifestBytes(const ProjectData &project) {
   object.insert(QStringLiteral("model"), QString::fromLatin1(kModelName));
   object.insert(QStringLiteral("diagrams"), QString::fromLatin1(kDiagramsName));
   QJsonObject cppImport = project.cppImport.extra;
-  if (!project.cppImport.sourceRoot.isEmpty())
-    cppImport.insert(QStringLiteral("sourceRoot"),
-                     project.cppImport.sourceRoot);
+  cppImport.remove(QStringLiteral("sourceRoot"));
+  if (!project.cppImport.sourceRoots.isEmpty())
+    cppImport.insert(QStringLiteral("sourceRoots"),
+                     QJsonArray::fromStringList(project.cppImport.sourceRoots));
   else
-    cppImport.remove(QStringLiteral("sourceRoot"));
+    cppImport.remove(QStringLiteral("sourceRoots"));
   if (!cppImport.isEmpty())
     object.insert(QStringLiteral("cppImport"), cppImport);
   else
@@ -564,6 +573,14 @@ QByteArray diagramsBytes(const ProjectData &project) {
     QJsonObject object = diagram.extra;
     object.insert(QStringLiteral("id"), diagram.id);
     object.insert(QStringLiteral("name"), diagram.name);
+    if (!diagram.showAttributes)
+      object.insert(QStringLiteral("showAttributes"), false);
+    else
+      object.remove(QStringLiteral("showAttributes"));
+    if (!diagram.showOperations)
+      object.insert(QStringLiteral("showOperations"), false);
+    else
+      object.remove(QStringLiteral("showOperations"));
     QJsonArray containers;
     for (const auto &container : diagram.containers)
       containers.append(containerToJson(container));
@@ -744,10 +761,21 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
   project.name = manifest.value(QStringLiteral("name")).toString();
   const QJsonObject cppImport =
       manifest.value(QStringLiteral("cppImport")).toObject();
-  project.cppImport.sourceRoot =
-      cppImport.value(QStringLiteral("sourceRoot")).toString();
-  project.cppImport.extra =
-      withoutKeys(cppImport, {QStringLiteral("sourceRoot")});
+  for (const auto &value :
+       cppImport.value(QStringLiteral("sourceRoots")).toArray()) {
+    const QString root = value.toString();
+    if (!root.isEmpty() && !project.cppImport.sourceRoots.contains(root))
+      project.cppImport.sourceRoots.append(root);
+  }
+  // Projects written before multi-root import used one sourceRoot string.
+  if (project.cppImport.sourceRoots.isEmpty()) {
+    const QString legacyRoot =
+        cppImport.value(QStringLiteral("sourceRoot")).toString();
+    if (!legacyRoot.isEmpty())
+      project.cppImport.sourceRoots.append(legacyRoot);
+  }
+  project.cppImport.extra = withoutKeys(
+      cppImport, {QStringLiteral("sourceRoot"), QStringLiteral("sourceRoots")});
   project.manifestExtra = withoutKeys(
       manifest, {QStringLiteral("schemaVersion"), QStringLiteral("id"),
                  QStringLiteral("name"), QStringLiteral("model"),
@@ -974,13 +1002,31 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
       node.verticalPortSnapPoints = readPortSnapPointCount(
           nodeObject, QStringLiteral("verticalPortSnapPoints"), node.id,
           outcome.diagnostics);
+      const auto readVisibilityOverride =
+          [&](const QString &key) -> std::optional<bool> {
+        const QJsonValue value = nodeObject.value(key);
+        if (value.isUndefined())
+          return std::nullopt;
+        if (value.isBool())
+          return value.toBool();
+        outcome.diagnostics.append(error(
+            QStringLiteral("validation"),
+            QStringLiteral("Node %1 must be a boolean").arg(key), node.id));
+        return std::nullopt;
+      };
+      node.showAttributes =
+          readVisibilityOverride(QStringLiteral("showAttributes"));
+      node.showOperations =
+          readVisibilityOverride(QStringLiteral("showOperations"));
       node.styleId = nodeObject.value(QStringLiteral("styleId")).toString();
       node.extra = withoutKeys(
-          nodeObject, {QStringLiteral("id"), QStringLiteral("elementId"),
-                       QStringLiteral("geometry"),
-                       QStringLiteral("horizontalPortSnapPoints"),
-                       QStringLiteral("verticalPortSnapPoints"),
-                       QStringLiteral("styleId")});
+          nodeObject,
+          {QStringLiteral("id"), QStringLiteral("elementId"),
+           QStringLiteral("geometry"),
+           QStringLiteral("horizontalPortSnapPoints"),
+           QStringLiteral("verticalPortSnapPoints"),
+           QStringLiteral("showAttributes"), QStringLiteral("showOperations"),
+           QStringLiteral("styleId")});
       diagram.nodes.append(node);
     }
     for (const auto &connectorValue :
@@ -1046,10 +1092,26 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
            QStringLiteral("annotationPlacements")});
       diagram.connectors.append(connector);
     }
+    const auto readDiagramVisibility = [&](const QString &key) {
+      const QJsonValue value = object.value(key);
+      if (value.isUndefined())
+        return true;
+      if (value.isBool())
+        return value.toBool();
+      outcome.diagnostics.append(error(
+          QStringLiteral("validation"),
+          QStringLiteral("Diagram %1 must be a boolean").arg(key), diagram.id));
+      return true;
+    };
+    diagram.showAttributes =
+        readDiagramVisibility(QStringLiteral("showAttributes"));
+    diagram.showOperations =
+        readDiagramVisibility(QStringLiteral("showOperations"));
     diagram.extra = withoutKeys(
         object, {QStringLiteral("id"), QStringLiteral("name"),
-                 QStringLiteral("containers"), QStringLiteral("nodes"),
-                 QStringLiteral("connectors")});
+                 QStringLiteral("showAttributes"),
+                 QStringLiteral("showOperations"), QStringLiteral("containers"),
+                 QStringLiteral("nodes"), QStringLiteral("connectors")});
     project.diagrams.append(diagram);
   }
 

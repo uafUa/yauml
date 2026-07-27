@@ -20,10 +20,18 @@ class CppImportController final : public QObject {
   Q_PROPERTY(bool canApply READ canApply NOTIFY previewChanged)
   Q_PROPERTY(bool canSynchronize READ canSynchronize NOTIFY
                  synchronizationStateChanged)
+  Q_PROPERTY(QStringList configuredSourceRoots READ configuredSourceRoots NOTIFY
+                 synchronizationStateChanged)
   Q_PROPERTY(QString configuredSourceRoot READ configuredSourceRoot NOTIFY
                  synchronizationStateChanged)
+  Q_PROPERTY(QString configuredSourceRootsText READ configuredSourceRootsText
+                 NOTIFY synchronizationStateChanged)
+  Q_PROPERTY(QStringList previewSourceRoots READ previewSourceRoots NOTIFY
+                 previewChanged)
   Q_PROPERTY(
       QString previewSourceRoot READ previewSourceRoot NOTIFY previewChanged)
+  Q_PROPERTY(QString previewSourceRootsText READ previewSourceRootsText NOTIFY
+                 previewChanged)
   Q_PROPERTY(QString summary READ summary NOTIFY previewChanged)
   Q_PROPERTY(QString compilationDatabasePath READ compilationDatabasePath NOTIFY
                  previewChanged)
@@ -37,13 +45,18 @@ public:
   bool busy() const;
   bool canApply() const;
   bool canSynchronize() const;
+  QStringList configuredSourceRoots() const;
   QString configuredSourceRoot() const;
+  QString configuredSourceRootsText() const;
+  QStringList previewSourceRoots() const;
   QString previewSourceRoot() const;
+  QString previewSourceRootsText() const;
   QString summary() const;
   QString compilationDatabasePath() const;
   QVariantList previewItems() const;
 
   Q_INVOKABLE void preview(const QUrl &sourceOrBuildDirectory);
+  Q_INVOKABLE void previewSources(const QVariantList &sourceDirectories);
   Q_INVOKABLE void synchronize();
   Q_INVOKABLE void applyPreview();
   Q_INVOKABLE void clearPreview();
@@ -56,6 +69,7 @@ signals:
   void importApplied(int count);
 
 private:
+  void previewPaths(const QStringList &sourceDirectories);
   void finishPreview();
   void publishDiagnostics(const QList<Diagnostic> &diagnostics);
   void rebuildViewState();
@@ -66,7 +80,7 @@ private:
   CppImportPreview m_preview;
   QVariantList m_previewItems;
   QString m_summary;
-  QString m_requestedSourcePath;
+  QStringList m_requestedSourcePaths;
   bool m_busy = false;
 };
 

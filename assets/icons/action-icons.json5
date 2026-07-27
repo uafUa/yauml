@@ -309,6 +309,16 @@
     },
 
     presentation: {
+      addIncomingRelatedTypes: {
+        label: "Add types that depend on this type",
+        contexts: ["element context menu", "presentation toolbox"],
+        svg: "",
+      },
+      addOutgoingRelatedTypes: {
+        label: "Add types on which this type depends",
+        contexts: ["element context menu", "presentation toolbox"],
+        svg: "",
+      },
       wrapInNamespace: {
         label: "Wrap in parent namespace",
         contexts: ["element context menu"],
@@ -494,53 +504,53 @@
     namespace: {
       label: "Synthetic or legacy namespace",
       match: { kind: "namespace", objectType: "namespace" },
-      svg: "",
-      expandedSvg: "",
+      svg: "tree-namespace.svg",
+      expandedSvg: "tree-namespace.svg",
     },
     package: {
       label: "UML package or materialized C++ namespace",
       match: { kind: "element", objectType: "package" },
-      svg: "",
-      expandedSvg: "",
+      svg: "tree-namespace.svg",
+      expandedSvg: "tree-namespace.svg",
     },
     folder: {
       label: "Custom project-tree folder",
       match: { kind: "folder", objectType: "folder" },
-      svg: "",
-      expandedSvg: "",
+      svg: "tree-folder.svg",
+      expandedSvg: "tree-folder.svg",
     },
     class: {
       label: "Class",
       match: { kind: "element", objectType: "class" },
-      svg: "",
+      svg: "tree-class.svg",
     },
     nestedClass: {
       label: "Nested class",
       match: { kind: "element", objectType: "class", nested: true },
       note: "If empty, integration will fall back to projectTreeNodes.class.svg.",
-      svg: "",
+      svg: "tree-class.svg",
     },
     struct: {
       label: "Struct",
       match: { kind: "element", objectType: "struct" },
-      svg: "",
+      svg: "tree-struct.svg",
     },
     nestedStruct: {
       label: "Nested struct",
       match: { kind: "element", objectType: "struct", nested: true },
       note: "If empty, integration will fall back to projectTreeNodes.struct.svg.",
-      svg: "",
+      svg: "tree-struct.svg",
     },
     enumeration: {
       label: "Enumeration",
       match: { kind: "element", objectType: "enumeration" },
-      svg: "",
+      svg: "tree-enum.svg",
     },
     nestedEnumeration: {
       label: "Nested enumeration",
       match: { kind: "element", objectType: "enumeration", nested: true },
       note: "If empty, integration will fall back to projectTreeNodes.enumeration.svg.",
-      svg: "",
+      svg: "tree-enum.svg",
     },
     classDiagram: {
       label: "Class diagram",

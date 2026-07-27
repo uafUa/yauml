@@ -56,6 +56,51 @@ bool pathIsWithin(const QString &path, const QString &directory) {
   return candidate == root.chopped(1) || candidate.startsWith(root);
 }
 
+bool pathIsWithinAny(const QString &path, const QStringList &directories) {
+  return std::any_of(
+      directories.cbegin(), directories.cend(),
+      [&](const QString &directory) { return pathIsWithin(path, directory); });
+}
+
+QStringList normalizeSourceRoots(const QStringList &searchPaths,
+                                 QList<Diagnostic> &diagnostics) {
+  QStringList roots;
+  QSet<QString> seen;
+  for (const QString &searchPath : searchPaths) {
+    const QString trimmed = searchPath.trimmed();
+    if (trimmed.isEmpty())
+      continue;
+    const QFileInfo input(trimmed);
+    if (!input.exists() || !input.isDir()) {
+      diagnostics.append(importDiagnostic(
+          DiagnosticSeverity::Error,
+          QStringLiteral("The selected C++ source directory does not exist: %1")
+              .arg(trimmed)));
+      continue;
+    }
+    const QString normalized = normalizedPath(input.absoluteFilePath());
+    const QString comparable = comparablePath(normalized);
+    if (!seen.contains(comparable)) {
+      roots.append(normalized);
+      seen.insert(comparable);
+    }
+  }
+
+  // Selecting both a parent and one of its descendants must not scan or parse
+  // the descendant twice. Prefer the broader root regardless of click order.
+  QStringList minimalRoots;
+  for (const QString &candidate : std::as_const(roots)) {
+    const bool covered =
+        std::any_of(roots.cbegin(), roots.cend(), [&](const QString &other) {
+          return comparablePath(candidate) != comparablePath(other) &&
+                 pathIsWithin(candidate, other);
+        });
+    if (!covered)
+      minimalRoots.append(candidate);
+  }
+  return minimalRoots;
+}
+
 QString findCompilationDatabase(const QString &searchPath,
                                 QList<Diagnostic> &diagnostics,
                                 bool reportMissing) {
@@ -1087,7 +1132,7 @@ CXChildVisitResult visitRecordMember(CXCursor cursor, CXCursor,
 }
 
 struct AstVisitorContext {
-  QString sourceRoot;
+  QStringList sourceRoots;
   QHash<QString, CppSourceSymbol> *symbols;
   QList<DiscoveredTypeUse> *typeUses;
   QList<Diagnostic> *diagnostics;
@@ -1108,7 +1153,7 @@ CXChildVisitResult visitAst(CXCursor cursor, CXCursor,
   int line = 0;
   int column = 0;
   const QString filePath = cursorFilePath(cursor, &line, &column);
-  if (filePath.isEmpty() || !pathIsWithin(filePath, context.sourceRoot))
+  if (filePath.isEmpty() || !pathIsWithinAny(filePath, context.sourceRoots))
     return CXChildVisit_Recurse;
   context.declarationFiles->insert(comparablePath(filePath));
   const QString name = qualifiedName(cursor);
@@ -1146,61 +1191,35 @@ CXChildVisitResult visitAst(CXCursor cursor, CXCursor,
   return CXChildVisit_Recurse;
 }
 
-QString commonDirectory(const QStringList &filePaths) {
-  if (filePaths.isEmpty())
+QString commonSourceRoot(const QStringList &sourceRoots) {
+  if (sourceRoots.isEmpty())
     return {};
-  QStringList common =
-      QDir::fromNativeSeparators(QFileInfo(filePaths.first()).absolutePath())
-          .split(u'/', Qt::SkipEmptyParts);
-  for (const QString &path : filePaths.mid(1)) {
-    const QStringList parts =
-        QDir::fromNativeSeparators(QFileInfo(path).absolutePath())
-            .split(u'/', Qt::SkipEmptyParts);
-    int shared = 0;
-    while (shared < common.size() && shared < parts.size() &&
-           common.at(shared).compare(parts.at(shared), Qt::CaseInsensitive) ==
-               0)
-      ++shared;
-    common = common.mid(0, shared);
-  }
-#ifdef Q_OS_WIN
-  if (!common.isEmpty() && common.first().endsWith(u':'))
-    return common.join(u'/') + u'/';
-#endif
-  return u'/' + common.join(u'/');
-}
+  if (sourceRoots.size() == 1)
+    return sourceRoots.first();
 
-QString inferSourceRoot(const QString &requestedPath,
-                        const QString &databasePath,
-                        const QStringList &sourceFiles) {
-  const QFileInfo requested(requestedPath);
-  const QString requestedDirectory =
-      normalizedPath(requested.isDir() ? requested.absoluteFilePath()
-                                       : requested.absolutePath());
-  const QString databaseDirectory = QFileInfo(databasePath).absolutePath();
-  if (requested.isDir() &&
-      requestedDirectory != normalizedPath(databaseDirectory) &&
-      pathIsWithin(databasePath, requestedDirectory))
-    return requestedDirectory;
-
-  QString root = commonDirectory(sourceFiles);
-  if (root.isEmpty())
-    root = databaseDirectory;
-  for (QDir candidate(root); candidate.exists();) {
-    if (QFileInfo::exists(
-            candidate.filePath(QStringLiteral("CMakeLists.txt"))) ||
-        QFileInfo::exists(candidate.filePath(QStringLiteral(".git"))))
-      return normalizedPath(candidate.absolutePath());
-    if (!candidate.cdUp())
-      break;
+  QString common = sourceRoots.first();
+  while (!std::all_of(
+      sourceRoots.cbegin(), sourceRoots.cend(),
+      [&](const QString &root) { return pathIsWithin(root, common); })) {
+    QDir parent(common);
+    if (!parent.cdUp())
+      return sourceRoots.first();
+    const QString next = normalizedPath(parent.absolutePath());
+    if (comparablePath(next) == comparablePath(common))
+      return sourceRoots.first();
+    common = next;
   }
-  return normalizedPath(root);
+  return common;
 }
 
 struct CompileCommand {
   QString directory;
   QString filePath;
   QStringList arguments;
+  // Commands synthesized by the folder scanner intentionally tolerate
+  // incomplete include paths. Compilation-database commands are authoritative
+  // and keep parser failures as errors.
+  bool bestEffort = false;
 };
 
 bool isCppImplementationFile(const QString &path) {
@@ -1290,62 +1309,67 @@ bool loadCompilationCommands(const QString &databasePath,
   return false;
 }
 
-bool scanSourceCommands(const QString &searchPath,
+bool scanSourceCommands(const QStringList &sourceRoots,
                         QList<CompileCommand> &commands,
                         QStringList &sourceFiles, QString &sourceRoot,
                         QList<Diagnostic> &diagnostics) {
   constexpr qsizetype kMaximumSourceFiles = 10'000;
   constexpr int kMaximumDirectoryDepth = 32;
 
-  const QFileInfo input(searchPath);
-  if (!input.exists()) {
+  if (sourceRoots.isEmpty()) {
     diagnostics.append(importDiagnostic(
         DiagnosticSeverity::Error,
-        QStringLiteral("The selected C++ path does not exist: %1")
-            .arg(searchPath)));
+        QStringLiteral("Select at least one C++ source directory")));
     return false;
   }
-  sourceRoot = normalizedPath(input.isDir() ? input.absoluteFilePath()
-                                            : input.absolutePath());
+  sourceRoot = commonSourceRoot(sourceRoots);
 
   QStringList implementations;
   QStringList headers;
-  if (input.isFile() && (isCppImplementationFile(input.absoluteFilePath()) ||
-                         isCppHeaderFile(input.absoluteFilePath()))) {
-    (isCppHeaderFile(input.absoluteFilePath()) ? headers : implementations)
-        .append(normalizedPath(input.absoluteFilePath()));
-  } else if (input.isDir()) {
-    QList<QPair<QString, int>> pending{{sourceRoot, 0}};
-    while (!pending.isEmpty() &&
-           implementations.size() + headers.size() < kMaximumSourceFiles) {
-      const auto [directoryPath, depth] = pending.takeFirst();
-      const QDir directory(directoryPath);
-      for (const QFileInfo &entry :
-           directory.entryInfoList(QDir::Dirs | QDir::Files |
-                                       QDir::NoDotAndDotDot | QDir::NoSymLinks,
-                                   QDir::Name | QDir::IgnoreCase)) {
-        if (entry.isDir()) {
-          if (depth < kMaximumDirectoryDepth &&
-              !excludedSourceDirectory(entry.fileName())) {
-            pending.append({entry.absoluteFilePath(), depth + 1});
-          }
-          continue;
+  QList<QPair<QString, int>> pending;
+  for (const QString &root : sourceRoots)
+    pending.append({root, 0});
+  QSet<QString> seenDirectories;
+  QSet<QString> seenFiles;
+  while (!pending.isEmpty() &&
+         implementations.size() + headers.size() < kMaximumSourceFiles) {
+    const auto [directoryPath, depth] = pending.takeFirst();
+    const QString comparableDirectory = comparablePath(directoryPath);
+    if (seenDirectories.contains(comparableDirectory))
+      continue;
+    seenDirectories.insert(comparableDirectory);
+
+    const QDir directory(directoryPath);
+    for (const QFileInfo &entry : directory.entryInfoList(
+             QDir::Dirs | QDir::Files | QDir::NoDotAndDotDot | QDir::NoSymLinks,
+             QDir::Name | QDir::IgnoreCase)) {
+      if (entry.isDir()) {
+        if (depth < kMaximumDirectoryDepth &&
+            !excludedSourceDirectory(entry.fileName())) {
+          pending.append({entry.absoluteFilePath(), depth + 1});
         }
-        if (isCppImplementationFile(entry.absoluteFilePath()))
-          implementations.append(normalizedPath(entry.absoluteFilePath()));
-        else if (isCppHeaderFile(entry.absoluteFilePath()))
-          headers.append(normalizedPath(entry.absoluteFilePath()));
-        if (implementations.size() + headers.size() >= kMaximumSourceFiles)
-          break;
+        continue;
       }
+      if (!isCppImplementationFile(entry.absoluteFilePath()) &&
+          !isCppHeaderFile(entry.absoluteFilePath()))
+        continue;
+      const QString normalized = normalizedPath(entry.absoluteFilePath());
+      const QString comparable = comparablePath(normalized);
+      if (seenFiles.contains(comparable))
+        continue;
+      seenFiles.insert(comparable);
+      (isCppHeaderFile(normalized) ? headers : implementations)
+          .append(normalized);
+      if (implementations.size() + headers.size() >= kMaximumSourceFiles)
+        break;
     }
-    if (!pending.isEmpty()) {
-      diagnostics.append(importDiagnostic(
-          DiagnosticSeverity::Warning,
-          QStringLiteral("C++ source scan reached the %1-file safety limit; "
-                         "the preview is partial")
-              .arg(kMaximumSourceFiles)));
-    }
+  }
+  if (!pending.isEmpty()) {
+    diagnostics.append(importDiagnostic(
+        DiagnosticSeverity::Warning,
+        QStringLiteral("C++ source scan reached the %1-file safety limit; "
+                       "the preview is partial")
+            .arg(kMaximumSourceFiles)));
   }
 
   std::sort(implementations.begin(), implementations.end());
@@ -1354,18 +1378,24 @@ bool scanSourceCommands(const QString &searchPath,
   if (sourceFiles.isEmpty()) {
     diagnostics.append(importDiagnostic(
         DiagnosticSeverity::Error,
-        QStringLiteral("No C++ source or header files were found below %1")
-            .arg(sourceRoot)));
+        QStringLiteral("No C++ source or header files were found in the "
+                       "selected source directories")));
     return false;
   }
 
+  // The common parent supports sibling selections whose includes are written
+  // relative to their shared source directory. Declaration filtering still
+  // ensures that unselected sibling folders are not imported.
   QStringList includeRoots{sourceRoot};
-  for (const QString &candidateName :
-       {QStringLiteral("src"), QStringLiteral("source"),
-        QStringLiteral("include"), QStringLiteral("inc")}) {
-    const QString candidate = QDir(sourceRoot).filePath(candidateName);
-    if (QFileInfo(candidate).isDir())
-      includeRoots.append(normalizedPath(candidate));
+  includeRoots.append(sourceRoots);
+  for (const QString &root : sourceRoots) {
+    for (const QString &candidateName :
+         {QStringLiteral("src"), QStringLiteral("source"),
+          QStringLiteral("include"), QStringLiteral("inc")}) {
+      const QString candidate = QDir(root).filePath(candidateName);
+      if (QFileInfo(candidate).isDir())
+        includeRoots.append(normalizedPath(candidate));
+    }
   }
   includeRoots.removeDuplicates();
 
@@ -1382,13 +1412,19 @@ bool scanSourceCommands(const QString &searchPath,
       command.arguments.append(
           {QStringLiteral("-x"), QStringLiteral("c++-header")});
     command.arguments.append(filePath);
+    command.bestEffort = true;
     commands.append(std::move(command));
   }
   diagnostics.append(importDiagnostic(
       DiagnosticSeverity::Info,
-      QStringLiteral("No compilation database was found; using a best-effort "
-                     "scan of %1 C++ source and header file(s)")
-          .arg(sourceFiles.size())));
+      QStringLiteral(
+          "No compilation database was found; using a best-effort "
+          "scan of %1 C++ source and header file(s) from %2 selected "
+          "source director%3")
+          .arg(sourceFiles.size())
+          .arg(sourceRoots.size())
+          .arg(sourceRoots.size() == 1 ? QStringLiteral("y")
+                                       : QStringLiteral("ies"))));
   return true;
 }
 
@@ -1471,7 +1507,7 @@ void appendTranslationUnitDiagnostics(CXTranslationUnit translationUnit,
   }
 }
 
-CppImportPreview discover(const QString &searchPath,
+CppImportPreview discover(const QStringList &searchPaths,
                           const CppImportOptions &options) {
   CppImportPreview preview;
   preview.optionsUsed = options;
@@ -1485,25 +1521,85 @@ CppImportPreview discover(const QString &searchPath,
     preview.diagnostics = preview.discoveryDiagnostics;
     return preview;
   }
-  preview.compilationDatabasePath =
-      findCompilationDatabase(searchPath, preview.discoveryDiagnostics, false);
-  QList<CompileCommand> commands;
-  QStringList sourceFiles;
-  if (!preview.compilationDatabasePath.isEmpty()) {
-    preview.usedCompilationDatabase = true;
-    if (!loadCompilationCommands(preview.compilationDatabasePath, commands,
-                                 sourceFiles, preview.discoveryDiagnostics)) {
-      preview.diagnostics = preview.discoveryDiagnostics;
-      return preview;
+  preview.sourceRoots =
+      normalizeSourceRoots(searchPaths, preview.discoveryDiagnostics);
+  if (preview.sourceRoots.isEmpty()) {
+    if (preview.discoveryDiagnostics.isEmpty()) {
+      preview.discoveryDiagnostics.append(importDiagnostic(
+          DiagnosticSeverity::Error,
+          QStringLiteral("Select at least one C++ source directory")));
     }
-    preview.sourceRoot = inferSourceRoot(
-        searchPath, preview.compilationDatabasePath, sourceFiles);
-  } else if (!scanSourceCommands(searchPath, commands, sourceFiles,
-                                 preview.sourceRoot,
-                                 preview.discoveryDiagnostics)) {
     preview.diagnostics = preview.discoveryDiagnostics;
     return preview;
   }
+  preview.sourceRoot = commonSourceRoot(preview.sourceRoots);
+
+  QList<CompileCommand> commands;
+  QStringList sourceFiles;
+  QStringList rootsWithoutDatabase;
+  for (const QString &sourceRoot : std::as_const(preview.sourceRoots)) {
+    const QString database = findCompilationDatabase(
+        sourceRoot, preview.discoveryDiagnostics, false);
+    if (database.isEmpty())
+      rootsWithoutDatabase.append(sourceRoot);
+    else if (!preview.compilationDatabasePaths.contains(database))
+      preview.compilationDatabasePaths.append(database);
+  }
+
+  QSet<QString> seenCommandFiles;
+  for (const QString &database :
+       std::as_const(preview.compilationDatabasePaths)) {
+    QList<CompileCommand> databaseCommands;
+    QStringList databaseSourceFiles;
+    if (!loadCompilationCommands(database, databaseCommands,
+                                 databaseSourceFiles,
+                                 preview.discoveryDiagnostics)) {
+      preview.diagnostics = preview.discoveryDiagnostics;
+      return preview;
+    }
+    for (auto &command : databaseCommands) {
+      const QString comparable = comparablePath(command.filePath);
+      if (seenCommandFiles.contains(comparable))
+        continue;
+      seenCommandFiles.insert(comparable);
+      commands.append(std::move(command));
+    }
+    sourceFiles.append(databaseSourceFiles);
+  }
+
+  if (!preview.compilationDatabasePaths.isEmpty()) {
+    preview.usedCompilationDatabase = true;
+    preview.compilationDatabasePath = preview.compilationDatabasePaths.first();
+  }
+
+  if (!rootsWithoutDatabase.isEmpty()) {
+    QList<CompileCommand> scannedCommands;
+    QStringList scannedFiles;
+    QString scannedRoot;
+    if (!scanSourceCommands(rootsWithoutDatabase, scannedCommands, scannedFiles,
+                            scannedRoot, preview.discoveryDiagnostics)) {
+      preview.diagnostics = preview.discoveryDiagnostics;
+      return preview;
+    }
+    for (auto &command : scannedCommands) {
+      const QString comparable = comparablePath(command.filePath);
+      if (seenCommandFiles.contains(comparable))
+        continue;
+      seenCommandFiles.insert(comparable);
+      commands.append(std::move(command));
+    }
+    sourceFiles.append(scannedFiles);
+  }
+
+  if (commands.isEmpty()) {
+    preview.discoveryDiagnostics.append(importDiagnostic(
+        DiagnosticSeverity::Error,
+        QStringLiteral("No C++ compilation commands could be prepared for "
+                       "the selected source directories")));
+    preview.diagnostics = preview.discoveryDiagnostics;
+    return preview;
+  }
+  sourceFiles.removeDuplicates();
 
   QHash<QString, CppSourceSymbol> symbols;
   QList<DiscoveredTypeUse> typeUses;
@@ -1512,12 +1608,11 @@ CppImportPreview discover(const QString &searchPath,
   int suppressedDiagnosticCount = 0;
   QSet<QString> seenDiagnosticMessages;
   QSet<QString> declarationFiles;
-  const bool bestEffort = !preview.usedCompilationDatabase;
   for (const auto &command : commands) {
     // Source translation units normally expose all declarations in the headers
     // they include. Avoid reparsing those headers as standalone units; headers
     // not reached from any source file are still parsed later in the list.
-    if (bestEffort && isCppHeaderFile(command.filePath) &&
+    if (command.bestEffort && isCppHeaderFile(command.filePath) &&
         declarationFiles.contains(comparablePath(command.filePath)))
       continue;
     const QStringList arguments = parserArguments(command);
@@ -1538,20 +1633,21 @@ CppImportPreview discover(const QString &searchPath,
         CXTranslationUnit_SkipFunctionBodies | CXTranslationUnit_KeepGoing,
         &translationUnit);
     if (error != CXError_Success || !translationUnit) {
-      preview.discoveryDiagnostics.append(importDiagnostic(
-          bestEffort ? DiagnosticSeverity::Warning : DiagnosticSeverity::Error,
-          QStringLiteral("Clang could not parse %1 (error %2)")
-              .arg(command.filePath)
-              .arg(static_cast<int>(error))));
+      preview.discoveryDiagnostics.append(
+          importDiagnostic(command.bestEffort ? DiagnosticSeverity::Warning
+                                              : DiagnosticSeverity::Error,
+                           QStringLiteral("Clang could not parse %1 (error %2)")
+                               .arg(command.filePath)
+                               .arg(static_cast<int>(error))));
       if (translationUnit)
         clang_disposeTranslationUnit(translationUnit);
       continue;
     }
     ++parsedTranslationUnits;
     appendTranslationUnitDiagnostics(
-        translationUnit, preview.discoveryDiagnostics, bestEffort,
+        translationUnit, preview.discoveryDiagnostics, command.bestEffort,
         seenDiagnosticMessages, suppressedDiagnosticCount);
-    AstVisitorContext visitor{preview.sourceRoot, &symbols, &typeUses,
+    AstVisitorContext visitor{preview.sourceRoots, &symbols, &typeUses,
                               &preview.discoveryDiagnostics, &declarationFiles};
     clang_visitChildren(clang_getTranslationUnitCursor(translationUnit),
                         visitAst, &visitor);
@@ -1570,7 +1666,7 @@ CppImportPreview discover(const QString &searchPath,
   if (parsedTranslationUnits == 0) {
     preview.discoveryDiagnostics.append(importDiagnostic(
         DiagnosticSeverity::Error,
-        bestEffort
+        !preview.usedCompilationDatabase
             ? QStringLiteral("Clang could not parse any discovered C++ file")
             : QStringLiteral(
                   "Clang could not parse any compilation database entry")));
@@ -1899,11 +1995,20 @@ CppImportService::preview(const QString &searchPath,
                           const QList<ModelElement> &existingElements,
                           const QList<Relationship> &existingRelationships,
                           const CppImportOptions &options) {
+  return preview(QStringList{searchPath}, existingElements,
+                 existingRelationships, options);
+}
+
+CppImportPreview
+CppImportService::preview(const QStringList &searchPaths,
+                          const QList<ModelElement> &existingElements,
+                          const QList<Relationship> &existingRelationships,
+                          const CppImportOptions &options) {
 #if UUML_HAS_LIBCLANG
-  return planImport(discover(searchPath, options), existingElements,
+  return planImport(discover(searchPaths, options), existingElements,
                     existingRelationships);
 #else
-  Q_UNUSED(searchPath)
+  Q_UNUSED(searchPaths)
   Q_UNUSED(existingElements)
   Q_UNUSED(existingRelationships)
   Q_UNUSED(options)
@@ -1926,8 +2031,15 @@ CppImportService::replan(const CppImportPreview &discovery,
 
 int CppImportService::apply(ProjectData &project,
                             const CppImportPreview &preview) {
-  if (preview.ok && !preview.sourceRoot.isEmpty())
-    project.cppImport.sourceRoot = preview.sourceRoot;
+  if (preview.ok) {
+    const QStringList roots =
+        !preview.sourceRoots.isEmpty()
+            ? preview.sourceRoots
+            : (preview.sourceRoot.isEmpty() ? QStringList{}
+                                            : QStringList{preview.sourceRoot});
+    if (!roots.isEmpty())
+      project.cppImport.sourceRoots = roots;
+  }
   int applied = 0;
   for (const auto &item : preview.items) {
     if (!item.isApplicable())

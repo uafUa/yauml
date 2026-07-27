@@ -170,6 +170,8 @@ qt_add_executable(uuml
     src/app/icon_registry.cpp
     src/app/icon_registry.h
     src/app/main.cpp
+    src/app/source_folder_picker.cpp
+    src/app/source_folder_picker.h
 )
 
 file(GLOB_RECURSE UUML_ICON_SVG_FILES CONFIGURE_DEPENDS
@@ -222,6 +224,9 @@ target_link_libraries(uuml PRIVATE
     Qt6::Quick
     Qt6::QuickControls2
 )
+if(WIN32)
+    target_link_libraries(uuml PRIVATE ole32 shell32)
+endif()
 
 if(MSVC)
     target_compile_options(uuml PRIVATE /W4 /permissive-)

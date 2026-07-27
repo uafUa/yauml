@@ -9,6 +9,7 @@
 #include <QRectF>
 #include <QString>
 #include <QStringList>
+#include <optional>
 
 namespace uuml {
 
@@ -139,6 +140,11 @@ struct NodePresentation {
   // left/right share the vertical value. Odd values keep a center snap point.
   int horizontalPortSnapPoints = 1;
   int verticalPortSnapPoints = 1;
+  // An unset value inherits the diagram-level compartment setting. Keeping
+  // inheritance explicit avoids copying defaults into every presentation and
+  // lets a later diagram change continue to affect non-overridden nodes.
+  std::optional<bool> showAttributes;
+  std::optional<bool> showOperations;
   QString styleId;
   QJsonObject extra;
 
@@ -203,6 +209,8 @@ struct ConnectorPresentation {
 struct Diagram {
   QString id;
   QString name;
+  bool showAttributes = true;
+  bool showOperations = true;
   QList<ContainerPresentation> containers;
   QList<NodePresentation> nodes;
   QList<ConnectorPresentation> connectors;
@@ -215,7 +223,7 @@ struct Diagram {
 // manifest (rather than application preferences) lets each model remember its
 // own source tree and leaves room for future per-project sync policy.
 struct CppImportConfiguration {
-  QString sourceRoot;
+  QStringList sourceRoots;
   QJsonObject extra;
 
   bool operator==(const CppImportConfiguration &) const = default;

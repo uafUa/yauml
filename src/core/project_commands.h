@@ -47,7 +47,7 @@ public:
                         const ProjectData &project,
                         QList<ModelElement> desiredElements,
                         QList<Relationship> desiredRelationships,
-                        QString sourceRoot);
+                        QStringList sourceRoots);
 
 private:
   struct ElementChange {
@@ -66,9 +66,9 @@ private:
 
   QList<ElementChange> m_changes;
   QList<RelationshipChange> m_relationshipChanges;
-  QString m_sourceRootBefore;
-  QString m_sourceRootAfter;
-  bool m_sourceRootChanged = false;
+  QStringList m_sourceRootsBefore;
+  QStringList m_sourceRootsAfter;
+  bool m_sourceRootsChanged = false;
 };
 
 class CreateBrowserFolderCommand final : public ProjectCommand {
@@ -460,6 +460,44 @@ private:
   int m_beforeVertical;
   int m_afterHorizontal;
   int m_afterVertical;
+};
+
+class SetDiagramCompartmentVisibilityCommand final : public ProjectCommand {
+public:
+  SetDiagramCompartmentVisibilityCommand(ProjectController *controller,
+                                         QString diagramId,
+                                         bool attributesCompartment,
+                                         bool before, bool after);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, bool value);
+
+  QString m_diagramId;
+  bool m_attributesCompartment;
+  bool m_before;
+  bool m_after;
+};
+
+class SetNodeCompartmentVisibilityCommand final : public ProjectCommand {
+public:
+  SetNodeCompartmentVisibilityCommand(ProjectController *controller,
+                                      QString diagramId, QString nodeId,
+                                      bool attributesCompartment,
+                                      std::optional<bool> before,
+                                      std::optional<bool> after);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, std::optional<bool> value);
+
+  QString m_diagramId;
+  QString m_nodeId;
+  bool m_attributesCompartment;
+  std::optional<bool> m_before;
+  std::optional<bool> m_after;
 };
 
 class CreateRelationshipCommand final : public ProjectCommand {

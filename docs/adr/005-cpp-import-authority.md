@@ -15,9 +15,11 @@ partial handwritten language parser.
 
 ## Decision
 
-- Discover declarations through libclang. The primary user workflow accepts a
-  source folder and synthesizes best-effort translation-unit arguments from the
-  discovered C++ files and common include roots. Automatically use
+- Discover declarations through libclang. The primary user workflow accepts
+  one or more source folders and synthesizes best-effort translation-unit
+  arguments from the discovered C++ files and common include roots. Parent and
+  descendant selections are normalized to the broader root, while unrelated
+  selections remain independently scoped. Automatically use each applicable
   `compile_commands.json` when available to improve fidelity; it is not a user
   prerequisite.
 - Store a `sourceBinding` object in each imported element or relationship's
@@ -104,9 +106,10 @@ rename matching, and continuous synchronization.
 The source-folder mode trades compiler-exact preprocessing for an immediately
 usable import: missing third-party headers and unavailable build-specific
 defines may reduce the discovered model, but diagnostics clearly identify the
-best-effort mode and no source or user-authored model data is overwritten. The
-same project automatically gains compiler-exact flags if a compilation database
-is added later.
+best-effort mode and no source or user-authored model data is overwritten.
+Projects persist the normalized folder list, and legacy singular source-root
+settings are read compatibly. Each selected subtree automatically gains
+compiler-exact flags if a compilation database is added later.
 
 Clang symbol identities can change on source renames or moves. Those cases are
 intentionally deferred to a later rename-matching slice rather than guessed in

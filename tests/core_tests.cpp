@@ -99,8 +99,11 @@ private slots:
   void cppImportClassifiesMemberOwnershipAndDependencies();
   void cppImportCreatesNestedTypeContainment();
   void cppImportScansSourceFolderWithoutBuildMetadata();
+  void cppImportCombinesSelectedSourceFolders();
   void largeModelGeometryCommandUndoRedo();
   void bulkDiagramPlacementIsOneUndoableCommand();
+  void diagramCompartmentVisibilityPersistsAndIsUndoable();
+  void relatedTypeNeighborhoodActionsAreDirectionalAndUndoable();
   void diagramDropSizingModes();
   void diagramLabelsReflectPackageContext();
   void projectTreeExtendedSelection();
@@ -245,20 +248,19 @@ void CoreTests::actionIconCatalogIsValid() {
     QVERIFY2(entry.value(QStringLiteral("svg")).isString(),
              qPrintable(node.key() + QStringLiteral(" needs an svg field")));
 
-    const auto verifyAssignedIconExists =
-        [&](const QString &field, bool required) {
-          const QJsonValue value = entry.value(field);
-          QVERIFY2(!required || value.isString(),
-                   qPrintable(node.key() + QStringLiteral(" needs a ") + field +
-                              QStringLiteral(" field")));
-          if (!value.isString() || value.toString().isEmpty())
-            return;
-          const QString svg = value.toString();
-          QVERIFY2(
-              QFileInfo::exists(QFileInfo(catalogPath).dir().filePath(svg)),
-              qPrintable(node.key() + u'.' + field +
-                         QStringLiteral(" references missing ") + svg));
-        };
+    const auto verifyAssignedIconExists = [&](const QString &field,
+                                              bool required) {
+      const QJsonValue value = entry.value(field);
+      QVERIFY2(!required || value.isString(),
+               qPrintable(node.key() + QStringLiteral(" needs a ") + field +
+                          QStringLiteral(" field")));
+      if (!value.isString() || value.toString().isEmpty())
+        return;
+      const QString svg = value.toString();
+      QVERIFY2(QFileInfo::exists(QFileInfo(catalogPath).dir().filePath(svg)),
+               qPrintable(node.key() + u'.' + field +
+                          QStringLiteral(" references missing ") + svg));
+    };
     verifyAssignedIconExists(QStringLiteral("svg"), true);
     verifyAssignedIconExists(QStringLiteral("expandedSvg"), false);
   }
@@ -285,7 +287,8 @@ void CoreTests::deterministicRoundTrip() {
   project.elements.append(element);
   project.modelExtra.insert(QStringLiteral("futureRoot"),
                             QStringLiteral("retained"));
-  project.cppImport.sourceRoot = QStringLiteral("D:/sources/round-trip");
+  project.cppImport.sourceRoots = {QStringLiteral("D:/sources/round-trip"),
+                                   QStringLiteral("D:/shared/contracts")};
   project.cppImport.extra.insert(QStringLiteral("futureSyncPolicy"),
                                  QStringLiteral("retained"));
   NodePresentation node;
@@ -342,7 +345,7 @@ void CoreTests::deterministicRoundTrip() {
   QVERIFY(manifest.open(QIODevice::ReadOnly));
   const QByteArray manifestText = manifest.readAll();
   QVERIFY(manifestText.contains("cppImport: {"));
-  QVERIFY(manifestText.contains("sourceRoot:"));
+  QVERIFY(manifestText.contains("sourceRoots:"));
 
   const auto loaded = ProjectSerializer::load(temporary.path());
   QVERIFY(loaded.ok);
@@ -733,20 +736,48 @@ void CoreTests::cppSynchronizationSourcePersistsAndIsUndoable() {
   ProjectController controller;
   CppImportPreview preview;
   preview.ok = true;
-  preview.sourceRoot = QStringLiteral("D:/sources/configured");
+  preview.sourceRoots = {QStringLiteral("D:/sources/configured"),
+                         QStringLiteral("D:/shared/contracts")};
 
   // Configuring a source is a real project edit even when the source and model
   // are already in sync and there are no semantic records to apply.
   QCOMPARE(controller.applyCppImportPlan(preview), 0);
-  QCOMPARE(controller.data().cppImport.sourceRoot, preview.sourceRoot);
+  QCOMPARE(controller.data().cppImport.sourceRoots, preview.sourceRoots);
   QVERIFY(controller.canUndo());
   QCOMPARE(controller.undoText(),
            QStringLiteral("Configure C++ synchronization"));
 
   controller.undo();
-  QVERIFY(controller.data().cppImport.sourceRoot.isEmpty());
+  QVERIFY(controller.data().cppImport.sourceRoots.isEmpty());
   controller.redo();
-  QCOMPARE(controller.data().cppImport.sourceRoot, preview.sourceRoot);
+  QCOMPARE(controller.data().cppImport.sourceRoots, preview.sourceRoots);
+
+  // Loading projects saved by the earlier single-root implementation remains
+  // supported and canonicalizes the setting on the next save.
+  QTemporaryDir legacyDirectory;
+  QVERIFY(legacyDirectory.isValid());
+  QVERIFY(
+      ProjectSerializer::save(legacyDirectory.path(), controller.data()).ok);
+  const QString manifestPath =
+      QDir(legacyDirectory.path()).filePath(QStringLiteral("manifest.json5"));
+  QFile manifestFile(manifestPath);
+  QVERIFY(manifestFile.open(QIODevice::ReadOnly));
+  const auto parsedManifest = Json5::parse(manifestFile.readAll());
+  manifestFile.close();
+  QVERIFY2(parsedManifest, qPrintable(parsedManifest.error));
+  QJsonObject manifest = parsedManifest.document.object();
+  QJsonObject cppImport =
+      manifest.value(QStringLiteral("cppImport")).toObject();
+  cppImport.remove(QStringLiteral("sourceRoots"));
+  cppImport.insert(QStringLiteral("sourceRoot"),
+                   QStringLiteral("D:/legacy/source"));
+  manifest.insert(QStringLiteral("cppImport"), cppImport);
+  writeTestFile(manifestPath,
+                Json5::serialize(QJsonDocument(std::move(manifest))));
+  const LoadOutcome legacy = ProjectSerializer::load(legacyDirectory.path());
+  QVERIFY(legacy.ok);
+  QCOMPARE(legacy.project.cppImport.sourceRoots,
+           QStringList{QStringLiteral("D:/legacy/source")});
 }
 
 void CoreTests::saveAsRequiresExplicitProjectReplacement() {
@@ -948,7 +979,7 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
 
   ProjectData imported = createStarterProject();
   QCOMPARE(CppImportService::apply(imported, initial), 5);
-  QCOMPARE(imported.cppImport.sourceRoot, initial.sourceRoot);
+  QCOMPARE(imported.cppImport.sourceRoots, QStringList{initial.sourceRoot});
   QTemporaryDir importedProjectDirectory;
   QVERIFY(importedProjectDirectory.isValid());
   QVERIFY(
@@ -1529,6 +1560,57 @@ void CoreTests::cppImportScansSourceFolderWithoutBuildMetadata() {
   QCOMPARE(standalone->packageId, detailPackage->id);
 }
 
+void CoreTests::cppImportCombinesSelectedSourceFolders() {
+  if (!CppImportService::available())
+    QSKIP("This build was configured without libclang");
+
+  QTemporaryDir sourceDirectory;
+  QVERIFY(sourceDirectory.isValid());
+  QDir root(sourceDirectory.path());
+  QVERIFY(root.mkpath(QStringLiteral("alpha/nested")));
+  QVERIFY(root.mkpath(QStringLiteral("beta")));
+  QVERIFY(root.mkpath(QStringLiteral("ignored")));
+
+  writeTestFile(root.filePath(QStringLiteral("beta/Beta.h")),
+                QByteArray("#pragma once\n"
+                           "namespace selected { struct Beta {}; }\n"));
+  writeTestFile(root.filePath(QStringLiteral("alpha/Alpha.h")),
+                QByteArray("#pragma once\n"
+                           "#include \"../beta/Beta.h\"\n"
+                           "namespace selected {\n"
+                           "class Alpha { Beta *part; };\n"
+                           "}\n"));
+  writeTestFile(root.filePath(QStringLiteral("ignored/Noise.h")),
+                QByteArray("class Noise {};\n"));
+
+  const QString alphaPath = root.filePath(QStringLiteral("alpha"));
+  const QString betaPath = root.filePath(QStringLiteral("beta"));
+  const CppImportPreview preview = CppImportService::preview(
+      QStringList{alphaPath, root.filePath(QStringLiteral("alpha/nested")),
+                  betaPath},
+      {});
+
+  QVERIFY(preview.ok);
+  QCOMPARE(preview.sourceRoots, QStringList({QDir::cleanPath(alphaPath),
+                                             QDir::cleanPath(betaPath)}));
+  const auto hasSymbol = [&](const QString &name) {
+    return std::any_of(preview.symbols.cbegin(), preview.symbols.cend(),
+                       [&](const CppSourceSymbol &symbol) {
+                         return symbol.qualifiedName == name;
+                       });
+  };
+  QVERIFY(hasSymbol(QStringLiteral("selected::Alpha")));
+  QVERIFY(hasSymbol(QStringLiteral("selected::Beta")));
+  QVERIFY(!hasSymbol(QStringLiteral("Noise")));
+  QVERIFY(std::any_of(
+      preview.relationships.cbegin(), preview.relationships.cend(),
+      [](const CppSourceRelationship &relationship) {
+        return relationship.sourceName == QStringLiteral("selected::Alpha") &&
+               relationship.targetName == QStringLiteral("selected::Beta") &&
+               relationship.relationshipType == RelationshipType::Aggregation;
+      }));
+}
+
 void CoreTests::largeModelGeometryCommandUndoRedo() {
   QTemporaryDir temporary;
   QVERIFY(temporary.isValid());
@@ -1619,6 +1701,110 @@ void CoreTests::bulkDiagramPlacementIsOneUndoableCommand() {
                diagramId, {firstElement, secondElement}, 0.0, 0.0),
            0);
   QCOMPARE(controller.data(), afterDrop);
+}
+
+void CoreTests::diagramCompartmentVisibilityPersistsAndIsUndoable() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString elementId =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const QString nodeId = controller.data().diagrams.first().nodes.first().id;
+
+  controller.setDiagramCompartmentVisible(diagramId,
+                                          QStringLiteral("attributes"), false);
+  QCOMPARE(controller.data().diagrams.first().showAttributes, false);
+  controller.setNodeCompartmentVisibility(
+      diagramId, nodeId, QStringLiteral("attributes"), QStringLiteral("show"));
+  controller.setNodeCompartmentVisibility(
+      diagramId, nodeId, QStringLiteral("operations"), QStringLiteral("hide"));
+
+  const auto *node = findNode(controller.data().diagrams.first(), nodeId);
+  QVERIFY(node);
+  QVERIFY(node->showAttributes == std::optional<bool>(true));
+  QVERIFY(node->showOperations == std::optional<bool>(false));
+  controller.undo();
+  node = findNode(controller.data().diagrams.first(), nodeId);
+  QVERIFY(node);
+  QVERIFY(!node->showOperations);
+  controller.redo();
+  QVERIFY(
+      findNode(controller.data().diagrams.first(), nodeId)->showOperations ==
+      std::optional<bool>(false));
+
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(temporary.path(), controller.data()).ok);
+  const LoadOutcome loaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(loaded.ok);
+  QCOMPARE(loaded.project, controller.data());
+  QCOMPARE(findElement(loaded.project, elementId)->attributes.size(), 1);
+}
+
+void CoreTests::relatedTypeNeighborhoodActionsAreDirectionalAndUndoable() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString incoming =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const QString focus =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const QString outgoing =
+      controller.addElement(QStringLiteral("struct"), diagramId);
+  const auto initialNodes = controller.data().diagrams.first().nodes;
+  QCOMPARE(initialNodes.size(), 3);
+
+  QVERIFY(!controller
+               .createRelationship(diagramId, initialNodes.at(0).id,
+                                   initialNodes.at(1).id,
+                                   QStringLiteral("dependency"))
+               .isEmpty());
+  QVERIFY(!controller
+               .createRelationship(diagramId, initialNodes.at(1).id,
+                                   initialNodes.at(2).id,
+                                   QStringLiteral("aggregation"))
+               .isEmpty());
+  controller.removePresentations(
+      diagramId, {initialNodes.at(0).id, initialNodes.at(2).id});
+  const QString focusNodeId =
+      controller.data().diagrams.first().nodes.first().id;
+  QCOMPARE(controller.data().diagrams.first().nodes.first().elementId, focus);
+
+  QCOMPARE(controller.relatedElementCountForDiagram(diagramId, focusNodeId,
+                                                    QStringLiteral("incoming")),
+           1);
+  QCOMPARE(controller.relatedElementCountForDiagram(diagramId, focusNodeId,
+                                                    QStringLiteral("outgoing")),
+           1);
+  QCOMPARE(controller.addRelatedElementsToDiagram(diagramId, focusNodeId,
+                                                  QStringLiteral("incoming")),
+           1);
+  QVERIFY(std::any_of(controller.data().diagrams.first().nodes.cbegin(),
+                      controller.data().diagrams.first().nodes.cend(),
+                      [&](const NodePresentation &node) {
+                        return node.elementId == incoming;
+                      }));
+  QVERIFY(std::none_of(controller.data().diagrams.first().nodes.cbegin(),
+                       controller.data().diagrams.first().nodes.cend(),
+                       [&](const NodePresentation &node) {
+                         return node.elementId == outgoing;
+                       }));
+  QCOMPARE(controller.data().diagrams.first().connectors.size(), 1);
+
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first().nodes.size(), 1);
+  controller.redo();
+  QCOMPARE(controller.data().diagrams.first().nodes.size(), 2);
+
+  QCOMPARE(controller.addRelatedElementsToDiagram(diagramId, focusNodeId,
+                                                  QStringLiteral("outgoing")),
+           1);
+  QCOMPARE(controller.data().diagrams.first().nodes.size(), 3);
+  QCOMPARE(controller.data().diagrams.first().connectors.size(), 2);
+  QCOMPARE(controller.relatedElementCountForDiagram(diagramId, focusNodeId,
+                                                    QStringLiteral("incoming")),
+           0);
+  QCOMPARE(controller.relatedElementCountForDiagram(diagramId, focusNodeId,
+                                                    QStringLiteral("outgoing")),
+           0);
 }
 
 void CoreTests::diagramDropSizingModes() {

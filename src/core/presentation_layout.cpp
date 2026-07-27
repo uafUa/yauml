@@ -13,11 +13,15 @@
 namespace uuml::presentation_layout {
 namespace {
 
-QStringList bodyLines(const ModelElement &element) {
+QStringList bodyLines(const ModelElement &element, bool showAttributes,
+                      bool showOperations) {
   if (element.type == ElementType::Enumeration)
     return element.enumLiterals;
-  QStringList lines = element.attributes;
-  lines.append(element.operations);
+  QStringList lines;
+  if (showAttributes)
+    lines.append(element.attributes);
+  if (showOperations)
+    lines.append(element.operations);
   return lines;
 }
 
@@ -128,12 +132,14 @@ QString fullyQualifiedElementName(const ProjectData &project,
 } // namespace
 
 static QSizeF nodeContentSizeImpl(const ModelElement &element,
-                                  const QString &stereotypeText) {
+                                  const QString &stereotypeText,
+                                  bool showAttributes = true,
+                                  bool showOperations = true) {
   qreal widestLine = applicationTextWidth(element.name, true);
   if (!stereotypeText.isEmpty())
     widestLine =
         std::max(widestLine, applicationTextWidth(stereotypeText, false));
-  const QStringList lines = bodyLines(element);
+  const QStringList lines = bodyLines(element, showAttributes, showOperations);
   for (const QString &line : lines)
     widestLine = std::max(widestLine, applicationTextWidth(line, false));
 
@@ -155,6 +161,13 @@ QSizeF nodeContentSize(const ProjectData &project,
                        const ModelElement &element) {
   return nodeContentSizeImpl(
       element, stereotype_catalog::displayText(project, element.stereotypeIds));
+}
+
+QSizeF nodeContentSize(const ProjectData &project, const ModelElement &element,
+                       bool showAttributes, bool showOperations) {
+  return nodeContentSizeImpl(
+      element, stereotype_catalog::displayText(project, element.stereotypeIds),
+      showAttributes, showOperations);
 }
 
 QSizeF nodePlacementSize(const ModelElement &element,
