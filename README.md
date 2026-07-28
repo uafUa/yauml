@@ -130,7 +130,11 @@ extensions recursively, and infers shared include paths. When a
 `compile_commands.json` is available in or above a selected folder, uuml uses
 it automatically for more accurate compiler flags. `cpp-import` accepts the
 same list of folders, saves non-conflicting changes, and returns exit code `3`
-when conflicts need attention; user-edited model content is never overwritten.
+when conflicts need attention; user-edited model content is never overwritten
+by default. For unattended workflows, the explicit
+`--conflicts=keep-model` or `--conflicts=use-source` option resolves every
+unambiguous conflict with that policy. Unsafe conflicts remain unresolved and
+still produce exit code `3`.
 
 ## C++ import
 
@@ -170,7 +174,13 @@ when conflicts need attention; user-edited model content is never overwritten.
   stereotype assignment remains untouched.
 - If only source changed, the next import updates the element. If only the model
   changed, the model stays authoritative. If both changed differently, the
-  model is retained and a structured conflict is shown in the log panel.
+  model is retained and a structured conflict is shown in the log panel. Each
+  safely resolvable conflict can remain unresolved, explicitly **Keep model**,
+  or **Use C++ source**. Keeping the model advances only the source baseline so
+  the acknowledged override does not reappear as the same conflict; using the
+  source replaces source-synchronized fields while retaining unrelated model
+  metadata. Bulk choices are available, while malformed duplicate bindings and
+  unresolved endpoints continue to require manual repair.
 - Applying a GUI preview is one undoable command. The preview is re-planned
   against current model state immediately before application. Source files are
   read-only and are never rewritten by this workflow.

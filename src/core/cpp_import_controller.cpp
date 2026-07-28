@@ -5,10 +5,105 @@
 
 #include <QFileInfo>
 #include <QPointer>
+#include <QSet>
 #include <QtConcurrentRun>
 #include <algorithm>
 
 namespace uuml {
+namespace {
+
+QString summarizedValues(const QStringList &values) {
+  constexpr qsizetype maximumVisibleValues = 3;
+  QStringList visible = values.mid(0, maximumVisibleValues);
+  QString summary = visible.join(QStringLiteral(", "));
+  if (values.size() > maximumVisibleValues) {
+    summary +=
+        QStringLiteral(" (+%1 more)").arg(values.size() - maximumVisibleValues);
+  }
+  return summary;
+}
+
+QString memberDifference(const QString &label, const QStringList &modelValues,
+                         const QStringList &sourceValues) {
+  QStringList sourceOnly;
+  QStringList modelOnly;
+  for (const QString &value : sourceValues)
+    if (!modelValues.contains(value))
+      sourceOnly.append(value);
+  for (const QString &value : modelValues)
+    if (!sourceValues.contains(value))
+      modelOnly.append(value);
+  if (sourceOnly.isEmpty() && modelOnly.isEmpty())
+    return {};
+
+  QStringList parts;
+  if (!sourceOnly.isEmpty()) {
+    parts.append(
+        QStringLiteral("source adds %1").arg(summarizedValues(sourceOnly)));
+  }
+  if (!modelOnly.isEmpty()) {
+    parts.append(
+        QStringLiteral("model-only %1").arg(summarizedValues(modelOnly)));
+  }
+  return QStringLiteral("%1: %2").arg(label, parts.join(QStringLiteral("; ")));
+}
+
+QString elementConflictDetail(const CppImportItem &item) {
+  if (!item.isResolvableConflict())
+    return {};
+  const ModelElement &model = *item.existingElement;
+  const ModelElement &source = item.desiredElement;
+  QStringList differences;
+  if (model.name != source.name) {
+    differences.append(
+        QStringLiteral("Name: %1 → %2").arg(model.name, source.name));
+  }
+  if (model.type != source.type) {
+    differences.append(QStringLiteral("Kind: %1 → %2")
+                           .arg(toString(model.type), toString(source.type)));
+  }
+  const QString attributes = memberDifference(
+      QStringLiteral("Attributes"), model.attributes, source.attributes);
+  if (!attributes.isEmpty())
+    differences.append(attributes);
+  const QString operations = memberDifference(
+      QStringLiteral("Operations"), model.operations, source.operations);
+  if (!operations.isEmpty())
+    differences.append(operations);
+  if (model.packageId != source.packageId ||
+      model.enclosingTypeId != source.enclosingTypeId) {
+    differences.append(QStringLiteral("Namespace or enclosing type changed"));
+  }
+  return differences.join(u'\n');
+}
+
+QString relationshipConflictDetail(const CppRelationshipImportItem &item) {
+  if (!item.isResolvableConflict())
+    return {};
+  const Relationship &model = *item.existingRelationship;
+  const Relationship &source = item.desiredRelationship;
+  QStringList differences;
+  if (model.type != source.type) {
+    differences.append(QStringLiteral("Kind: %1 → %2")
+                           .arg(toString(model.type), toString(source.type)));
+  }
+  if (model.name != source.name) {
+    differences.append(
+        QStringLiteral("Name: “%1” → “%2”").arg(model.name, source.name));
+  }
+  if (model.sourceEnd.role != source.sourceEnd.role) {
+    differences.append(QStringLiteral("Source role: “%1” → “%2”")
+                           .arg(model.sourceEnd.role, source.sourceEnd.role));
+  }
+  if (model.sourceEnd.multiplicity != source.sourceEnd.multiplicity) {
+    differences.append(
+        QStringLiteral("Source cardinality: “%1” → “%2”")
+            .arg(model.sourceEnd.multiplicity, source.sourceEnd.multiplicity));
+  }
+  return differences.join(u'\n');
+}
+
+} // namespace
 
 CppImportController::CppImportController(ProjectController *project,
                                          ApplicationSettings *settings,
@@ -80,6 +175,18 @@ int CppImportController::progressValue() const { return m_progressValue; }
 
 int CppImportController::progressMaximum() const { return m_progressMaximum; }
 
+int CppImportController::conflictCount() const {
+  return m_preview.conflictCount();
+}
+
+int CppImportController::resolvableConflictCount() const {
+  return m_preview.resolvableConflictCount();
+}
+
+int CppImportController::unresolvedConflictCount() const {
+  return m_preview.unresolvedConflictCount();
+}
+
 void CppImportController::preview(const QUrl &sourceOrBuildDirectory) {
   const QString path = sourceOrBuildDirectory.isLocalFile()
                            ? sourceOrBuildDirectory.toLocalFile()
@@ -114,6 +221,7 @@ void CppImportController::previewPaths(const QStringList &sourceDirectories) {
     return;
 
   m_requestedSourcePaths = paths;
+  m_conflictResolutions.clear();
   m_preview = {};
   m_previewItems.clear();
   m_summary = QStringLiteral("Discovering C++ declarations…");
@@ -175,17 +283,42 @@ void CppImportController::applyPreview() {
   const CppImportPreview currentPlan =
       CppImportService::replan(currentDiscovery, m_project->data().elements,
                                m_project->data().relationships);
-  const qsizetype discoveryCount = currentPlan.discoveryDiagnostics.size();
-  if (currentPlan.diagnostics.size() > discoveryCount) {
-    publishDiagnostics(currentPlan.diagnostics.mid(discoveryCount));
+  CppImportPreview resolvedPlan = currentPlan;
+  for (auto iterator = m_conflictResolutions.cbegin();
+       iterator != m_conflictResolutions.cend(); ++iterator) {
+    resolvedPlan.setConflictResolution(iterator.key(), iterator.value());
   }
-  if (currentPlan.conflictCount() > 0)
+  const qsizetype discoveryCount = resolvedPlan.discoveryDiagnostics.size();
+  if (resolvedPlan.diagnostics.size() > discoveryCount) {
+    QSet<QString> resolvedSubjectIds;
+    for (const auto &item : resolvedPlan.items) {
+      if (item.resolution != CppImportConflictResolution::Unresolved)
+        resolvedSubjectIds.insert(item.existingElementId);
+    }
+    for (const auto &item : resolvedPlan.relationshipItems) {
+      if (item.resolution != CppImportConflictResolution::Unresolved)
+        resolvedSubjectIds.insert(item.existingRelationshipId);
+    }
+    QList<Diagnostic> diagnostics;
+    for (const auto &diagnostic :
+         resolvedPlan.diagnostics.mid(discoveryCount)) {
+      const bool supersededConflict =
+          resolvedSubjectIds.contains(diagnostic.elementId) &&
+          diagnostic.message.contains(QStringLiteral("conflict"),
+                                      Qt::CaseInsensitive);
+      if (!supersededConflict)
+        diagnostics.append(diagnostic);
+    }
+    publishDiagnostics(diagnostics);
+  }
+  if (resolvedPlan.unresolvedConflictCount() > 0)
     emit attentionRequired();
 
   const bool sourceConfigured =
-      !currentPlan.sourceRoots.isEmpty() &&
-      currentPlan.sourceRoots != configuredSourceRoots();
-  const int applied = m_project->applyCppImportPlan(currentPlan);
+      !resolvedPlan.sourceRoots.isEmpty() &&
+      resolvedPlan.sourceRoots != configuredSourceRoots();
+  const int resolvedConflicts = resolvedPlan.resolvedConflictCount();
+  const int applied = m_project->applyCppImportPlan(resolvedPlan);
   if (applied > 0) {
     m_project->diagnostics()->addInfo(
         QStringLiteral("cpp-import"),
@@ -199,11 +332,55 @@ void CppImportController::applyPreview() {
             .arg(currentPlan.sourceRoots.size() == 1 ? QStringLiteral("y")
                                                      : QStringLiteral("ies")));
   }
-  m_preview = CppImportService::replan(currentPlan, m_project->data().elements,
+  if (resolvedConflicts > 0) {
+    m_project->diagnostics()->addInfo(
+        QStringLiteral("cpp-import"),
+        QStringLiteral("Resolved %1 C++ synchronization conflict(s)")
+            .arg(resolvedConflicts));
+  }
+  m_conflictResolutions.clear();
+  m_preview = CppImportService::replan(resolvedPlan, m_project->data().elements,
                                        m_project->data().relationships);
   rebuildViewState();
   emit previewChanged();
   emit importApplied(applied);
+}
+
+void CppImportController::setConflictResolution(
+    const QString &conflictKey, const QString &resolutionValue) {
+  bool ok = false;
+  const CppImportConflictResolution resolution =
+      cppImportConflictResolutionFromString(resolutionValue, &ok);
+  if (!ok || !m_preview.setConflictResolution(conflictKey, resolution))
+    return;
+  if (resolution == CppImportConflictResolution::Unresolved)
+    m_conflictResolutions.remove(conflictKey);
+  else
+    m_conflictResolutions.insert(conflictKey, resolution);
+  rebuildViewState();
+  emit previewChanged();
+}
+
+void CppImportController::resolveAllConflicts(const QString &resolutionValue) {
+  bool ok = false;
+  const CppImportConflictResolution resolution =
+      cppImportConflictResolutionFromString(resolutionValue, &ok);
+  if (!ok)
+    return;
+  m_preview.resolveAllConflicts(resolution);
+  m_conflictResolutions.clear();
+  const auto remember = [&](const auto &items) {
+    for (const auto &item : items) {
+      if (item.isResolvableConflict() &&
+          item.resolution != CppImportConflictResolution::Unresolved) {
+        m_conflictResolutions.insert(item.conflictKey(), item.resolution);
+      }
+    }
+  };
+  remember(m_preview.items);
+  remember(m_preview.relationshipItems);
+  rebuildViewState();
+  emit previewChanged();
 }
 
 void CppImportController::clearPreview() {
@@ -213,6 +390,7 @@ void CppImportController::clearPreview() {
   m_previewItems.clear();
   m_summary.clear();
   m_requestedSourcePaths.clear();
+  m_conflictResolutions.clear();
   resetProgress();
   emit progressChanged();
   emit previewChanged();
@@ -278,6 +456,11 @@ void CppImportController::rebuildViewState() {
     value.insert(QStringLiteral("file"), item.symbol.filePath);
     value.insert(QStringLiteral("line"), item.symbol.line);
     value.insert(QStringLiteral("message"), item.message);
+    value.insert(QStringLiteral("conflictKey"), item.conflictKey());
+    value.insert(QStringLiteral("resolvable"), item.isResolvableConflict());
+    value.insert(QStringLiteral("resolution"), toString(item.resolution));
+    value.insert(QStringLiteral("resolutionDetail"),
+                 elementConflictDetail(item));
     m_previewItems.append(value);
   }
   for (const auto &item : m_preview.relationshipItems) {
@@ -294,6 +477,11 @@ void CppImportController::rebuildViewState() {
     value.insert(QStringLiteral("file"), item.source.filePath);
     value.insert(QStringLiteral("line"), item.source.line);
     value.insert(QStringLiteral("message"), item.message);
+    value.insert(QStringLiteral("conflictKey"), item.conflictKey());
+    value.insert(QStringLiteral("resolvable"), item.isResolvableConflict());
+    value.insert(QStringLiteral("resolution"), toString(item.resolution));
+    value.insert(QStringLiteral("resolutionDetail"),
+                 relationshipConflictDetail(item));
     m_previewItems.append(value);
   }
 
@@ -316,6 +504,12 @@ void CppImportController::rebuildViewState() {
                   .arg(counts.value(CppImportAction::Unchanged) +
                        counts.value(CppImportAction::UserModified) +
                        counts.value(CppImportAction::MissingSource));
+  if (m_preview.conflictCount() > 0) {
+    m_summary +=
+        QStringLiteral(" — %1 of %2 conflict(s) selected for resolution")
+            .arg(m_preview.resolvedConflictCount())
+            .arg(m_preview.conflictCount());
+  }
 }
 
 } // namespace uuml

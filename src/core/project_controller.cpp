@@ -1525,12 +1525,12 @@ int ProjectController::applyCppImportPlan(const CppImportPreview &preview) {
   desiredElements.reserve(preview.elementApplicableCount());
   for (const auto &item : preview.items)
     if (item.isApplicable())
-      desiredElements.append(item.desiredElement);
+      desiredElements.append(item.appliedElement());
   QList<Relationship> desiredRelationships;
   desiredRelationships.reserve(preview.relationshipApplicableCount());
   for (const auto &item : preview.relationshipItems)
     if (item.isApplicable())
-      desiredRelationships.append(item.desiredRelationship);
+      desiredRelationships.append(item.appliedRelationship());
   const QStringList sourceRoots =
       !preview.sourceRoots.isEmpty()
           ? preview.sourceRoots

@@ -1018,9 +1018,64 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
       });
   QVERIFY(changedPoint != changed.items.cend());
   QVERIFY(changedPoint->action == CppImportAction::Conflict);
+  QVERIFY(changedPoint->isResolvableConflict());
+  QCOMPARE(changed.resolvableConflictCount(), 1);
+  QCOMPARE(changed.resolvedConflictCount(), 0);
+  QCOMPARE(changed.unresolvedConflictCount(), 1);
+  CppImportPreview ambiguousPreview;
+  CppImportItem ambiguousItem;
+  ambiguousItem.action = CppImportAction::Conflict;
+  ambiguousItem.symbol.symbolId = QStringLiteral("duplicate-binding");
+  ambiguousPreview.items.append(ambiguousItem);
+  ambiguousPreview.resolveAllConflicts(
+      CppImportConflictResolution::UseSource);
+  QCOMPARE(ambiguousPreview.conflictCount(), 1);
+  QCOMPARE(ambiguousPreview.resolvableConflictCount(), 0);
+  QCOMPARE(ambiguousPreview.resolvedConflictCount(), 0);
+  QCOMPARE(ambiguousPreview.applicableCount(), 0);
   QCOMPARE(changed.relationshipItems.size(), 1);
   QVERIFY(changed.relationshipItems.first().action ==
           CppImportAction::UserModified);
+
+  CppImportPreview keepModelPlan = changed;
+  QVERIFY(keepModelPlan.setConflictResolution(
+      changedPoint->conflictKey(), CppImportConflictResolution::KeepModel));
+  QCOMPARE(keepModelPlan.resolvedConflictCount(), 1);
+  QCOMPARE(keepModelPlan.unresolvedConflictCount(), 0);
+  ProjectData modelWins = imported;
+  QCOMPARE(CppImportService::apply(modelWins, keepModelPlan), 2);
+  const auto retainedPoint =
+      std::find_if(modelWins.elements.cbegin(), modelWins.elements.cend(),
+                   [](const ModelElement &element) {
+                     return element.name == QStringLiteral("demo::Point");
+                   });
+  QVERIFY(retainedPoint != modelWins.elements.cend());
+  QVERIFY(retainedPoint->attributes.contains(QStringLiteral("+ manual: bool")));
+  QVERIFY(!retainedPoint->attributes.contains(QStringLiteral("+ z: int")));
+  const CppImportPreview afterKeep = CppImportService::preview(
+      sourceDirectory.path(), modelWins.elements, modelWins.relationships);
+  QCOMPARE(afterKeep.conflictCount(), 0);
+  const auto acknowledgedPoint = std::find_if(
+      afterKeep.items.cbegin(), afterKeep.items.cend(),
+      [](const CppImportItem &item) {
+        return item.symbol.qualifiedName == QStringLiteral("demo::Point");
+      });
+  QVERIFY(acknowledgedPoint != afterKeep.items.cend());
+  QVERIFY(acknowledgedPoint->action == CppImportAction::UserModified);
+
+  CppImportPreview useSourcePlan = changed;
+  QVERIFY(useSourcePlan.setConflictResolution(
+      changedPoint->conflictKey(), CppImportConflictResolution::UseSource));
+  ProjectData sourceWins = imported;
+  QCOMPARE(CppImportService::apply(sourceWins, useSourcePlan), 2);
+  const auto sourcePoint =
+      std::find_if(sourceWins.elements.cbegin(), sourceWins.elements.cend(),
+                   [](const ModelElement &element) {
+                     return element.name == QStringLiteral("demo::Point");
+                   });
+  QVERIFY(sourcePoint != sourceWins.elements.cend());
+  QVERIFY(sourcePoint->attributes.contains(QStringLiteral("+ z: int")));
+  QVERIFY(!sourcePoint->attributes.contains(QStringLiteral("+ manual: bool")));
 
   QCOMPARE(CppImportService::apply(imported, changed), 1);
   point = std::find_if(imported.elements.begin(), imported.elements.end(),
@@ -1039,6 +1094,46 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
   QVERIFY(service->operations.contains(QStringLiteral("+ stop(): void")));
   QCOMPARE(imported.relationships.first().name,
            QStringLiteral("user relationship label"));
+
+  CppImportOptions realizationOptions;
+  realizationOptions.interfacePattern = QStringLiteral("^Service$");
+  const CppImportPreview relationshipChanged = CppImportService::preview(
+      sourceDirectory.path(), imported.elements, imported.relationships,
+      realizationOptions);
+  const auto relationshipConflict = std::find_if(
+      relationshipChanged.relationshipItems.cbegin(),
+      relationshipChanged.relationshipItems.cend(),
+      [](const CppRelationshipImportItem &item) {
+        return item.action == CppImportAction::Conflict;
+      });
+  QVERIFY(relationshipConflict != relationshipChanged.relationshipItems.cend());
+  QVERIFY(relationshipConflict->isResolvableConflict());
+  CppImportPreview relationshipSourcePlan = relationshipChanged;
+  QVERIFY(relationshipSourcePlan.setConflictResolution(
+      relationshipConflict->conflictKey(),
+      CppImportConflictResolution::UseSource));
+  ProjectData relationshipSourceWins = imported;
+  QCOMPARE(CppImportService::apply(relationshipSourceWins,
+                                   relationshipSourcePlan),
+           1);
+  QCOMPARE(relationshipSourceWins.relationships.first().name, QString{});
+  QVERIFY(relationshipSourceWins.relationships.first().type ==
+          RelationshipType::Realization);
+
+  QVERIFY(
+      ProjectSerializer::save(importedProjectDirectory.path(), imported).ok);
+  ProjectController resolutionController;
+  QVERIFY(resolutionController.openProject(
+      QUrl::fromLocalFile(importedProjectDirectory.path())));
+  const ProjectData beforeResolution = resolutionController.data();
+  QCOMPARE(resolutionController.applyCppImportPlan(relationshipSourcePlan), 1);
+  QVERIFY(resolutionController.data().relationships.first().type ==
+          RelationshipType::Realization);
+  resolutionController.undo();
+  QCOMPARE(resolutionController.data(), beforeResolution);
+  resolutionController.redo();
+  QVERIFY(resolutionController.data().relationships.first().type ==
+          RelationshipType::Realization);
 
   writeSource(true, false);
   const CppImportPreview inheritanceRemoved = CppImportService::preview(

@@ -428,8 +428,17 @@ history memory grow with total project size rather than the size of each edit.
   determinate translation-unit progress through the shared import service. The
   headless workflow uses the same service but may omit the optional progress
   observer; import planning and conflict semantics remain identical.
-- Add explicit conflict-resolution choices and rename/move matching in
-  subsequent slices.
+- Explicit per-conflict resolution is implemented in the GUI preview.
+  **Unresolved** preserves the previous safe behavior, **Keep model**
+  acknowledges the current source baseline without replacing user fields, and
+  **Use C++ source** applies the complete source-owned candidate. Bulk choices
+  affect only conflicts with complete, unambiguous candidates; malformed
+  duplicate bindings and unresolved relationship endpoints remain manual.
+  Resolved changes join ordinary import changes in one compact undo command.
+  Headless preview/import exposes the same bulk policies through an explicit
+  `--conflicts` option and retains exit code 3 while any unsafe or unselected
+  conflict remains unresolved.
+- Add rename/move matching in a subsequent slice.
 
 ## Phase 5: scale and hardening
 

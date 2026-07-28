@@ -3,6 +3,7 @@
 #include "core/cpp_import.h"
 
 #include <QFutureWatcher>
+#include <QHash>
 #include <QObject>
 #include <QUrl>
 #include <QVariantList>
@@ -40,6 +41,11 @@ class CppImportController final : public QObject {
   Q_PROPERTY(QString progressDetail READ progressDetail NOTIFY progressChanged)
   Q_PROPERTY(int progressValue READ progressValue NOTIFY progressChanged)
   Q_PROPERTY(int progressMaximum READ progressMaximum NOTIFY progressChanged)
+  Q_PROPERTY(int conflictCount READ conflictCount NOTIFY previewChanged)
+  Q_PROPERTY(int resolvableConflictCount READ resolvableConflictCount NOTIFY
+                 previewChanged)
+  Q_PROPERTY(int unresolvedConflictCount READ unresolvedConflictCount NOTIFY
+                 previewChanged)
 
 public:
   explicit CppImportController(ProjectController *project,
@@ -62,11 +68,17 @@ public:
   QString progressDetail() const;
   int progressValue() const;
   int progressMaximum() const;
+  int conflictCount() const;
+  int resolvableConflictCount() const;
+  int unresolvedConflictCount() const;
 
   Q_INVOKABLE void preview(const QUrl &sourceOrBuildDirectory);
   Q_INVOKABLE void previewSources(const QVariantList &sourceDirectories);
   Q_INVOKABLE void synchronize();
   Q_INVOKABLE void applyPreview();
+  Q_INVOKABLE void setConflictResolution(const QString &conflictKey,
+                                         const QString &resolution);
+  Q_INVOKABLE void resolveAllConflicts(const QString &resolution);
   Q_INVOKABLE void clearPreview();
 
 signals:
@@ -94,6 +106,7 @@ private:
   QString m_progressText;
   QString m_progressDetail;
   QStringList m_requestedSourcePaths;
+  QHash<QString, CppImportConflictResolution> m_conflictResolutions;
   quint64 m_previewGeneration = 0;
   int m_progressValue = 0;
   int m_progressMaximum = 0;

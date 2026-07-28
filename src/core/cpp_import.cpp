@@ -520,6 +520,11 @@ CppImportPreview planImport(const CppImportPreview &discovery,
       if (sameName && sourceBinding(*sameName).isEmpty()) {
         item.action = CppImportAction::Conflict;
         item.existingElementId = sameName->id;
+        item.existingElement = *sameName;
+        item.desiredElement = sourceElement(
+            symbol, sameName->id,
+            packageIdByNamespacePath.value(symbol.namespacePath),
+            enclosingTypeIdFor(symbol), result.optionsUsed, sameName);
         item.message =
             QStringLiteral("An unbound user element already has this name; it "
                            "was not rebound automatically");
@@ -544,6 +549,7 @@ CppImportPreview planImport(const CppImportPreview &discovery,
     }
 
     item.existingElementId = existing->id;
+    item.existingElement = *existing;
     item.desiredElement =
         sourceElement(symbol, existing->id,
                       packageIdByNamespacePath.value(symbol.namespacePath),
@@ -729,6 +735,9 @@ CppImportPreview planImport(const CppImportPreview &discovery,
       if (sameRelationship != existingRelationships.cend()) {
         item.action = CppImportAction::Conflict;
         item.existingRelationshipId = sameRelationship->id;
+        item.existingRelationship = *sameRelationship;
+        item.desiredRelationship = sourceRelationship(
+            source, sourceElementId, targetElementId, &*sameRelationship);
         item.message = QStringLiteral(
             "An unbound user relationship already represents this source "
             "relationship; it was not rebound automatically");
@@ -750,6 +759,7 @@ CppImportPreview planImport(const CppImportPreview &discovery,
     }
 
     item.existingRelationshipId = existing->id;
+    item.existingRelationship = *existing;
     item.desiredRelationship =
         sourceRelationship(source, sourceElementId, targetElementId, existing);
     const QJsonObject binding = sourceBinding(*existing);
@@ -2221,6 +2231,112 @@ QString toString(CppImportAction action) {
   return QStringLiteral("unchanged");
 }
 
+QString toString(CppImportConflictResolution resolution) {
+  switch (resolution) {
+  case CppImportConflictResolution::Unresolved:
+    return QStringLiteral("unresolved");
+  case CppImportConflictResolution::KeepModel:
+    return QStringLiteral("keep-model");
+  case CppImportConflictResolution::UseSource:
+    return QStringLiteral("use-source");
+  }
+  return QStringLiteral("unresolved");
+}
+
+CppImportConflictResolution
+cppImportConflictResolutionFromString(const QString &value, bool *ok) {
+  const QString normalized = value.trimmed().toLower();
+  if (normalized == QStringLiteral("unresolved")) {
+    if (ok)
+      *ok = true;
+    return CppImportConflictResolution::Unresolved;
+  }
+  if (normalized == QStringLiteral("keep-model")) {
+    if (ok)
+      *ok = true;
+    return CppImportConflictResolution::KeepModel;
+  }
+  if (normalized == QStringLiteral("use-source")) {
+    if (ok)
+      *ok = true;
+    return CppImportConflictResolution::UseSource;
+  }
+  if (ok)
+    *ok = false;
+  return CppImportConflictResolution::Unresolved;
+}
+
+QString CppImportItem::conflictKey() const {
+  return symbol.symbolId.isEmpty()
+             ? QString{}
+             : QStringLiteral("element:%1").arg(symbol.symbolId);
+}
+
+bool CppImportItem::isResolvableConflict() const {
+  return action == CppImportAction::Conflict && existingElement.has_value() &&
+         !desiredElement.id.isEmpty() &&
+         existingElement->id == desiredElement.id;
+}
+
+bool CppImportItem::isApplicable() const {
+  return action == CppImportAction::Create ||
+         action == CppImportAction::Update ||
+         (isResolvableConflict() &&
+          resolution != CppImportConflictResolution::Unresolved);
+}
+
+ModelElement CppImportItem::appliedElement() const {
+  Q_ASSERT(isApplicable());
+  if (action != CppImportAction::Conflict ||
+      resolution == CppImportConflictResolution::UseSource)
+    return desiredElement;
+
+  Q_ASSERT(isResolvableConflict());
+  Q_ASSERT(resolution == CppImportConflictResolution::KeepModel);
+  ModelElement retained = *existingElement;
+  // Acknowledging "Keep model" advances only the source baseline and
+  // provenance. Future synchronization therefore sees the retained fields as
+  // an intentional user override instead of reporting the same conflict
+  // forever.
+  retained.extra.insert(QString::fromLatin1(kBindingKey),
+                        sourceBinding(desiredElement));
+  return retained;
+}
+
+QString CppRelationshipImportItem::conflictKey() const {
+  return source.symbolId.isEmpty()
+             ? QString{}
+             : QStringLiteral("relationship:%1").arg(source.symbolId);
+}
+
+bool CppRelationshipImportItem::isResolvableConflict() const {
+  return action == CppImportAction::Conflict &&
+         existingRelationship.has_value() &&
+         !desiredRelationship.id.isEmpty() &&
+         existingRelationship->id == desiredRelationship.id;
+}
+
+bool CppRelationshipImportItem::isApplicable() const {
+  return action == CppImportAction::Create ||
+         action == CppImportAction::Update ||
+         (isResolvableConflict() &&
+          resolution != CppImportConflictResolution::Unresolved);
+}
+
+Relationship CppRelationshipImportItem::appliedRelationship() const {
+  Q_ASSERT(isApplicable());
+  if (action != CppImportAction::Conflict ||
+      resolution == CppImportConflictResolution::UseSource)
+    return desiredRelationship;
+
+  Q_ASSERT(isResolvableConflict());
+  Q_ASSERT(resolution == CppImportConflictResolution::KeepModel);
+  Relationship retained = *existingRelationship;
+  retained.extra.insert(QString::fromLatin1(kBindingKey),
+                        sourceBinding(desiredRelationship));
+  return retained;
+}
+
 QString CppImportOptions::defaultInterfacePattern() {
   return QStringLiteral("^I[A-Z].*$");
 }
@@ -2321,6 +2437,68 @@ int CppImportPreview::conflictCount() const {
   return elementConflicts + relationshipConflicts;
 }
 
+int CppImportPreview::resolvableConflictCount() const {
+  const int elementConflicts = static_cast<int>(std::count_if(
+      items.cbegin(), items.cend(),
+      [](const CppImportItem &item) { return item.isResolvableConflict(); }));
+  const int relationshipConflicts = static_cast<int>(
+      std::count_if(relationshipItems.cbegin(), relationshipItems.cend(),
+                    [](const CppRelationshipImportItem &item) {
+                      return item.isResolvableConflict();
+                    }));
+  return elementConflicts + relationshipConflicts;
+}
+
+int CppImportPreview::resolvedConflictCount() const {
+  const int elementConflicts = static_cast<int>(std::count_if(
+      items.cbegin(), items.cend(), [](const CppImportItem &item) {
+        return item.isResolvableConflict() &&
+               item.resolution != CppImportConflictResolution::Unresolved;
+      }));
+  const int relationshipConflicts = static_cast<int>(std::count_if(
+      relationshipItems.cbegin(), relationshipItems.cend(),
+      [](const CppRelationshipImportItem &item) {
+        return item.isResolvableConflict() &&
+               item.resolution != CppImportConflictResolution::Unresolved;
+      }));
+  return elementConflicts + relationshipConflicts;
+}
+
+int CppImportPreview::unresolvedConflictCount() const {
+  return conflictCount() - resolvedConflictCount();
+}
+
+bool CppImportPreview::setConflictResolution(
+    const QString &conflictKey, CppImportConflictResolution resolution) {
+  for (auto &item : items) {
+    if (item.conflictKey() != conflictKey)
+      continue;
+    if (!item.isResolvableConflict())
+      return false;
+    item.resolution = resolution;
+    return true;
+  }
+  for (auto &item : relationshipItems) {
+    if (item.conflictKey() != conflictKey)
+      continue;
+    if (!item.isResolvableConflict())
+      return false;
+    item.resolution = resolution;
+    return true;
+  }
+  return false;
+}
+
+void CppImportPreview::resolveAllConflicts(
+    CppImportConflictResolution resolution) {
+  for (auto &item : items)
+    if (item.isResolvableConflict())
+      item.resolution = resolution;
+  for (auto &item : relationshipItems)
+    if (item.isResolvableConflict())
+      item.resolution = resolution;
+}
+
 bool CppImportService::available() { return UUML_HAS_LIBCLANG != 0; }
 
 CppImportPreview
@@ -2382,19 +2560,21 @@ int CppImportService::apply(ProjectData &project,
   for (const auto &item : preview.items) {
     if (!item.isApplicable())
       continue;
-    if (auto *existing = findElement(project, item.desiredElement.id))
-      *existing = item.desiredElement;
+    ModelElement appliedElement = item.appliedElement();
+    if (auto *existing = findElement(project, appliedElement.id))
+      *existing = appliedElement;
     else
-      project.elements.append(item.desiredElement);
+      project.elements.append(std::move(appliedElement));
     ++applied;
   }
   for (const auto &item : preview.relationshipItems) {
     if (!item.isApplicable())
       continue;
-    if (auto *existing = findRelationship(project, item.desiredRelationship.id))
-      *existing = item.desiredRelationship;
+    Relationship appliedRelationship = item.appliedRelationship();
+    if (auto *existing = findRelationship(project, appliedRelationship.id))
+      *existing = appliedRelationship;
     else
-      project.relationships.append(item.desiredRelationship);
+      project.relationships.append(std::move(appliedRelationship));
     ++applied;
   }
   return applied;

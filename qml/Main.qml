@@ -2359,6 +2359,38 @@ ApplicationWindow {
                 color: uiTheme.mutedText
                 elide: Text.ElideMiddle
             }
+            RowLayout {
+                Layout.fillWidth: true
+                visible: !cppImportController.busy
+                         && cppImportController.conflictCount > 0
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("%1 conflict(s), %2 still unresolved")
+                          .arg(cppImportController.conflictCount)
+                          .arg(cppImportController.unresolvedConflictCount)
+                    color: cppImportController.unresolvedConflictCount > 0
+                           ? uiTheme.warningBorder : uiTheme.mutedText
+                }
+                Button {
+                    text: qsTr("Keep model for all")
+                    enabled: cppImportController.resolvableConflictCount > 0
+                    onClicked: cppImportController.resolveAllConflicts(
+                                   "keep-model")
+                }
+                Button {
+                    text: qsTr("Use source for all")
+                    enabled: cppImportController.resolvableConflictCount > 0
+                    onClicked: cppImportController.resolveAllConflicts(
+                                   "use-source")
+                }
+                Button {
+                    text: qsTr("Clear choices")
+                    enabled: cppImportController.unresolvedConflictCount
+                             < cppImportController.conflictCount
+                    onClicked: cppImportController.resolveAllConflicts(
+                                   "unresolved")
+                }
+            }
             Rectangle {
                 Layout.fillWidth: true
                 Layout.fillHeight: true
@@ -2375,23 +2407,58 @@ ApplicationWindow {
                         required property int index
                         required property var modelData
                         width: ListView.view.width
-                        height: Math.max(50, importItemText.implicitHeight + 14)
+                        height: Math.max(54, importItemRow.implicitHeight + 14)
                         color: modelData.action === "conflict" ? uiTheme.warningRow
                              : index % 2 ? uiTheme.alternateRow : uiTheme.surface
 
-                        Label {
-                            id: importItemText
-                            anchors.left: parent.left
-                            anchors.right: parent.right
-                            anchors.verticalCenter: parent.verticalCenter
+                        RowLayout {
+                            id: importItemRow
+                            anchors.fill: parent
                             anchors.margins: 7
-                            text: modelData.action.toUpperCase() + "  "
-                                  + modelData.name + " (" + modelData.type + ")\n"
-                                  + modelData.message + (modelData.file.length > 0
-                                    ? " — " + modelData.file + ":" + modelData.line : "")
-                                  + (modelData.classification
-                                     ? "\n" + modelData.classification : "")
-                            wrapMode: Text.Wrap
+                            spacing: 8
+
+                            Label {
+                                Layout.fillWidth: true
+                                text: modelData.action.toUpperCase() + "  "
+                                      + modelData.name + " (" + modelData.type + ")\n"
+                                      + modelData.message
+                                      + (modelData.resolutionDetail
+                                         ? "\n" + modelData.resolutionDetail : "")
+                                      + (modelData.file.length > 0
+                                         ? "\n" + modelData.file + ":" + modelData.line : "")
+                                      + (modelData.classification
+                                         ? "\n" + modelData.classification : "")
+                                wrapMode: Text.Wrap
+                            }
+                            ComboBox {
+                                visible: modelData.action === "conflict"
+                                         && modelData.resolvable
+                                model: [qsTr("Unresolved"),
+                                        qsTr("Keep model"),
+                                        qsTr("Use C++ source")]
+                                currentIndex: modelData.resolution === "keep-model"
+                                              ? 1
+                                              : modelData.resolution === "use-source"
+                                                ? 2 : 0
+                                Accessible.name: qsTr(
+                                                     "Conflict resolution for %1")
+                                                 .arg(modelData.name)
+                                onActivated: {
+                                    const resolutions = [
+                                        "unresolved", "keep-model", "use-source"
+                                    ]
+                                    cppImportController.setConflictResolution(
+                                                modelData.conflictKey,
+                                                resolutions[currentIndex])
+                                }
+                            }
+                            Label {
+                                visible: modelData.action === "conflict"
+                                         && !modelData.resolvable
+                                text: qsTr("Manual repair required")
+                                color: uiTheme.warningBorder
+                                wrapMode: Text.Wrap
+                            }
                         }
                     }
                     Label {

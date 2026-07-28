@@ -66,7 +66,9 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   const QStringList arguments = application.arguments();
   if (arguments.size() < 3) {
     err << "Usage: uuml " << (apply ? "cpp-import" : "cpp-preview")
-        << " <project-directory> [source-directory ...]\n";
+        << " <project-directory> "
+           "[--conflicts=unresolved|keep-model|use-source] "
+           "[source-directory ...]\n";
     return 64;
   }
 
@@ -75,9 +77,31 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   writeDiagnostics(load.diagnostics, out, err);
   if (!load.ok)
     return 2;
-  const QStringList sourcePaths = arguments.size() >= 4
-                                      ? arguments.mid(3)
-                                      : load.project.cppImport.sourceRoots;
+
+  uuml::CppImportConflictResolution conflictResolution =
+      uuml::CppImportConflictResolution::Unresolved;
+  QStringList requestedSourcePaths;
+  const QString conflictOption = QStringLiteral("--conflicts=");
+  for (qsizetype index = 3; index < arguments.size(); ++index) {
+    const QString argument = arguments.at(index);
+    if (argument.startsWith(conflictOption)) {
+      bool ok = false;
+      conflictResolution = uuml::cppImportConflictResolutionFromString(
+          argument.mid(conflictOption.size()), &ok);
+      if (!ok) {
+        err << "Unknown C++ conflict resolution: " << argument << '\n';
+        return 64;
+      }
+    } else if (argument.startsWith(QStringLiteral("--"))) {
+      err << "Unknown option: " << argument << '\n';
+      return 64;
+    } else {
+      requestedSourcePaths.append(argument);
+    }
+  }
+  const QStringList sourcePaths = requestedSourcePaths.isEmpty()
+                                      ? load.project.cppImport.sourceRoots
+                                      : requestedSourcePaths;
   if (sourcePaths.isEmpty()) {
     err << "No C++ source directories were provided or configured for this "
            "project\n";
@@ -91,6 +115,7 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   uuml::configureCppImportStereotypes(options, load.project);
   uuml::CppImportPreview preview = uuml::CppImportService::preview(
       sourcePaths, load.project.elements, load.project.relationships, options);
+  preview.resolveAllConflicts(conflictResolution);
   writeDiagnostics(preview.diagnostics, out, err);
   for (const auto &item : preview.items) {
     out << uuml::toString(item.action).toUpper() << " "
@@ -99,6 +124,12 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
       out << " — " << item.symbol.filePath << ':' << item.symbol.line;
     if (!item.message.isEmpty())
       out << " — " << item.message;
+    if (item.action == uuml::CppImportAction::Conflict)
+      out << " — "
+          << (item.isResolvableConflict()
+                  ? QStringLiteral("resolution: %1")
+                        .arg(uuml::toString(item.resolution))
+                  : QStringLiteral("manual repair required"));
     out << '\n';
   }
   for (const auto &item : preview.relationshipItems) {
@@ -111,6 +142,12 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
       out << " — " << item.message;
     if (!item.source.classificationReason.isEmpty())
       out << " — " << item.source.classificationReason;
+    if (item.action == uuml::CppImportAction::Conflict)
+      out << " — "
+          << (item.isResolvableConflict()
+                  ? QStringLiteral("resolution: %1")
+                        .arg(uuml::toString(item.resolution))
+                  : QStringLiteral("manual repair required"));
     out << '\n';
   }
   if (!preview.ok)
@@ -123,8 +160,9 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
         << "): " << preview.symbols.size() << " type(s), "
         << preview.relationships.size() << " relationship(s), "
         << preview.applicableCount() << " applicable change(s), "
-        << preview.conflictCount() << " conflict(s)\n";
-    return preview.conflictCount() > 0 ? 3 : 0;
+        << preview.conflictCount() << " conflict(s), "
+        << preview.unresolvedConflictCount() << " unresolved\n";
+    return preview.unresolvedConflictCount() > 0 ? 3 : 0;
   }
 
   uuml::ProjectData imported = load.project;
@@ -138,11 +176,13 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
       return 2;
   }
   out << "Imported " << appliedCount << " C++ model change(s)";
-  if (preview.conflictCount() > 0)
-    out << "; " << preview.conflictCount()
-        << " conflict(s) retained the user model";
+  if (preview.resolvedConflictCount() > 0)
+    out << "; " << preview.resolvedConflictCount() << " conflict(s) resolved";
+  if (preview.unresolvedConflictCount() > 0)
+    out << "; " << preview.unresolvedConflictCount()
+        << " conflict(s) remain unresolved";
   out << '\n';
-  return preview.conflictCount() > 0 ? 3 : 0;
+  return preview.unresolvedConflictCount() > 0 ? 3 : 0;
 }
 
 } // namespace

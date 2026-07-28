@@ -6,6 +6,7 @@
 #include <QList>
 #include <QString>
 #include <functional>
+#include <optional>
 
 namespace uuml {
 
@@ -19,6 +20,12 @@ enum class CppImportAction {
 };
 
 QString toString(CppImportAction action);
+
+enum class CppImportConflictResolution { Unresolved, KeepModel, UseSource };
+
+QString toString(CppImportConflictResolution resolution);
+CppImportConflictResolution
+cppImportConflictResolutionFromString(const QString &value, bool *ok = nullptr);
 
 enum class CppImportProgressStage {
   Preparing,
@@ -124,28 +131,34 @@ struct CppSourceRelationship {
 
 struct CppImportItem {
   CppImportAction action = CppImportAction::Unchanged;
+  CppImportConflictResolution resolution =
+      CppImportConflictResolution::Unresolved;
   CppSourceSymbol symbol;
   ModelElement desiredElement;
+  std::optional<ModelElement> existingElement;
   QString existingElementId;
   QString message;
 
-  bool isApplicable() const {
-    return action == CppImportAction::Create ||
-           action == CppImportAction::Update;
-  }
+  QString conflictKey() const;
+  bool isResolvableConflict() const;
+  bool isApplicable() const;
+  ModelElement appliedElement() const;
 };
 
 struct CppRelationshipImportItem {
   CppImportAction action = CppImportAction::Unchanged;
+  CppImportConflictResolution resolution =
+      CppImportConflictResolution::Unresolved;
   CppSourceRelationship source;
   Relationship desiredRelationship;
+  std::optional<Relationship> existingRelationship;
   QString existingRelationshipId;
   QString message;
 
-  bool isApplicable() const {
-    return action == CppImportAction::Create ||
-           action == CppImportAction::Update;
-  }
+  QString conflictKey() const;
+  bool isResolvableConflict() const;
+  bool isApplicable() const;
+  Relationship appliedRelationship() const;
 };
 
 struct CppImportPreview {
@@ -173,6 +186,12 @@ struct CppImportPreview {
   int relationshipApplicableCount() const;
   int applicableCount() const;
   int conflictCount() const;
+  int resolvableConflictCount() const;
+  int resolvedConflictCount() const;
+  int unresolvedConflictCount() const;
+  bool setConflictResolution(const QString &conflictKey,
+                             CppImportConflictResolution resolution);
+  void resolveAllConflicts(CppImportConflictResolution resolution);
 };
 
 class CppImportService {
