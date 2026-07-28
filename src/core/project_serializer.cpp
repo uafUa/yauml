@@ -5,6 +5,7 @@
 #include "core/json5.h"
 #include "core/project_schema.h"
 #include "core/project_schema_version.h"
+#include "core/project_serializer_test_support.h"
 #include "core/stereotype_catalog.h"
 
 #include <QColor>
@@ -120,15 +121,38 @@ QStringList externallyChangedFiles(
 }
 
 bool writeFile(const QString &path, const QByteArray &bytes,
+               test_support::ProjectWritePurpose purpose,
                QString &writeError) {
+  using test_support::ProjectWriteBoundary;
+  using test_support::ProjectWriteStage;
+
+  const auto injectFault = [&](ProjectWriteStage stage) {
+    if (!test_support::detail::shouldInjectProjectWriteFault(
+            ProjectWriteBoundary{purpose, stage, path}))
+      return false;
+    writeError =
+        QStringLiteral("Injected persistence fault for %1").arg(path);
+    return true;
+  };
+
   QDir().mkpath(QFileInfo(path).absolutePath());
+  if (injectFault(ProjectWriteStage::Open))
+    return false;
   QSaveFile file(path);
   if (!file.open(QIODevice::WriteOnly)) {
     writeError = file.errorString();
     return false;
   }
+  if (injectFault(ProjectWriteStage::Write)) {
+    file.cancelWriting();
+    return false;
+  }
   if (file.write(bytes) != bytes.size()) {
     writeError = file.errorString();
+    file.cancelWriting();
+    return false;
+  }
+  if (injectFault(ProjectWriteStage::Commit)) {
     file.cancelWriting();
     return false;
   }
@@ -834,7 +858,9 @@ bool recoverIfPending(const QString &root, QString &message) {
   for (qsizetype index = 0; index < files.size(); ++index) {
     QString ioError;
     const QString &target = files.at(index).second;
-    if (!writeFile(target, backupContents.at(index), ioError)) {
+    if (!writeFile(target, backupContents.at(index),
+                   test_support::ProjectWritePurpose::RecoveryRestore,
+                   ioError)) {
       // Keep the marker and complete backup set. A later launch can retry the
       // entire recovery after the filesystem problem has been resolved.
       message =
@@ -872,7 +898,10 @@ bool prepareRecovery(const QString &root, QString &message) {
   for (const auto &[source, backup] : files) {
     QString ioError;
     const QByteArray bytes = readFile(source, ioError);
-    if (!ioError.isEmpty() || !writeFile(backup, bytes, ioError)) {
+    if (!ioError.isEmpty() ||
+        !writeFile(backup, bytes,
+                   test_support::ProjectWritePurpose::RecoveryBackup,
+                   ioError)) {
       message =
           QStringLiteral("Could not prepare recovery data: %1").arg(ioError);
       return false;
@@ -880,7 +909,8 @@ bool prepareRecovery(const QString &root, QString &message) {
   }
   QString ioError;
   if (!writeFile(QDir(recovery).filePath(QString::fromLatin1(kRecoveryMarker)),
-                 QByteArrayLiteral("pending\n"), ioError)) {
+                 QByteArrayLiteral("pending\n"),
+                 test_support::ProjectWritePurpose::RecoveryMarker, ioError)) {
     message =
         QStringLiteral("Could not create recovery marker: %1").arg(ioError);
     return false;
@@ -1479,7 +1509,8 @@ SaveOutcome ProjectSerializer::save(const QString &projectPath,
 
   for (const auto &[path, bytes] : files) {
     QString ioError;
-    if (!writeFile(path, bytes, ioError)) {
+    if (!writeFile(path, bytes,
+                   test_support::ProjectWritePurpose::ProjectFile, ioError)) {
       outcome.diagnostics.append(
           error(QStringLiteral("persistence"),
                 QStringLiteral("Cannot write %1: %2").arg(path, ioError)));

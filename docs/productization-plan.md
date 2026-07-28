@@ -479,11 +479,17 @@ history memory grow with total project size rather than the size of each edit.
   local and CI failures retain expected, actual, and amplified difference
   images. Comparison allows bounded per-pixel glyph antialiasing differences
   between Windows/Qt releases while a stricter whole-image mean still rejects
-  geometry, routing, or palette movement.
-- Recovery fault coverage now includes missing and malformed backup files.
-  The complete recovery set is read and parsed before any live project file is
-  replaced, and failed recovery remains retryable. Deeper filesystem fault
-  injection at individual write/commit boundaries remains future hardening.
+  geometry, routing, or palette movement. The harness counter-scales the scene
+  by the actual window device-pixel ratio and compares a fixed physical
+  viewport, keeping the reference stable on 100%, 125%, and mixed-DPI setups.
+- Recovery fault coverage includes missing and malformed backup files plus
+  deterministic failures at every atomic open, write, and commit boundary.
+  The test matrix covers all three recovery backups, the pending marker, all
+  three live project files, and all three restore targets. It includes genuine
+  mixed generations and verifies that a failed restore retains the complete
+  backup set for a later retry. The injection seam is scoped and thread-local,
+  so it exercises the production persistence path without leaking into other
+  tests or changing application behavior.
 - Incremental loading/indexing and synthetic performance benchmarks are
   intentionally last in this phase. The current scene-graph implementation is
   performing well on the product owner's large real project, so architectural

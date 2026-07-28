@@ -7,6 +7,7 @@
 #include "core/presentation_layout.h"
 #include "core/project_controller.h"
 #include "core/project_serializer.h"
+#include "core/project_serializer_test_support.h"
 #include "core/project_style.h"
 #include "core/stereotype_catalog.h"
 #include "core/workspace_controller.h"
@@ -146,6 +147,7 @@ private slots:
   void themePreferencesPersistAndReset();
   void interruptedSaveRecovery();
   void invalidSaveRecoveryIsNonDestructive();
+  void saveFaultBoundariesRemainRecoverable();
   void fullyCoveredTextHasNoVisibleFragments();
   void partialTextCoveragePreservesOnlyExposedArea();
   void triangleGeometryIsSplitOnPrimitiveBoundaries();
@@ -4775,6 +4777,157 @@ void CoreTests::invalidSaveRecoveryIsNonDestructive() {
            "A missing recovery backup modified live project files");
   QVERIFY2(exerciseInvalidRecovery(false, QStringLiteral("malformed-backup")),
            "A malformed recovery backup modified live project files");
+}
+
+void CoreTests::saveFaultBoundariesRemainRecoverable() {
+  using test_support::ProjectWriteBoundary;
+  using test_support::ProjectWritePurpose;
+  using test_support::ProjectWriteStage;
+  using test_support::ScopedProjectWriteFaultInjector;
+
+  const auto updatedProject = [](const ProjectData &original) {
+    ProjectData updated = original;
+    updated.name = QStringLiteral("Updated after fault");
+
+    ModelElement element;
+    element.id = newId();
+    element.name = QStringLiteral("Added type");
+    updated.elements.append(element);
+
+    NodePresentation node;
+    node.id = newId();
+    node.elementId = element.id;
+    node.geometry = QRectF(80.0, 90.0, 220.0, 120.0);
+    updated.diagrams.first().nodes.append(node);
+    return updated;
+  };
+  const auto pendingMarker = [](const QString &root) {
+    return QDir(root).filePath(
+        QStringLiteral(".uuml-recovery/pending"));
+  };
+  const auto caseLabel = [](ProjectWritePurpose purpose,
+                            ProjectWriteStage stage, int ordinal) {
+    return QStringLiteral("purpose=%1 stage=%2 file=%3")
+        .arg(static_cast<int>(purpose))
+        .arg(static_cast<int>(stage))
+        .arg(ordinal);
+  };
+
+  const QList<ProjectWriteStage> stages = {
+      ProjectWriteStage::Open, ProjectWriteStage::Write,
+      ProjectWriteStage::Commit};
+  const QList<QPair<ProjectWritePurpose, int>> saveWrites = {
+      {ProjectWritePurpose::RecoveryBackup, 3},
+      {ProjectWritePurpose::RecoveryMarker, 1},
+      {ProjectWritePurpose::ProjectFile, 3}};
+
+  // Every save-side atomic-write boundary must either leave the old files
+  // untouched (backup/marker preparation) or retain a pending recovery set
+  // capable of restoring the old project after partial live-file replacement.
+  for (const auto &[purpose, fileCount] : saveWrites) {
+    for (const ProjectWriteStage stage : stages) {
+      for (int ordinal = 0; ordinal < fileCount; ++ordinal) {
+        QTemporaryDir temporary;
+        QVERIFY(temporary.isValid());
+        const ProjectData original =
+            createStarterProject(QStringLiteral("Fault source"));
+        const ProjectData updated = updatedProject(original);
+        QVERIFY(ProjectSerializer::save(temporary.path(), original).ok);
+
+        int matchingBoundary = 0;
+        SaveOutcome failedSave;
+        {
+          ScopedProjectWriteFaultInjector fault(
+              [&](const ProjectWriteBoundary &boundary) {
+                if (boundary.purpose != purpose || boundary.stage != stage)
+                  return false;
+                return matchingBoundary++ == ordinal;
+              });
+          failedSave = ProjectSerializer::save(temporary.path(), updated);
+        }
+
+        const QString label = caseLabel(purpose, stage, ordinal);
+        QVERIFY2(!failedSave.ok, qPrintable(label + QStringLiteral(
+                                                       " unexpectedly saved")));
+        const bool liveWriteFailed =
+            purpose == ProjectWritePurpose::ProjectFile;
+        QCOMPARE(QFileInfo::exists(pendingMarker(temporary.path())),
+                 liveWriteFailed);
+
+        const LoadOutcome recovered =
+            ProjectSerializer::load(temporary.path());
+        QVERIFY2(recovered.ok,
+                 qPrintable(label + QStringLiteral(" did not load")));
+        QCOMPARE(recovered.project, original);
+        QCOMPARE(recovered.recovered, liveWriteFailed);
+
+        // The scoped injector must not leak. A normal retry writes the complete
+        // new generation and removes any partial recovery directory.
+        QVERIFY2(ProjectSerializer::save(temporary.path(), updated).ok,
+                 qPrintable(label + QStringLiteral(" did not retry")));
+        const LoadOutcome retried =
+            ProjectSerializer::load(temporary.path());
+        QVERIFY(retried.ok);
+        QCOMPARE(retried.project, updated);
+        QVERIFY(!QFileInfo::exists(pendingMarker(temporary.path())));
+      }
+    }
+  }
+
+  // Recovery itself is also a three-file atomic sequence. A fault at any
+  // restore boundary keeps the complete backup set and marker so the next
+  // launch retries the recovery from the beginning.
+  for (const ProjectWriteStage stage : stages) {
+    for (int ordinal = 0; ordinal < 3; ++ordinal) {
+      QTemporaryDir temporary;
+      QVERIFY(temporary.isValid());
+      const ProjectData original =
+          createStarterProject(QStringLiteral("Restore source"));
+      const ProjectData updated = updatedProject(original);
+      QVERIFY(ProjectSerializer::save(temporary.path(), original).ok);
+
+      int liveCommit = 0;
+      {
+        ScopedProjectWriteFaultInjector interrupt(
+            [&](const ProjectWriteBoundary &boundary) {
+              if (boundary.purpose != ProjectWritePurpose::ProjectFile ||
+                  boundary.stage != ProjectWriteStage::Commit)
+                return false;
+              // The manifest has committed when model commit is interrupted,
+              // producing a genuine mixed live generation.
+              return liveCommit++ == 1;
+            });
+        QVERIFY(!ProjectSerializer::save(temporary.path(), updated).ok);
+      }
+      QVERIFY(QFileInfo::exists(pendingMarker(temporary.path())));
+
+      int matchingRestore = 0;
+      LoadOutcome failedRecovery;
+      {
+        ScopedProjectWriteFaultInjector recoveryFault(
+            [&](const ProjectWriteBoundary &boundary) {
+              if (boundary.purpose != ProjectWritePurpose::RecoveryRestore ||
+                  boundary.stage != stage)
+                return false;
+              return matchingRestore++ == ordinal;
+            });
+        failedRecovery = ProjectSerializer::load(temporary.path());
+      }
+
+      const QString label =
+          caseLabel(ProjectWritePurpose::RecoveryRestore, stage, ordinal);
+      QVERIFY2(!failedRecovery.ok,
+               qPrintable(label + QStringLiteral(" unexpectedly recovered")));
+      QVERIFY(!failedRecovery.recovered);
+      QVERIFY(QFileInfo::exists(pendingMarker(temporary.path())));
+
+      const LoadOutcome retry = ProjectSerializer::load(temporary.path());
+      QVERIFY2(retry.ok, qPrintable(label + QStringLiteral(" did not retry")));
+      QVERIFY(retry.recovered);
+      QCOMPARE(retry.project, original);
+      QVERIFY(!QFileInfo::exists(pendingMarker(temporary.path())));
+    }
+  }
 }
 
 void CoreTests::fullyCoveredTextHasNoVisibleFragments() {

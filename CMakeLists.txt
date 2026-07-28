@@ -79,6 +79,8 @@ add_library(uuml_core STATIC
     src/core/project_schema_version.h
     src/core/project_serializer.cpp
     src/core/project_serializer.h
+    src/core/project_serializer_test_support.cpp
+    src/core/project_serializer_test_support.h
     src/core/project_style.cpp
     src/core/project_style.h
     src/core/stereotype_catalog.cpp

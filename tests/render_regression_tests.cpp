@@ -10,6 +10,7 @@
 #include <QGuiApplication>
 #include <QImage>
 #include <QQuickWindow>
+#include <QScreen>
 #include <QSettings>
 #include <QtTest>
 
@@ -22,10 +23,11 @@ namespace {
 
 constexpr QSize kViewportSize(760, 500);
 constexpr int kSignificantChannelDelta = 18;
-// DirectWrite and Qt can rasterize the same glyph outlines differently across
-// Windows/Qt releases. The changed-pixel allowance absorbs that edge noise;
-// the stricter mean-channel limit still rejects geometry or palette movement.
-constexpr double kMaximumChangedPixelRatio = 0.0225;
+// DirectWrite, Qt releases, and counter-scaled mixed-DPI rendering can
+// rasterize the same one-pixel grid and glyph outlines differently. The
+// changed-pixel allowance absorbs that edge noise; the stricter mean-channel
+// limit still rejects geometry or palette movement.
+constexpr double kMaximumChangedPixelRatio = 0.04;
 constexpr double kMaximumMeanChannelDelta = 0.85;
 
 QString baselineFileName() {
@@ -274,11 +276,20 @@ void RenderRegressionTests::canonicalDiagramMatchesBaseline() {
   QQuickWindow window;
   window.setTitle(QStringLiteral("u uml render regression"));
   window.setColor(ui::uiPalette().surface);
+  if (QScreen *primaryScreen = QGuiApplication::primaryScreen()) {
+    window.setScreen(primaryScreen);
+    window.setPosition(primaryScreen->availableGeometry().topLeft() +
+                       QPoint(32, 32));
+  }
   window.resize(kViewportSize);
   auto *canvas = new DiagramCanvas(window.contentItem());
   canvas->setParentItem(window.contentItem());
   canvas->setWidth(kViewportSize.width());
   canvas->setHeight(kViewportSize.height());
+  // grabWindow() returns device pixels. Counter-scale the scene so one diagram
+  // unit remains one reference pixel on 100%, 125%, and mixed-DPI monitors.
+  canvas->setTransformOrigin(QQuickItem::TopLeft);
+  canvas->setScale(1.0 / window.devicePixelRatio());
   canvas->setVisible(true);
   canvas->setProject(&controller);
   canvas->setDiagramId(controller.data().diagrams.first().id);
@@ -287,9 +298,12 @@ void RenderRegressionTests::canonicalDiagramMatchesBaseline() {
   if (QGuiApplication::platformName() != QStringLiteral("offscreen"))
     QVERIFY(QTest::qWaitForWindowExposed(&window));
 
-  const QImage actual = captureWindow(window);
-  QVERIFY2(!actual.isNull(), "Qt Quick did not produce a captured frame");
-  QCOMPARE(actual.size(), kViewportSize);
+  const QImage captured = captureWindow(window);
+  QVERIFY2(!captured.isNull(), "Qt Quick did not produce a captured frame");
+  QVERIFY(captured.width() >= kViewportSize.width());
+  QVERIFY(captured.height() >= kViewportSize.height());
+  const QImage actual =
+      captured.copy(QRect(QPoint(0, 0), kViewportSize));
 
   if (updateBaseline) {
     QVERIFY(QDir().mkpath(QFileInfo(baselinePath).absolutePath()));
