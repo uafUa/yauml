@@ -649,9 +649,9 @@ QString endpointGroupKey(const QString &nodeId, ConnectorSide side) {
   return nodeId + u'|' + QString::number(static_cast<int>(side));
 }
 
-void attachNewConnectorsToSnapPoints(
-    const ProjectData &project, Diagram &diagram,
-    const QSet<QString> &newConnectorIds) {
+void attachNewConnectorsToSnapPoints(const ProjectData &project,
+                                     Diagram &diagram,
+                                     const QSet<QString> &newConnectorIds) {
   if (newConnectorIds.isEmpty())
     return;
 
@@ -799,11 +799,10 @@ existingNodePortChanges(const Diagram &before, const Diagram &after,
     if (newNodeIds.contains(beforeNode.id))
       continue;
     const auto *afterNode = findNode(after, beforeNode.id);
-    if (!afterNode ||
-        (beforeNode.horizontalPortSnapPoints ==
-             afterNode->horizontalPortSnapPoints &&
-         beforeNode.verticalPortSnapPoints ==
-             afterNode->verticalPortSnapPoints)) {
+    if (!afterNode || (beforeNode.horizontalPortSnapPoints ==
+                           afterNode->horizontalPortSnapPoints &&
+                       beforeNode.verticalPortSnapPoints ==
+                           afterNode->verticalPortSnapPoints)) {
       continue;
     }
     changes.append({beforeNode.id, beforeNode.horizontalPortSnapPoints,
@@ -1166,8 +1165,8 @@ bool ProjectController::saveProject(const QUrl &url, bool overwriteExisting) {
   const bool savingCurrentProject =
       !m_projectPath.isEmpty() &&
       QDir::cleanPath(destination)
-              .compare(QDir::cleanPath(m_projectPath),
-                       Qt::CaseInsensitive) == 0;
+              .compare(QDir::cleanPath(m_projectPath), Qt::CaseInsensitive) ==
+          0;
   const auto outcome = ProjectSerializer::save(
       path, m_data,
       savingCurrentProject ? m_projectRevision : ProjectFileRevision{},
@@ -2183,8 +2182,8 @@ int ProjectController::addElementsToDiagram(const QString &diagramId,
   const QList<NodePortSnapPointChange> portChanges =
       existingNodePortChanges(*diagram, prospective, newNodeIds);
   pushCommand(std::make_unique<AddElementsToDiagramCommand>(
-      this, m_data, diagramId, std::move(presentations),
-      std::move(connectors), portChanges));
+      this, m_data, diagramId, std::move(presentations), std::move(connectors),
+      portChanges));
   if (duplicateCount > 0) {
     m_diagnostics.addInfo(
         QStringLiteral("command"),
@@ -2902,6 +2901,29 @@ void ProjectController::deleteRelationship(const QString &relationshipId) {
     clearSelection();
 }
 
+void ProjectController::deleteRelationships(
+    const QStringList &relationshipIds) {
+  QSet<QString> requested(relationshipIds.cbegin(), relationshipIds.cend());
+  QStringList validIds;
+  validIds.reserve(requested.size());
+  for (const auto &relationship : m_data.relationships)
+    if (requested.contains(relationship.id))
+      validIds.append(relationship.id);
+  if (validIds.isEmpty())
+    return;
+  if (validIds.size() == 1) {
+    deleteRelationship(validIds.constFirst());
+    return;
+  }
+
+  m_undoStack.beginMacro(QStringLiteral("Delete relationships"));
+  for (const QString &relationshipId : validIds)
+    pushCommand(std::make_unique<DeleteRelationshipCommand>(this, m_data,
+                                                            relationshipId));
+  m_undoStack.endMacro();
+  clearSelection();
+}
+
 void ProjectController::deleteElement(const QString &elementId) {
   if (!findElement(m_data, elementId))
     return;
@@ -3370,6 +3392,12 @@ void ProjectController::updateConnectorAnchor(const QString &diagramId,
 void ProjectController::setConnectorRouting(const QString &diagramId,
                                             const QString &connectorId,
                                             const QString &routing) {
+  setConnectorsRouting(diagramId, {connectorId}, routing);
+}
+
+void ProjectController::setConnectorsRouting(const QString &diagramId,
+                                             const QStringList &connectorIds,
+                                             const QString &routing) {
   bool routingOk = false;
   const ConnectorRouting parsedRouting =
       connectorRoutingFromString(routing, &routingOk);
@@ -3377,17 +3405,26 @@ void ProjectController::setConnectorRouting(const QString &diagramId,
     m_diagnostics.addError(
         QStringLiteral("command"),
         QStringLiteral("Unknown connector routing mode: %1").arg(routing),
-        connectorId);
+        connectorIds.join(QStringLiteral(", ")));
     return;
   }
 
   const auto *diagram = findDiagram(m_data, diagramId);
-  const auto *connector =
-      diagram ? findConnector(*diagram, connectorId) : nullptr;
-  if (!connector || connector->routing == parsedRouting)
+  if (!diagram)
     return;
-  pushCommand(std::make_unique<SetConnectorRoutingCommand>(
-      this, diagramId, connectorId, connector->routing, parsedRouting));
+
+  const QSet<QString> requested(connectorIds.cbegin(), connectorIds.cend());
+  QList<ConnectorRoutingChange> changes;
+  changes.reserve(requested.size());
+  for (const auto &connector : diagram->connectors) {
+    if (requested.contains(connector.id) && connector.routing != parsedRouting)
+      changes.append({connector.id, connector.routing});
+  }
+  if (changes.isEmpty())
+    return;
+  pushCommand(std::make_unique<SetConnectorsRoutingCommand>(
+      this, diagramId, std::move(changes), parsedRouting,
+      requested.size() > 1));
 }
 
 void ProjectController::insertConnectorBendPoint(const QString &diagramId,

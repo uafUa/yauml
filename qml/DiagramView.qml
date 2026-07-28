@@ -721,33 +721,40 @@ Item {
 
     Menu {
         id: connectorMenu
-        title: qsTr("Relationship")
+        title: canvas.selectedConnectorCount > 1
+               ? qsTr("Relationships")
+               : qsTr("Relationship")
         CatalogMenuItem {
             catalogId: "connector.addBendPoint"
             text: qsTr("Add bend point here")
+            enabled: canvas.selectedConnectorCount === 1
             onTriggered: canvas.addBendPointAtContextPosition()
         }
         CatalogMenuItem {
             catalogId: "connector.removeBendPoint"
             text: qsTr("Remove bend point")
-            enabled: canvas.bendPointSelected
+            enabled: canvas.selectedConnectorCount === 1
+                     && canvas.bendPointSelected
             onTriggered: canvas.removeSelectedBendPoint()
         }
         CatalogMenuItem {
             catalogId: "connector.clearBendPoints"
             text: qsTr("Clear bend points")
-            enabled: canvas.selectedConnectorHasBendPoints
+            enabled: canvas.selectedConnectorCount === 1
+                     && canvas.selectedConnectorHasBendPoints
             onTriggered: canvas.clearSelectedConnectorBendPoints()
         }
         MenuSeparator {}
         MenuItem {
             text: qsTr("Reset this annotation position")
-            enabled: canvas.contextAnnotationHasManualPosition
+            enabled: canvas.selectedConnectorCount === 1
+                     && canvas.contextAnnotationHasManualPosition
             onTriggered: canvas.resetContextAnnotationPosition()
         }
         MenuItem {
             text: qsTr("Reset all annotation positions")
-            enabled: canvas.selectedConnectorHasManualAnnotationPositions
+            enabled: canvas.selectedConnectorCount === 1
+                     && canvas.selectedConnectorHasManualAnnotationPositions
             onTriggered: canvas.resetSelectedConnectorAnnotationPositions()
         }
         MenuSeparator {}
@@ -770,6 +777,7 @@ Item {
         }
         MenuItem {
             text: qsTr("Stereotypes…")
+            enabled: canvas.selectedConnectorCount === 1
             onTriggered: {
                 const menuX = connectorMenu.x
                 const menuY = connectorMenu.y
@@ -784,7 +792,9 @@ Item {
         MenuSeparator {}
         CatalogMenuItem {
             catalogId: "connector.deleteRelationship"
-            text: qsTr("Delete relationship")
+            text: canvas.selectedConnectorCount > 1
+                  ? qsTr("Delete relationships")
+                  : qsTr("Delete relationship")
             onTriggered: canvas.deleteSelectedConnector()
         }
     }
@@ -1123,8 +1133,10 @@ Item {
                     checked: modelData.kind === "routing"
                              && canvas.selectedConnectorRouting
                                 === modelData.value
-                    enabled: modelData.kind !== "reset"
-                             || canvas.selectedConnectorHasManualAnnotationPositions
+                    enabled: modelData.kind === "routing"
+                             || (canvas.selectedConnectorCount === 1
+                                 && (modelData.kind !== "reset"
+                                     || canvas.selectedConnectorHasManualAnnotationPositions))
                     display: icon.source.toString().length > 0
                              ? AbstractButton.IconOnly
                              : AbstractButton.TextOnly

@@ -51,7 +51,7 @@ class ProjectController final : public QObject {
   Q_PROPERTY(bool dirty READ dirty NOTIFY dirtyChanged)
   Q_PROPERTY(QStringList externallyChangedProjectFiles READ
                  externallyChangedProjectFiles NOTIFY
-                 externallyChangedProjectFilesChanged)
+                     externallyChangedProjectFilesChanged)
   Q_PROPERTY(QVariantList diagramStyles READ diagramStyles NOTIFY stateChanged)
   Q_PROPERTY(
       QVariantList stereotypeCatalog READ stereotypeCatalog NOTIFY stateChanged)
@@ -212,6 +212,7 @@ public:
   Q_INVOKABLE void deleteSelected();
   Q_INVOKABLE void deleteDiagram(const QString &diagramId);
   Q_INVOKABLE void deleteRelationship(const QString &relationshipId);
+  Q_INVOKABLE void deleteRelationships(const QStringList &relationshipIds);
   Q_INVOKABLE void deleteElement(const QString &elementId);
   Q_INVOKABLE void selectObject(const QString &id, const QString &kind);
   Q_INVOKABLE void clearSelection();
@@ -237,9 +238,10 @@ public:
                                                 const QString &nodeId,
                                                 const QString &compartment,
                                                 const QString &visibility);
-  Q_INVOKABLE void setNodesCompartmentVisibility(
-      const QString &diagramId, const QStringList &nodeIds,
-      const QString &compartment, const QString &visibility);
+  Q_INVOKABLE void setNodesCompartmentVisibility(const QString &diagramId,
+                                                 const QStringList &nodeIds,
+                                                 const QString &compartment,
+                                                 const QString &visibility);
   void updatePresentationGeometries(const QString &diagramId,
                                     const QVariantList &geometries,
                                     const QString &description);
@@ -283,6 +285,9 @@ public:
   Q_INVOKABLE void setConnectorRouting(const QString &diagramId,
                                        const QString &connectorId,
                                        const QString &routing);
+  Q_INVOKABLE void setConnectorsRouting(const QString &diagramId,
+                                        const QStringList &connectorIds,
+                                        const QString &routing);
   Q_INVOKABLE void insertConnectorBendPoint(const QString &diagramId,
                                             const QString &connectorId,
                                             int index, qreal x, qreal y);

@@ -34,6 +34,8 @@ class DiagramCanvas : public QQuickItem {
                  canvasSelectionChanged)
   Q_PROPERTY(int selectedContainerCount READ selectedContainerCount NOTIFY
                  canvasSelectionChanged)
+  Q_PROPERTY(int selectedConnectorCount READ selectedConnectorCount NOTIFY
+                 canvasSelectionChanged)
   Q_PROPERTY(bool connectorSelected READ connectorSelected NOTIFY
                  canvasSelectionChanged)
   Q_PROPERTY(bool containerSelected READ containerSelected NOTIFY
@@ -138,6 +140,7 @@ public:
   int totalNodeCount() const;
   int selectedNodeCount() const;
   int selectedContainerCount() const;
+  int selectedConnectorCount() const;
   bool connectorSelected() const;
   bool containerSelected() const;
   bool bendPointSelected() const;
@@ -289,13 +292,7 @@ private:
     MoveAnnotation,
     CreateConnector
   };
-  enum class ResizeHandle {
-    None,
-    TopLeft,
-    TopRight,
-    BottomLeft,
-    BottomRight
-  };
+  enum class ResizeHandle { None, TopLeft, TopRight, BottomLeft, BottomRight };
   struct ConnectorEndpoints {
     QPointF source;
     QPointF target;
@@ -392,10 +389,11 @@ private:
   QString selectedCompartmentVisibility(bool attributes) const;
   void captureSelectedGeometry();
   void clearContainerSelection();
+  void normalizeActiveConnector();
   void selectOnlyContainer(const QString &containerId);
   void createElementAt(const QString &type, const QPointF &sceneCenter);
   void selectNode(const QString &nodeId, bool toggle);
-  void selectConnector(const QString &connectorId, bool preserveNodes);
+  void selectConnector(const QString &connectorId, bool toggle);
 
   ProjectController *m_project = nullptr;
   QString m_diagramId;
@@ -410,6 +408,10 @@ private:
   // selection still highlights containers but must not expose single-item
   // editing commands or redefine the Ctrl+A scope.
   QString m_selectedContainer;
+  // Connector membership is independent from the active connector. Precise
+  // endpoint, bend-point, and annotation editing remains active-only, while
+  // selection-wide operations such as routing use the complete set.
+  QSet<QString> m_selectedConnectors;
   QString m_selectedConnector;
   Interaction m_interaction = Interaction::None;
   QPointF m_pressView;
@@ -423,6 +425,7 @@ private:
   QStringList m_lassoBaseNodeOrder;
   QSet<QString> m_lassoBaseContainers;
   QString m_lassoBaseContainer;
+  QSet<QString> m_lassoBaseConnectors;
   QString m_lassoBaseConnector;
   int m_lassoBaseBendPoint = -1;
   Qt::KeyboardModifiers m_lassoModifiers = Qt::NoModifier;

@@ -20,6 +20,11 @@ struct PresentationGeometryChange {
   QRectF after;
 };
 
+struct ConnectorRoutingChange {
+  QString connectorId;
+  ConnectorRouting before;
+};
+
 class CreateElementCommand final : public ProjectCommand {
 public:
   CreateElementCommand(ProjectController *controller,
@@ -518,11 +523,9 @@ struct NodeCompartmentVisibilityChange {
 
 class SetNodeCompartmentVisibilityCommand final : public ProjectCommand {
 public:
-  SetNodeCompartmentVisibilityCommand(ProjectController *controller,
-                                      bool attributesCompartment,
-                                      QString diagramId,
-                                      QList<NodeCompartmentVisibilityChange>
-                                          changes);
+  SetNodeCompartmentVisibilityCommand(
+      ProjectController *controller, bool attributesCompartment,
+      QString diagramId, QList<NodeCompartmentVisibilityChange> changes);
 
 private:
   void execute(ProjectData &project) override;
@@ -598,20 +601,18 @@ private:
   ConnectorAnchor m_after;
 };
 
-class SetConnectorRoutingCommand final : public ProjectCommand {
+class SetConnectorsRoutingCommand final : public ProjectCommand {
 public:
-  SetConnectorRoutingCommand(ProjectController *controller, QString diagramId,
-                             QString connectorId, ConnectorRouting before,
-                             ConnectorRouting after);
+  SetConnectorsRoutingCommand(ProjectController *controller, QString diagramId,
+                              QList<ConnectorRoutingChange> changes,
+                              ConnectorRouting after, bool selectionWide);
 
 private:
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
-  void apply(ProjectData &project, ConnectorRouting routing);
 
   QString m_diagramId;
-  QString m_connectorId;
-  ConnectorRouting m_before;
+  QList<ConnectorRoutingChange> m_changes;
   ConnectorRouting m_after;
 };
 

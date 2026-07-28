@@ -121,6 +121,7 @@ private slots:
   void relationshipStylesUseUmlDecorations();
   void lassoSelectsAndMovesMultipleNodesAsOneCommand();
   void lassoModifiersAddAndToggleSelection();
+  void connectorMultiSelectionUsesRectangleFirstLassoAndBulkRouting();
   void lassoStartsOnEmptyContainerBody();
   void contextualSelectAllUsesContainerScope();
   void diagramFiltersHideInteractionAndSelection();
@@ -428,6 +429,81 @@ void DiagramCanvasTests::lassoModifiersAddAndToggleSelection() {
   QCOMPARE(canvas.selectedNodeCount(), 1);
 }
 
+void DiagramCanvasTests::
+    connectorMultiSelectionUsesRectangleFirstLassoAndBulkRouting() {
+  ProjectController controller;
+  populate(controller, 3);
+  useStandardInteractionGeometry(controller);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+  const QString firstConnectorId = controller.createRelationship(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("association"));
+  const QString secondConnectorId = controller.createRelationship(
+      diagramId, nodes.at(1).id, nodes.at(2).id, QStringLiteral("dependency"));
+  QVERIFY(!firstConnectorId.isEmpty());
+  QVERIFY(!secondConnectorId.isEmpty());
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+
+  // Each lasso lies entirely in the gap between node rectangles. Shift adds a
+  // connector and Ctrl toggles one out, matching node lasso modifiers.
+  canvas.drag({303.0, 125.0}, {327.0, 155.0});
+  QCOMPARE(canvas.selectedNodeCount(), 0);
+  QCOMPARE(canvas.selectedConnectorCount(), 1);
+  canvas.drag({553.0, 125.0}, {577.0, 155.0}, Qt::ShiftModifier);
+  QCOMPARE(canvas.selectedConnectorCount(), 2);
+  canvas.drag({303.0, 125.0}, {327.0, 155.0}, Qt::ControlModifier);
+  QCOMPARE(canvas.selectedConnectorCount(), 1);
+
+  // Ctrl-click can add the first connector back without discarding the second.
+  canvas.press({315.0, 140.0}, Qt::ControlModifier);
+  canvas.release({315.0, 140.0}, Qt::ControlModifier);
+  QCOMPARE(canvas.selectedConnectorCount(), 2);
+
+  // Preserve distinct previous values and verify that bulk routing occupies
+  // one compact undo step rather than one command per relationship.
+  controller.setConnectorRouting(diagramId, secondConnectorId,
+                                 QStringLiteral("orthogonal"));
+  QCOMPARE(canvas.selectedConnectorRouting(), QString{});
+  canvas.setSelectedConnectorRouting(QStringLiteral("straight"));
+  QCOMPARE(canvas.selectedConnectorRouting(), QStringLiteral("straight"));
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Use straight routing for connectors"));
+  controller.undo();
+  const auto *first =
+      findConnector(controller.data().diagrams.first(), firstConnectorId);
+  const auto *second =
+      findConnector(controller.data().diagrams.first(), secondConnectorId);
+  QVERIFY(first);
+  QVERIFY(second);
+  QVERIFY(first->routing == ConnectorRouting::Straight);
+  QVERIFY(second->routing == ConnectorRouting::Orthogonal);
+  const QString firstRelationshipId = first->relationshipId;
+  const QString secondRelationshipId = second->relationshipId;
+
+  // When the lasso intersects a visible rectangle, rectangle selection wins
+  // even though the first connector also crosses the selected area.
+  canvas.clearCanvasSelection();
+  canvas.drag({60.0, 60.0}, {315.0, 220.0});
+  QCOMPARE(canvas.selectedNodeCount(), 1);
+  QCOMPARE(canvas.selectedConnectorCount(), 0);
+
+  // Delete follows the visible connector selection and remains one undo step.
+  canvas.press({315.0, 140.0});
+  canvas.release({315.0, 140.0});
+  canvas.press({565.0, 140.0}, Qt::ControlModifier);
+  canvas.release({565.0, 140.0}, Qt::ControlModifier);
+  QCOMPARE(canvas.selectedConnectorCount(), 2);
+  canvas.key(Qt::Key_Delete);
+  QVERIFY(!findRelationship(controller.data(), firstRelationshipId));
+  QVERIFY(!findRelationship(controller.data(), secondRelationshipId));
+  QCOMPARE(controller.undoText(), QStringLiteral("Delete relationships"));
+  controller.undo();
+  QVERIFY(findRelationship(controller.data(), firstRelationshipId));
+  QVERIFY(findRelationship(controller.data(), secondRelationshipId));
+}
+
 void DiagramCanvasTests::lassoStartsOnEmptyContainerBody() {
   ProjectController controller;
   const QString diagramId = controller.data().diagrams.first().id;
@@ -517,8 +593,7 @@ void DiagramCanvasTests::contextualSelectAllUsesContainerScope() {
   QVERIFY(rootFrame != diagram.containers.cend());
   const QPointF viewPan(30.0, 30.0);
   const QPointF frameHeader =
-      rootFrame->geometry.topLeft() + QPointF(10.0, 10.0) +
-      viewPan;
+      rootFrame->geometry.topLeft() + QPointF(10.0, 10.0) + viewPan;
   canvas.press(frameHeader);
   canvas.release(frameHeader);
   QVERIFY(canvas.containerSelected());
@@ -533,11 +608,9 @@ void DiagramCanvasTests::contextualSelectAllUsesContainerScope() {
   QCOMPARE(canvas.selectedContainerCount(), 1);
 
   canvas.clearCanvasSelection();
-  const auto child =
-      std::find_if(diagram.nodes.cbegin(), diagram.nodes.cend(),
-                   [&](const NodePresentation &node) {
-                     return node.elementId == first;
-                   });
+  const auto child = std::find_if(
+      diagram.nodes.cbegin(), diagram.nodes.cend(),
+      [&](const NodePresentation &node) { return node.elementId == first; });
   QVERIFY(child != diagram.nodes.cend());
   canvas.press(child->geometry.center() + viewPan);
   canvas.release(child->geometry.center() + viewPan);
@@ -547,11 +620,9 @@ void DiagramCanvasTests::contextualSelectAllUsesContainerScope() {
   QCOMPARE(canvas.selectedContainerCount(), 1);
 
   canvas.clearCanvasSelection();
-  const auto nestedChild =
-      std::find_if(diagram.nodes.cbegin(), diagram.nodes.cend(),
-                   [&](const NodePresentation &node) {
-                     return node.elementId == second;
-                   });
+  const auto nestedChild = std::find_if(
+      diagram.nodes.cbegin(), diagram.nodes.cend(),
+      [&](const NodePresentation &node) { return node.elementId == second; });
   QVERIFY(nestedChild != diagram.nodes.cend());
   canvas.press(nestedChild->geometry.center() + viewPan);
   canvas.release(nestedChild->geometry.center() + viewPan);
@@ -566,11 +637,10 @@ void DiagramCanvasTests::contextualSelectAllUsesContainerScope() {
   canvas.key(Qt::Key_Delete);
   const Diagram &afterRemoval = controller.data().diagrams.first();
   QVERIFY(!findContainer(afterRemoval, rootContainerId));
-  QVERIFY(std::none_of(
-      afterRemoval.nodes.cbegin(), afterRemoval.nodes.cend(),
-      [&](const NodePresentation &node) {
-        return node.elementId == diagramRoot;
-      }));
+  QVERIFY(std::none_of(afterRemoval.nodes.cbegin(), afterRemoval.nodes.cend(),
+                       [&](const NodePresentation &node) {
+                         return node.elementId == diagramRoot;
+                       }));
   controller.undo();
   QCOMPARE(controller.data().diagrams.first(), beforeRemoval);
 }
@@ -1253,8 +1323,10 @@ void DiagramCanvasTests::multiSelectionToolboxTracksArrangementCommands() {
   QCOMPARE(canvas.selectedNodeCount(), 2);
   canvas.arrangeSelection(QStringLiteral("alignLeft"));
   const auto &alignedToPromoted = controller.data().diagrams.first().nodes;
-  QCOMPARE(alignedToPromoted.at(0).geometry.left(), nodes.at(0).geometry.left());
-  QCOMPARE(alignedToPromoted.at(1).geometry.left(), nodes.at(0).geometry.left());
+  QCOMPARE(alignedToPromoted.at(0).geometry.left(),
+           nodes.at(0).geometry.left());
+  QCOMPARE(alignedToPromoted.at(1).geometry.left(),
+           nodes.at(0).geometry.left());
 
   canvas.clearCanvasSelection();
   QVERIFY(!canvas.arrangementToolboxCandidate());
@@ -1268,8 +1340,8 @@ void DiagramCanvasTests::connectorToolboxEditsRoutingAndAnnotations() {
   useStandardInteractionGeometry(controller);
   const QString diagramId = controller.data().diagrams.first().id;
   const auto nodes = controller.data().diagrams.first().nodes;
-  controller.updateNodeGeometry(
-      diagramId, nodes.at(1).id, 500.0, 50.0, 220.0, 120.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(1).id, 500.0, 50.0, 220.0,
+                                120.0);
   const QString connectorId = controller.createRelationship(
       diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("association"));
   QVERIFY(!connectorId.isEmpty());
@@ -1446,18 +1518,17 @@ void DiagramCanvasTests::inPlaceNameEditorUsesRenderedName() {
   controller.addSelectedToDiagram(diagramId);
 
   const Diagram &diagram = controller.data().diagrams.first();
-  const auto node =
-      std::find_if(diagram.nodes.cbegin(), diagram.nodes.cend(),
-                   [&](const NodePresentation &candidate) {
-                     return candidate.elementId == typeId;
-                   });
+  const auto node = std::find_if(diagram.nodes.cbegin(), diagram.nodes.cend(),
+                                 [&](const NodePresentation &candidate) {
+                                   return candidate.elementId == typeId;
+                                 });
   QVERIFY(node != diagram.nodes.cend());
 
   TestDiagramCanvas canvas;
   configureCanvas(canvas, controller);
-  const QPointF header =
-      node->geometry.topLeft() + QPointF(node->geometry.width() / 2.0, 12.0) +
-      QPointF(30.0, 30.0);
+  const QPointF header = node->geometry.topLeft() +
+                         QPointF(node->geometry.width() / 2.0, 12.0) +
+                         QPointF(30.0, 30.0);
   canvas.press(header);
   canvas.release(header);
 
@@ -1651,11 +1722,11 @@ void DiagramCanvasTests::allCornerResizeHandlesAreInteractive() {
   TestDiagramCanvas canvas;
   configureCanvas(canvas, controller);
 
-  const QRectF original = controller.data().diagrams.first().nodes.first().geometry;
+  const QRectF original =
+      controller.data().diagrams.first().nodes.first().geometry;
   const QPointF viewPan(30.0, 30.0);
   const auto resizeAndUndo = [&](const QPointF &sceneStart,
-                                 const QPointF &delta,
-                                 const QRectF &expected) {
+                                 const QPointF &delta, const QRectF &expected) {
     canvas.drag(sceneStart + viewPan, sceneStart + viewPan + delta);
     QCOMPARE(controller.data().diagrams.first().nodes.first().geometry,
              expected);

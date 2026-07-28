@@ -292,6 +292,13 @@ history memory grow with total project size rather than the size of each edit.
   toolbox follows the hovered route point, then latches there while the user
   crosses its hover bridge; long relationships therefore do not require a trip
   back to their midpoint.
+- Connectors support Ctrl-click and lasso multi-selection. Rectangle
+  presentations retain lasso priority: routed lines are considered only when
+  the lasso intersects no visible node rectangle. Shift adds and Ctrl toggles
+  either kind of selection. Straight/orthogonal routing applies to the complete
+  connector selection as one field-sized undo command that records only the
+  affected connector modes; precise endpoint, bend-point, and annotation
+  editing remains scoped to one active connector.
 - The selected-node/container expansion is implemented. Hovering a selected
   node body or selected container header exposes direct name editing, fit to
   content, a lightweight named-style menu with access to style management, and

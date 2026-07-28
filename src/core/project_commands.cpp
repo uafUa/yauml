@@ -133,9 +133,9 @@ void applyMembershipChanges(Diagram &diagram,
   }
 }
 
-void applyPortSnapPointChanges(
-    Diagram &diagram, const QList<NodePortSnapPointChange> &changes,
-    bool forward) {
+void applyPortSnapPointChanges(Diagram &diagram,
+                               const QList<NodePortSnapPointChange> &changes,
+                               bool forward) {
   for (const auto &change : changes) {
     if (auto *node = findNode(diagram, change.nodeId)) {
       node->horizontalPortSnapPoints =
@@ -563,8 +563,7 @@ AddElementsToDiagramCommand::AddElementsToDiagramCommand(
                          ? QStringLiteral("Add element to diagram")
                          : QStringLiteral("Add %1 elements to diagram")
                                .arg(presentations.size())),
-      m_diagramId(std::move(diagramId)),
-      m_portChanges(std::move(portChanges)) {
+      m_diagramId(std::move(diagramId)), m_portChanges(std::move(portChanges)) {
   const auto *diagram = findDiagram(project, m_diagramId);
   Q_ASSERT(diagram);
   if (!diagram)
@@ -1103,11 +1102,10 @@ void SetDiagramFilterCommand::apply(ProjectData &project,
 SetNodeCompartmentVisibilityCommand::SetNodeCompartmentVisibilityCommand(
     ProjectController *controller, bool attributesCompartment,
     QString diagramId, QList<NodeCompartmentVisibilityChange> changes)
-    : ProjectCommand(controller,
-                     QStringLiteral("Set selected %1 visibility")
-                         .arg(attributesCompartment
-                                  ? QStringLiteral("attributes")
-                                  : QStringLiteral("operations"))),
+    : ProjectCommand(controller, QStringLiteral("Set selected %1 visibility")
+                                     .arg(attributesCompartment
+                                              ? QStringLiteral("attributes")
+                                              : QStringLiteral("operations"))),
       m_diagramId(std::move(diagramId)),
       m_attributesCompartment(attributesCompartment),
       m_changes(std::move(changes)) {}
@@ -1127,8 +1125,7 @@ void SetNodeCompartmentVisibilityCommand::apply(ProjectData &project,
       auto *node = findNode(*diagram, change.nodeId);
       if (!node)
         continue;
-      const std::optional<bool> value =
-          forward ? change.after : change.before;
+      const std::optional<bool> value = forward ? change.after : change.before;
       if (m_attributesCompartment)
         node->showAttributes = value;
       else
@@ -1240,28 +1237,32 @@ void MoveConnectorAnchorCommand::apply(ProjectData &project,
   }
 }
 
-SetConnectorRoutingCommand::SetConnectorRoutingCommand(
-    ProjectController *controller, QString diagramId, QString connectorId,
-    ConnectorRouting before, ConnectorRouting after)
-    : ProjectCommand(
-          controller,
-          QStringLiteral("Use %1 connector routing").arg(toString(after))),
-      m_diagramId(std::move(diagramId)), m_connectorId(std::move(connectorId)),
-      m_before(before), m_after(after) {}
+SetConnectorsRoutingCommand::SetConnectorsRoutingCommand(
+    ProjectController *controller, QString diagramId,
+    QList<ConnectorRoutingChange> changes, ConnectorRouting after,
+    bool selectionWide)
+    : ProjectCommand(controller,
+                     selectionWide
+                         ? QStringLiteral("Use %1 routing for connectors")
+                               .arg(toString(after))
+                         : QStringLiteral("Use %1 connector routing")
+                               .arg(toString(after))),
+      m_diagramId(std::move(diagramId)), m_changes(std::move(changes)),
+      m_after(after) {}
 
-void SetConnectorRoutingCommand::execute(ProjectData &project) {
-  apply(project, m_after);
-}
-
-void SetConnectorRoutingCommand::revert(ProjectData &project) {
-  apply(project, m_before);
-}
-
-void SetConnectorRoutingCommand::apply(ProjectData &project,
-                                       ConnectorRouting routing) {
+void SetConnectorsRoutingCommand::execute(ProjectData &project) {
   if (auto *diagram = findDiagram(project, m_diagramId)) {
-    if (auto *connector = findConnector(*diagram, m_connectorId))
-      connector->routing = routing;
+    for (const auto &change : m_changes)
+      if (auto *connector = findConnector(*diagram, change.connectorId))
+        connector->routing = m_after;
+  }
+}
+
+void SetConnectorsRoutingCommand::revert(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    for (const auto &change : m_changes)
+      if (auto *connector = findConnector(*diagram, change.connectorId))
+        connector->routing = change.before;
   }
 }
 
