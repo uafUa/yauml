@@ -36,6 +36,10 @@ class CppImportController final : public QObject {
   Q_PROPERTY(QString compilationDatabasePath READ compilationDatabasePath NOTIFY
                  previewChanged)
   Q_PROPERTY(QVariantList previewItems READ previewItems NOTIFY previewChanged)
+  Q_PROPERTY(QString progressText READ progressText NOTIFY progressChanged)
+  Q_PROPERTY(QString progressDetail READ progressDetail NOTIFY progressChanged)
+  Q_PROPERTY(int progressValue READ progressValue NOTIFY progressChanged)
+  Q_PROPERTY(int progressMaximum READ progressMaximum NOTIFY progressChanged)
 
 public:
   explicit CppImportController(ProjectController *project,
@@ -54,6 +58,10 @@ public:
   QString summary() const;
   QString compilationDatabasePath() const;
   QVariantList previewItems() const;
+  QString progressText() const;
+  QString progressDetail() const;
+  int progressValue() const;
+  int progressMaximum() const;
 
   Q_INVOKABLE void preview(const QUrl &sourceOrBuildDirectory);
   Q_INVOKABLE void previewSources(const QVariantList &sourceDirectories);
@@ -64,6 +72,7 @@ public:
 signals:
   void busyChanged();
   void previewChanged();
+  void progressChanged();
   void synchronizationStateChanged();
   void attentionRequired();
   void importApplied(int count);
@@ -73,6 +82,8 @@ private:
   void finishPreview();
   void publishDiagnostics(const QList<Diagnostic> &diagnostics);
   void rebuildViewState();
+  void updateProgress(const CppImportProgress &progress);
+  void resetProgress();
 
   ProjectController *m_project;
   ApplicationSettings *m_settings;
@@ -80,7 +91,12 @@ private:
   CppImportPreview m_preview;
   QVariantList m_previewItems;
   QString m_summary;
+  QString m_progressText;
+  QString m_progressDetail;
   QStringList m_requestedSourcePaths;
+  quint64 m_previewGeneration = 0;
+  int m_progressValue = 0;
+  int m_progressMaximum = 0;
   bool m_busy = false;
 };
 

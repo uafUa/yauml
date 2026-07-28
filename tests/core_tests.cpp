@@ -1609,14 +1609,45 @@ void CoreTests::cppImportScansSourceFolderWithoutBuildMetadata() {
   writeTestFile(root.filePath(QStringLiteral("build/GeneratedNoise.h")),
                 QByteArray("class GeneratedNoise {};\n"));
 
+  QList<CppImportProgress> progressUpdates;
   const CppImportPreview preview =
-      CppImportService::preview(sourceDirectory.path(), {});
+      CppImportService::preview(sourceDirectory.path(), {}, {}, {},
+                                [&](const CppImportProgress &progress) {
+                                  progressUpdates.append(progress);
+                                });
   QVERIFY(preview.ok);
   QVERIFY(!preview.usedCompilationDatabase);
   QVERIFY(preview.compilationDatabasePath.isEmpty());
   QCOMPARE(preview.symbols.size(), 3);
   QCOMPARE(preview.relationships.size(), 1);
   QCOMPARE(preview.applicableCount(), 6);
+  QVERIFY(!progressUpdates.isEmpty());
+  QCOMPARE(progressUpdates.first().stage, CppImportProgressStage::Preparing);
+  QCOMPARE(progressUpdates.last().stage,
+           CppImportProgressStage::PlanningChanges);
+  QVERIFY(std::any_of(progressUpdates.cbegin(), progressUpdates.cend(),
+                      [](const CppImportProgress &progress) {
+                        return progress.stage ==
+                               CppImportProgressStage::DiscoveringSources;
+                      }));
+  const auto completedParsing = std::find_if(
+      progressUpdates.crbegin(), progressUpdates.crend(),
+      [](const CppImportProgress &progress) {
+        return progress.stage == CppImportProgressStage::ParsingSources &&
+               progress.total > 0 && progress.completed == progress.total;
+      });
+  QVERIFY(completedParsing != progressUpdates.crend());
+  QVERIFY(std::any_of(progressUpdates.cbegin(), progressUpdates.cend(),
+                      [](const CppImportProgress &progress) {
+                        return progress.stage ==
+                                   CppImportProgressStage::ParsingSources &&
+                               !progress.detail.isEmpty();
+                      }));
+  QVERIFY(std::any_of(progressUpdates.cbegin(), progressUpdates.cend(),
+                      [](const CppImportProgress &progress) {
+                        return progress.stage ==
+                               CppImportProgressStage::AnalyzingModel;
+                      }));
   const auto hasSymbol = [&](const QString &name) {
     return std::any_of(preview.symbols.cbegin(), preview.symbols.cend(),
                        [&](const CppSourceSymbol &symbol) {

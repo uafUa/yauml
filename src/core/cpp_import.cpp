@@ -33,6 +33,14 @@ Diagnostic importDiagnostic(DiagnosticSeverity severity, const QString &message,
   return {severity, QStringLiteral("cpp-import"), message, elementId};
 }
 
+void reportProgress(const CppImportProgressCallback &callback,
+                    CppImportProgressStage stage, const QString &message,
+                    const QString &detail = {}, int completed = 0,
+                    int total = 0) {
+  if (callback)
+    callback({stage, message, detail, completed, total});
+}
+
 QString normalizedPath(const QString &path) {
   QFileInfo info(path);
   const QString canonical = info.canonicalFilePath();
@@ -1625,9 +1633,12 @@ void appendTranslationUnitDiagnostics(CXTranslationUnit translationUnit,
 }
 
 CppImportPreview discover(const QStringList &searchPaths,
-                          const CppImportOptions &options) {
+                          const CppImportOptions &options,
+                          const CppImportProgressCallback &progress) {
   CppImportPreview preview;
   preview.optionsUsed = options;
+  reportProgress(progress, CppImportProgressStage::Preparing,
+                 QStringLiteral("Preparing C++ synchronization"));
   const QRegularExpression interfacePattern(options.interfacePattern);
   if (options.interfacePattern.isEmpty() || !interfacePattern.isValid()) {
     preview.discoveryDiagnostics.append(importDiagnostic(
@@ -1650,6 +1661,13 @@ CppImportPreview discover(const QStringList &searchPaths,
     return preview;
   }
   preview.sourceRoot = commonSourceRoot(preview.sourceRoots);
+  reportProgress(
+      progress, CppImportProgressStage::DiscoveringSources,
+      QStringLiteral("Discovering C++ sources"),
+      QStringLiteral("Inspecting build metadata for %1 source director%2")
+          .arg(preview.sourceRoots.size())
+          .arg(preview.sourceRoots.size() == 1 ? QStringLiteral("y")
+                                               : QStringLiteral("ies")));
 
   QList<CompileCommand> commands;
   QStringList sourceFiles;
@@ -1690,6 +1708,10 @@ CppImportPreview discover(const QStringList &searchPaths,
   }
 
   if (!rootsWithoutDatabase.isEmpty()) {
+    reportProgress(
+        progress, CppImportProgressStage::DiscoveringSources,
+        QStringLiteral("Discovering C++ sources"),
+        QStringLiteral("Scanning selected folders for C++ source files"));
     QList<CompileCommand> scannedCommands;
     QStringList scannedFiles;
     QString scannedRoot;
@@ -1717,6 +1739,9 @@ CppImportPreview discover(const QStringList &searchPaths,
     return preview;
   }
   sourceFiles.removeDuplicates();
+  reportProgress(progress, CppImportProgressStage::ParsingSources,
+                 QStringLiteral("Parsing C++ sources"), {}, 0,
+                 static_cast<int>(commands.size()));
 
   QHash<QString, CppSourceSymbol> symbols;
   QList<DiscoveredTypeUse> typeUses;
@@ -1725,7 +1750,13 @@ CppImportPreview discover(const QStringList &searchPaths,
   int suppressedDiagnosticCount = 0;
   QSet<QString> seenDiagnosticMessages;
   QSet<QString> declarationFiles;
-  for (const auto &command : commands) {
+  for (qsizetype commandIndex = 0; commandIndex < commands.size();
+       ++commandIndex) {
+    const auto &command = commands.at(commandIndex);
+    reportProgress(progress, CppImportProgressStage::ParsingSources,
+                   QStringLiteral("Parsing C++ sources"), command.filePath,
+                   static_cast<int>(commandIndex),
+                   static_cast<int>(commands.size()));
     // Source translation units normally expose all declarations in the headers
     // they include. Avoid reparsing those headers as standalone units; headers
     // not reached from any source file are still parsed later in the list.
@@ -1770,6 +1801,10 @@ CppImportPreview discover(const QStringList &searchPaths,
                         visitAst, &visitor);
     clang_disposeTranslationUnit(translationUnit);
   }
+  reportProgress(progress, CppImportProgressStage::ParsingSources,
+                 QStringLiteral("Parsing C++ sources"), {},
+                 static_cast<int>(commands.size()),
+                 static_cast<int>(commands.size()));
   clang_disposeIndex(index);
 
   if (suppressedDiagnosticCount > 0) {
@@ -1792,6 +1827,10 @@ CppImportPreview discover(const QStringList &searchPaths,
   }
 
   preview.symbols = symbols.values();
+  reportProgress(progress, CppImportProgressStage::AnalyzingModel,
+                 QStringLiteral("Analyzing imported model"),
+                 QStringLiteral("%1 type declaration(s) discovered")
+                     .arg(preview.symbols.size()));
   std::sort(preview.symbols.begin(), preview.symbols.end(),
             [](const CppSourceSymbol &left, const CppSourceSymbol &right) {
               const int byName = left.qualifiedName.compare(
@@ -2288,24 +2327,29 @@ CppImportPreview
 CppImportService::preview(const QString &searchPath,
                           const QList<ModelElement> &existingElements,
                           const QList<Relationship> &existingRelationships,
-                          const CppImportOptions &options) {
+                          const CppImportOptions &options,
+                          const CppImportProgressCallback &progress) {
   return preview(QStringList{searchPath}, existingElements,
-                 existingRelationships, options);
+                 existingRelationships, options, progress);
 }
 
 CppImportPreview
 CppImportService::preview(const QStringList &searchPaths,
                           const QList<ModelElement> &existingElements,
                           const QList<Relationship> &existingRelationships,
-                          const CppImportOptions &options) {
+                          const CppImportOptions &options,
+                          const CppImportProgressCallback &progress) {
 #if UUML_HAS_LIBCLANG
-  return planImport(discover(searchPaths, options), existingElements,
-                    existingRelationships);
+  CppImportPreview discovery = discover(searchPaths, options, progress);
+  reportProgress(progress, CppImportProgressStage::PlanningChanges,
+                 QStringLiteral("Planning synchronization changes"));
+  return planImport(discovery, existingElements, existingRelationships);
 #else
   Q_UNUSED(searchPaths)
   Q_UNUSED(existingElements)
   Q_UNUSED(existingRelationships)
   Q_UNUSED(options)
+  Q_UNUSED(progress)
   CppImportPreview preview;
   preview.discoveryDiagnostics.append(importDiagnostic(
       DiagnosticSeverity::Error,

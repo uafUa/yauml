@@ -424,6 +424,10 @@ history memory grow with total project size rather than the size of each edit.
   reconfigures it through preview, and headless `cpp-preview`/`cpp-import` may
   omit source arguments once a project has roots configured. Older manifests
   containing the singular `sourceRoot` key load into the new list form.
+- Long-running GUI discovery now exposes live phase, current-file, and
+  determinate translation-unit progress through the shared import service. The
+  headless workflow uses the same service but may omit the optional progress
+  observer; import planning and conflict semantics remain identical.
 - Add explicit conflict-resolution choices and rename/move matching in
   subsequent slices.
 

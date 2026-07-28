@@ -2315,9 +2315,27 @@ ApplicationWindow {
                 }
                 Label {
                     Layout.fillWidth: true
-                    text: cppImportController.summary
+                    text: cppImportController.busy
+                          ? cppImportController.progressText
+                          : cppImportController.summary
                     wrapMode: Text.Wrap
                 }
+            }
+            ProgressBar {
+                Layout.fillWidth: true
+                visible: cppImportController.busy
+                         && cppImportController.progressMaximum > 0
+                from: 0
+                to: Math.max(1, cppImportController.progressMaximum)
+                value: cppImportController.progressValue
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: cppImportController.busy
+                         && cppImportController.progressDetail.length > 0
+                text: cppImportController.progressDetail
+                color: uiTheme.mutedText
+                elide: Text.ElideMiddle
             }
             Label {
                 Layout.fillWidth: true

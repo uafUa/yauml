@@ -139,8 +139,9 @@ when conflicts need attention; user-edited model content is never overwritten.
   imported. That is the complete normal workflow: CMake files, a configured
   build, and a compilation database are optional. The selected folder list is
   stored in the project and reused by **Synchronize C++**. Discovery runs
-  outside the UI thread and presents every create, update, conflict, unchanged,
-  user-owned, or missing-source result before import.
+  outside the UI thread. The preview reports its current phase, the source file
+  being parsed, and determinate file progress before presenting every create,
+  update, conflict, unchanged, user-owned, or missing-source result.
 - Folder-only discovery parses implementation files first and then standalone
   headers not already reached through them. Build outputs, version-control
   metadata, vendored dependencies, and directory symlink loops are skipped.

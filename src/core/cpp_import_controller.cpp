@@ -4,6 +4,7 @@
 #include "core/project_controller.h"
 
 #include <QFileInfo>
+#include <QPointer>
 #include <QtConcurrentRun>
 #include <algorithm>
 
@@ -71,6 +72,14 @@ QVariantList CppImportController::previewItems() const {
   return m_previewItems;
 }
 
+QString CppImportController::progressText() const { return m_progressText; }
+
+QString CppImportController::progressDetail() const { return m_progressDetail; }
+
+int CppImportController::progressValue() const { return m_progressValue; }
+
+int CppImportController::progressMaximum() const { return m_progressMaximum; }
+
 void CppImportController::preview(const QUrl &sourceOrBuildDirectory) {
   const QString path = sourceOrBuildDirectory.isLocalFile()
                            ? sourceOrBuildDirectory.toLocalFile()
@@ -108,9 +117,12 @@ void CppImportController::previewPaths(const QStringList &sourceDirectories) {
   m_preview = {};
   m_previewItems.clear();
   m_summary = QStringLiteral("Discovering C++ declarations…");
+  resetProgress();
+  m_progressText = QStringLiteral("Preparing C++ synchronization");
   m_busy = true;
   emit busyChanged();
   emit synchronizationStateChanged();
+  emit progressChanged();
   emit previewChanged();
 
   // Copy only semantic elements and relationships, not diagrams or other
@@ -122,10 +134,27 @@ void CppImportController::previewPaths(const QStringList &sourceDirectories) {
   options.interfacePattern = m_settings->cppInterfacePattern();
   options.memberTypeRules = m_settings->cppMemberTypeRuleValues();
   configureCppImportStereotypes(options, m_project->data());
-  m_watcher.setFuture(QtConcurrent::run([paths, elements, relationships,
-                                         options] {
-    return CppImportService::preview(paths, elements, relationships, options);
-  }));
+  const quint64 generation = ++m_previewGeneration;
+  const QPointer<CppImportController> controller(this);
+  const CppImportProgressCallback progress =
+      [controller, generation](const CppImportProgress &update) {
+        if (!controller)
+          return;
+        QMetaObject::invokeMethod(
+            controller,
+            [controller, generation, update] {
+              if (!controller || !controller->m_busy ||
+                  controller->m_previewGeneration != generation)
+                return;
+              controller->updateProgress(update);
+            },
+            Qt::QueuedConnection);
+      };
+  m_watcher.setFuture(
+      QtConcurrent::run([paths, elements, relationships, options, progress] {
+        return CppImportService::preview(paths, elements, relationships,
+                                         options, progress);
+      }));
 }
 
 void CppImportController::synchronize() {
@@ -184,6 +213,8 @@ void CppImportController::clearPreview() {
   m_previewItems.clear();
   m_summary.clear();
   m_requestedSourcePaths.clear();
+  resetProgress();
+  emit progressChanged();
   emit previewChanged();
 }
 
@@ -211,6 +242,26 @@ void CppImportController::publishDiagnostics(
     return;
   for (const auto &diagnostic : diagnostics)
     m_project->diagnostics()->add(diagnostic);
+}
+
+void CppImportController::updateProgress(const CppImportProgress &progress) {
+  if (m_progressText == progress.message &&
+      m_progressDetail == progress.detail &&
+      m_progressValue == progress.completed &&
+      m_progressMaximum == progress.total)
+    return;
+  m_progressText = progress.message;
+  m_progressDetail = progress.detail;
+  m_progressValue = progress.completed;
+  m_progressMaximum = progress.total;
+  emit progressChanged();
+}
+
+void CppImportController::resetProgress() {
+  m_progressText.clear();
+  m_progressDetail.clear();
+  m_progressValue = 0;
+  m_progressMaximum = 0;
 }
 
 void CppImportController::rebuildViewState() {

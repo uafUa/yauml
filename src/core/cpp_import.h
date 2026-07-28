@@ -5,6 +5,7 @@
 
 #include <QList>
 #include <QString>
+#include <functional>
 
 namespace uuml {
 
@@ -18,6 +19,30 @@ enum class CppImportAction {
 };
 
 QString toString(CppImportAction action);
+
+enum class CppImportProgressStage {
+  Preparing,
+  DiscoveringSources,
+  ParsingSources,
+  AnalyzingModel,
+  PlanningChanges
+};
+
+// Progress is intentionally independent from the GUI. The synchronous
+// headless importer may ignore it, while asynchronous callers can marshal
+// updates onto their UI thread. A zero total denotes an indeterminate phase.
+struct CppImportProgress {
+  CppImportProgressStage stage = CppImportProgressStage::Preparing;
+  QString message;
+  QString detail;
+  int completed = 0;
+  int total = 0;
+
+  bool operator==(const CppImportProgress &) const = default;
+};
+
+using CppImportProgressCallback =
+    std::function<void(const CppImportProgress &)>;
 
 // Describes how a C++ member wrapper maps to UML. The template argument is
 // one-based because that is how users refer to arguments in documentation
@@ -157,12 +182,14 @@ public:
   preview(const QString &searchPath,
           const QList<ModelElement> &existingElements,
           const QList<Relationship> &existingRelationships = {},
-          const CppImportOptions &options = {});
+          const CppImportOptions &options = {},
+          const CppImportProgressCallback &progress = {});
   static CppImportPreview
   preview(const QStringList &searchPaths,
           const QList<ModelElement> &existingElements,
           const QList<Relationship> &existingRelationships = {},
-          const CppImportOptions &options = {});
+          const CppImportOptions &options = {},
+          const CppImportProgressCallback &progress = {});
   static CppImportPreview
   replan(const CppImportPreview &discovery,
          const QList<ModelElement> &existingElements,
