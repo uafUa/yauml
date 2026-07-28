@@ -311,6 +311,28 @@ if(BUILD_TESTING)
         )
     endif()
     add_test(NAME uuml_canvas_tests COMMAND uuml_canvas_tests)
+    qt_add_executable(uuml_render_tests
+        tests/render_regression_tests.cpp
+    )
+    set_target_properties(uuml_render_tests PROPERTIES WIN32_EXECUTABLE OFF)
+    target_compile_definitions(uuml_render_tests PRIVATE
+        UUML_RENDER_BASELINE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/tests/fixtures/rendering"
+        UUML_RENDER_ARTIFACT_DIR="${CMAKE_CURRENT_BINARY_DIR}/visual-regression-artifacts"
+    )
+    target_link_libraries(uuml_render_tests PRIVATE
+        uuml_canvas
+        Qt6::Test
+    )
+    if(WIN32)
+        add_custom_command(TARGET uuml_render_tests POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "$<TARGET_FILE:Qt6::Test>"
+                "$<TARGET_FILE_DIR:uuml_render_tests>"
+            COMMENT "Deploying the Qt render-test runtime"
+            VERBATIM
+        )
+    endif()
+    add_test(NAME uuml_render_regression COMMAND uuml_render_tests)
     add_test(NAME uuml_cli_validate
         COMMAND uuml validate ${CMAKE_CURRENT_SOURCE_DIR}/examples/sample.uuml)
     add_test(NAME uuml_performance_example_validate
@@ -331,6 +353,7 @@ if(BUILD_TESTING)
         set(UUML_RUNTIME_TESTS
             uuml_core_tests
             uuml_canvas_tests
+            uuml_render_regression
             uuml_cli_validate
             uuml_performance_example_validate
             uuml_ui_smoke)
@@ -345,15 +368,21 @@ if(BUILD_TESTING)
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
         set_tests_properties(uuml_canvas_tests uuml_ui_smoke PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_QUICK_BACKEND=software")
+        set_tests_properties(uuml_render_regression PROPERTIES
+            ENVIRONMENT
+                "QT_QPA_PLATFORM=windows;QSG_RHI_PREFER_SOFTWARE_RENDERER=1;QT_SCALE_FACTOR=1")
     else()
         set_tests_properties(uuml_canvas_tests uuml_ui_smoke PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
+        set_tests_properties(uuml_render_regression PROPERTIES
+            ENVIRONMENT
+                "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software;QT_SCALE_FACTOR=1")
     endif()
 endif()
 
 if(WIN32 AND UUML_LIBCLANG_RUNTIME)
     foreach(UUML_CLANG_RUNTIME_TARGET
-            uuml uuml_core_tests uuml_canvas_tests)
+            uuml uuml_core_tests uuml_canvas_tests uuml_render_tests)
         if(TARGET ${UUML_CLANG_RUNTIME_TARGET})
             add_custom_command(TARGET ${UUML_CLANG_RUNTIME_TARGET} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different

@@ -73,6 +73,14 @@ portable Windows ZIP and a conventional Windows installer in the run's
 **Artifacts** section. Pushing a version tag such as `v0.1.0` publishes both
 tested distributions and their SHA-256 checksums as a GitHub Release.
 
+The suite includes a production-renderer image regression test with a
+canonical diagram covering grid, package and type shapes, text, stereotypes,
+relationship annotations, routing, and UML decorations. A mismatch preserves
+expected, actual, and amplified difference PNGs under
+`build-release/visual-regression-artifacts`; GitHub uploads the same diagnostics
+on a failed run. Baselines are deliberately platform-specific so another
+operating system cannot silently replace the reviewed Windows reference.
+
 The package includes the Qt/QML runtime and `libclang.dll`, and is smoke-tested
 after deployment. The installer supports replacing an existing uuml
 installation in place and provides clean removal through Windows **Installed
@@ -151,7 +159,9 @@ accept replacement with `--overwrite-external-changes`.
   **Overwrite**. Reload and overwrite state their data-loss direction.
 - Multi-file saves retain the existing recovery snapshot and pending marker.
   Opening after an interrupted save restores the last complete project rather
-  than mixing files from different revisions.
+  than mixing files from different revisions. Recovery validates the complete
+  backup set before replacing anything, so a missing or malformed backup leaves
+  every live project file untouched and reports a recovery error.
 
 ## C++ import
 

@@ -145,6 +145,7 @@ private slots:
   void recentProjectHistoryPersists();
   void themePreferencesPersistAndReset();
   void interruptedSaveRecovery();
+  void invalidSaveRecoveryIsNonDestructive();
   void fullyCoveredTextHasNoVisibleFragments();
   void partialTextCoveragePreservesOnlyExposedArea();
   void triangleGeometryIsSplitOnPrimitiveBoundaries();
@@ -4689,6 +4690,91 @@ void CoreTests::interruptedSaveRecovery() {
   QVERIFY(outcome.ok);
   QVERIFY(outcome.recovered);
   QCOMPARE(outcome.project.name, QStringLiteral("Recover me"));
+  QVERIFY(!QFileInfo::exists(marker.fileName()));
+  QVERIFY(!QDir(recovery).exists());
+  QVERIFY(
+      std::any_of(outcome.diagnostics.cbegin(), outcome.diagnostics.cend(),
+                  [](const Diagnostic &diagnostic) {
+                    return diagnostic.category == QStringLiteral("recovery") &&
+                           diagnostic.severity == DiagnosticSeverity::Warning;
+                  }));
+}
+
+void CoreTests::invalidSaveRecoveryIsNonDestructive() {
+  const auto exerciseInvalidRecovery = [](bool removeBackup,
+                                          const QString &caseName) {
+    QTemporaryDir temporary;
+    if (!temporary.isValid())
+      return false;
+    const ProjectData project =
+        createStarterProject(QStringLiteral("Recovery source"));
+    if (!ProjectSerializer::save(temporary.path(), project).ok)
+      return false;
+
+    const QDir root(temporary.path());
+    const QString recovery = root.filePath(QStringLiteral(".uuml-recovery"));
+    if (!QDir().mkpath(recovery))
+      return false;
+    struct RecoveryPair {
+      QString target;
+      QString backup;
+    };
+    const QList<RecoveryPair> files = {
+        {root.filePath(QStringLiteral("manifest.json5")),
+         QDir(recovery).filePath(QStringLiteral("manifest.json5"))},
+        {root.filePath(QStringLiteral("model/model.json5")),
+         QDir(recovery).filePath(QStringLiteral("model.json5"))},
+        {root.filePath(QStringLiteral("diagrams/diagrams.json5")),
+         QDir(recovery).filePath(QStringLiteral("diagrams.json5"))}};
+    for (const auto &file : files) {
+      if (!QFile::copy(file.target, file.backup))
+        return false;
+    }
+
+    if (removeBackup) {
+      if (!QFile::remove(files.at(1).backup))
+        return false;
+    } else {
+      writeTestFile(files.at(1).backup,
+                    QByteArrayLiteral("{ malformed recovery"));
+    }
+    writeTestFile(QDir(recovery).filePath(QStringLiteral("pending")),
+                  QByteArrayLiteral("pending\n"));
+
+    QMap<QString, QByteArray> liveContents;
+    for (qsizetype index = 0; index < files.size(); ++index) {
+      const QByteArray sentinel =
+          QStringLiteral("%1 live file %2").arg(caseName).arg(index).toUtf8();
+      writeTestFile(files.at(index).target, sentinel);
+      liveContents.insert(files.at(index).target, sentinel);
+    }
+
+    const auto outcome = ProjectSerializer::load(temporary.path());
+    if (outcome.ok || outcome.recovered)
+      return false;
+    const bool hasRecoveryError = std::any_of(
+        outcome.diagnostics.cbegin(), outcome.diagnostics.cend(),
+        [](const Diagnostic &diagnostic) {
+          return diagnostic.category == QStringLiteral("recovery") &&
+                 diagnostic.severity == DiagnosticSeverity::Error;
+        });
+    if (!hasRecoveryError ||
+        !QFileInfo::exists(QDir(recovery).filePath(QStringLiteral("pending"))))
+      return false;
+
+    for (const auto &file : files) {
+      QFile current(file.target);
+      if (!current.open(QIODevice::ReadOnly) ||
+          current.readAll() != liveContents.value(file.target))
+        return false;
+    }
+    return true;
+  };
+
+  QVERIFY2(exerciseInvalidRecovery(true, QStringLiteral("missing-backup")),
+           "A missing recovery backup modified live project files");
+  QVERIFY2(exerciseInvalidRecovery(false, QStringLiteral("malformed-backup")),
+           "A malformed recovery backup modified live project files");
 }
 
 void CoreTests::fullyCoveredTextHasNoVisibleFragments() {

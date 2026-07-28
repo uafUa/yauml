@@ -462,8 +462,16 @@ history memory grow with total project size rather than the size of each edit.
   refuses to overwrite changed files, and the GUI offers Save As, reload,
   cancel, or explicit overwrite. Headless C++ import shares the same guard and
   has a distinct conflict exit code plus an explicit overwrite option.
-- Rendered-image regression coverage and broader recovery fault injection
-  remain the next hardening work.
+- Rendered-image regression coverage is implemented against the production
+  Qt Quick RHI path with fixed scale, font, palette, viewport, and a reviewed
+  platform-specific baseline. The fixture covers packages, type compartments,
+  stereotypes, relationship annotations, routing, decorations, and the grid;
+  local and CI failures retain expected, actual, and amplified difference
+  images.
+- Recovery fault coverage now includes missing and malformed backup files.
+  The complete recovery set is read and parsed before any live project file is
+  replaced, and failed recovery remains retryable. Deeper filesystem fault
+  injection at individual write/commit boundaries remains future hardening.
 - Incremental loading/indexing and synthetic performance benchmarks are
   intentionally last in this phase. The current scene-graph implementation is
   performing well on the product owner's large real project, so architectural

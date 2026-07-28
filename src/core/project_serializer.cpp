@@ -806,10 +806,37 @@ bool recoverIfPending(const QString &root, QString &message) {
       {QDir(recovery).filePath(QStringLiteral("diagrams.json5")),
        project.filePath(QString::fromLatin1(kDiagramsName))}};
 
+  // Validate the complete recovery set before replacing any live file. This
+  // prevents a missing or damaged later backup from creating a second partial
+  // project while trying to recover the first one.
+  QList<QByteArray> backupContents;
+  backupContents.reserve(files.size());
   for (const auto &[backup, target] : files) {
+    Q_UNUSED(target)
     QString ioError;
     const QByteArray bytes = readFile(backup, ioError);
-    if (!ioError.isEmpty() || !writeFile(target, bytes, ioError)) {
+    if (!ioError.isEmpty()) {
+      message = QStringLiteral("Recovery backup cannot be read: %1: %2")
+                    .arg(backup, ioError);
+      return false;
+    }
+    const Json5Result parsed = Json5::parse(bytes);
+    if (!parsed || !parsed.document.isObject()) {
+      message =
+          QStringLiteral("Recovery backup is invalid: %1: %2")
+              .arg(backup, parsed ? QStringLiteral("expected a JSON5 object")
+                                  : parsed.error);
+      return false;
+    }
+    backupContents.append(bytes);
+  }
+
+  for (qsizetype index = 0; index < files.size(); ++index) {
+    QString ioError;
+    const QString &target = files.at(index).second;
+    if (!writeFile(target, backupContents.at(index), ioError)) {
+      // Keep the marker and complete backup set. A later launch can retry the
+      // entire recovery after the filesystem problem has been resolved.
       message =
           QStringLiteral("Recovery failed for %1: %2").arg(target, ioError);
       return false;
