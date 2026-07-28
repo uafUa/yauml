@@ -35,7 +35,8 @@ class DiagramClipLayout final {
 public:
   explicit DiagramClipLayout(
       const Diagram &diagram,
-      const QHash<QString, QRectF> &geometryOverrides = {});
+      const QHash<QString, QRectF> &geometryOverrides = {},
+      const QSet<QString> &excludedPresentationIds = {});
 
   QRectF geometryFor(const QString &presentationId) const;
   QRectF childViewport(const ContainerPresentation &container) const;
@@ -50,6 +51,7 @@ private:
   QHash<QString, QRectF> m_geometryOverrides;
   QHash<QString, const ContainerPresentation *> m_containersById;
   QHash<QString, QString> m_ownerByChild;
+  QSet<QString> m_excludedPresentationIds;
 };
 
 } // namespace uuml::ui

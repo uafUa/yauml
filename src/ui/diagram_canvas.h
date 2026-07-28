@@ -26,6 +26,10 @@ class DiagramCanvas : public QQuickItem {
   Q_PROPERTY(QString diagramId READ diagramId WRITE setDiagramId NOTIFY
                  diagramIdChanged)
   Q_PROPERTY(qreal zoom READ zoom NOTIFY viewportChanged)
+  Q_PROPERTY(bool filterActive READ filterActive NOTIFY diagramFilterChanged)
+  Q_PROPERTY(
+      int visibleNodeCount READ visibleNodeCount NOTIFY diagramFilterChanged)
+  Q_PROPERTY(int totalNodeCount READ totalNodeCount NOTIFY diagramFilterChanged)
   Q_PROPERTY(int selectedNodeCount READ selectedNodeCount NOTIFY
                  canvasSelectionChanged)
   Q_PROPERTY(int selectedContainerCount READ selectedContainerCount NOTIFY
@@ -129,6 +133,9 @@ public:
   QString diagramId() const;
   void setDiagramId(const QString &diagramId);
   qreal zoom() const;
+  bool filterActive() const;
+  int visibleNodeCount() const;
+  int totalNodeCount() const;
   int selectedNodeCount() const;
   int selectedContainerCount() const;
   bool connectorSelected() const;
@@ -180,6 +187,9 @@ public:
   QPointF presentationToolboxViewAnchor() const;
 
   Q_INVOKABLE void fitToContent();
+  Q_INVOKABLE QVariantMap diagramFilter() const;
+  Q_INVOKABLE void setDiagramFilter(const QVariantMap &filter);
+  Q_INVOKABLE void clearDiagramFilter();
   Q_INVOKABLE void addElementsAt(const QStringList &elementIds, qreal x,
                                  qreal y);
   Q_INVOKABLE void addTreeItemsAt(const QStringList &elementIds,
@@ -227,6 +237,7 @@ signals:
   void projectChanged();
   void diagramIdChanged();
   void viewportChanged();
+  void diagramFilterChanged();
   void canvasSelectionChanged();
   void defaultDistributionGapChanged();
   void snapToGridEnabledChanged();
@@ -278,6 +289,13 @@ private:
     MoveAnnotation,
     CreateConnector
   };
+  enum class ResizeHandle {
+    None,
+    TopLeft,
+    TopRight,
+    BottomLeft,
+    BottomRight
+  };
   struct ConnectorEndpoints {
     QPointF source;
     QPointF target;
@@ -303,6 +321,9 @@ private:
   };
 
   const Diagram *diagram() const;
+  bool nodePassesFilter(const NodePresentation &node) const;
+  bool connectorPassesFilter(const ConnectorPresentation &connector) const;
+  bool pruneFilteredSelection();
   QRectF nodeGeometry(const NodePresentation &node) const;
   QRectF containerGeometry(const ContainerPresentation &container) const;
   QRectF containerChildViewport(const ContainerPresentation &container) const;
@@ -310,6 +331,9 @@ private:
                               bool *hasClip) const;
   QRectF visibleNodeGeometry(const NodePresentation &node) const;
   QRectF visibleContainerGeometry(const ContainerPresentation &container) const;
+  ResizeHandle resizeHandleAt(const QRectF &geometry,
+                              const QPointF &scenePoint) const;
+  static Qt::Edges resizeEdges(ResizeHandle handle);
   QPointF toScene(const QPointF &point) const;
   QPointF toView(const QPointF &point) const;
   QRectF toView(const QRectF &rect) const;
@@ -404,6 +428,7 @@ private:
   Qt::KeyboardModifiers m_lassoModifiers = Qt::NoModifier;
   bool m_lassoActive = false;
   QString m_interactionNode;
+  ResizeHandle m_resizeHandle = ResizeHandle::None;
   QHash<QString, QRectF> m_originalGeometry;
   QHash<QString, QRectF> m_previewGeometry;
   // Endpoint drags are presentation-only until a valid drop commits one

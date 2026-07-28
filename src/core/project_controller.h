@@ -211,6 +211,9 @@ public:
 
   Q_INVOKABLE QString diagramName(const QString &diagramId) const;
   Q_INVOKABLE void renameDiagram(const QString &diagramId, const QString &name);
+  Q_INVOKABLE QVariantMap diagramFilter(const QString &diagramId) const;
+  Q_INVOKABLE bool setDiagramFilter(const QString &diagramId,
+                                    const QVariantMap &filter);
   Q_INVOKABLE void updateNodeGeometry(const QString &diagramId,
                                       const QString &nodeId, qreal x, qreal y,
                                       qreal width, qreal height);

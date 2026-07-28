@@ -7,8 +7,10 @@
 namespace uuml::ui {
 
 DiagramClipLayout::DiagramClipLayout(
-    const Diagram &diagram, const QHash<QString, QRectF> &geometryOverrides)
-    : m_diagram(diagram), m_geometryOverrides(geometryOverrides) {
+    const Diagram &diagram, const QHash<QString, QRectF> &geometryOverrides,
+    const QSet<QString> &excludedPresentationIds)
+    : m_diagram(diagram), m_geometryOverrides(geometryOverrides),
+      m_excludedPresentationIds(excludedPresentationIds) {
   m_containersById.reserve(diagram.containers.size());
   for (const auto &container : diagram.containers) {
     m_containersById.insert(container.id, &container);
@@ -74,6 +76,8 @@ DiagramClipLayout::overflowEdges(const ContainerPresentation &container) const {
   const QRectF viewport = childViewport(container);
   constexpr qreal kOverflowTolerance = 0.01;
   for (const QString &childId : container.childPresentationIds) {
+    if (m_excludedPresentationIds.contains(childId))
+      continue;
     const QRectF childGeometry = geometryFor(childId);
     if (!childGeometry.isValid())
       continue;

@@ -1,5 +1,6 @@
 #include "core/project_commands.h"
 
+#include "core/diagram_filter.h"
 #include "core/project_controller.h"
 
 #include <algorithm>
@@ -1073,6 +1074,30 @@ void SetDiagramCompartmentVisibilityCommand::apply(ProjectData &project,
     else
       diagram->showOperations = value;
   }
+}
+
+SetDiagramFilterCommand::SetDiagramFilterCommand(ProjectController *controller,
+                                                 QString diagramId,
+                                                 DiagramFilter before,
+                                                 DiagramFilter after)
+    : ProjectCommand(controller, diagram_filter::isActive(after)
+                                     ? QStringLiteral("Filter diagram")
+                                     : QStringLiteral("Clear diagram filter")),
+      m_diagramId(std::move(diagramId)), m_before(std::move(before)),
+      m_after(std::move(after)) {}
+
+void SetDiagramFilterCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void SetDiagramFilterCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void SetDiagramFilterCommand::apply(ProjectData &project,
+                                    const DiagramFilter &filter) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    diagram->filter = filter;
 }
 
 SetNodeCompartmentVisibilityCommand::SetNodeCompartmentVisibilityCommand(

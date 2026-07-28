@@ -2,6 +2,7 @@
 
 #include "core/application_settings.h"
 #include "core/connector_port_layout.h"
+#include "core/diagram_filter.h"
 #include "core/presentation_layout.h"
 #include "core/project_controller.h"
 #include "core/project_style.h"
@@ -820,10 +821,17 @@ void appendContainerOutline(QVector<QSGGeometry::ColoredPoint2D> &vertices,
 
   if (container.selected) {
     const qreal handle = 9.0 / zoom;
-    appendClippedRect(vertices,
-                      {container.rect.right() - handle,
-                       container.rect.bottom() - handle, handle, handle},
-                      palette.accent, container.clipRect, container.hasClip);
+    const std::array<QRectF, 4> handles = {
+        QRectF(container.rect.left(), container.rect.top(), handle, handle),
+        QRectF(container.rect.right() - handle, container.rect.top(), handle,
+               handle),
+        QRectF(container.rect.left(), container.rect.bottom() - handle, handle,
+               handle),
+        QRectF(container.rect.right() - handle,
+               container.rect.bottom() - handle, handle, handle)};
+    for (const QRectF &handleRect : handles)
+      appendClippedRect(vertices, handleRect, palette.accent,
+                        container.clipRect, container.hasClip);
   }
 }
 
@@ -1350,10 +1358,15 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
     }
     if (node.selected) {
       const qreal handle = (node.selectionReference ? 11.0 : 9.0) / zoom;
-      appendClippedRect(vertices,
-                        {node.rect.right() - handle,
-                         node.rect.bottom() - handle, handle, handle},
-                        palette.accent, node.clipRect, node.hasClip);
+      const std::array<QRectF, 4> handles = {
+          QRectF(node.rect.left(), node.rect.top(), handle, handle),
+          QRectF(node.rect.right() - handle, node.rect.top(), handle, handle),
+          QRectF(node.rect.left(), node.rect.bottom() - handle, handle, handle),
+          QRectF(node.rect.right() - handle, node.rect.bottom() - handle,
+                 handle, handle)};
+      for (const QRectF &handleRect : handles)
+        appendClippedRect(vertices, handleRect, palette.accent, node.clipRect,
+                          node.hasClip);
     }
   }
 
@@ -1653,9 +1666,13 @@ void DiagramCanvas::setProject(ProjectController *project) {
       refreshPresentationToolboxAnchor();
       m_sceneDirty = true;
       m_textDirty = true;
-      if (!m_selectedNodes.isEmpty() || !m_selectedConnector.isEmpty() ||
-          !m_selectedContainers.isEmpty())
+      const bool selectionPruned = pruneFilteredSelection();
+      if (selectionPruned)
+        synchronizeProjectSelection();
+      if (selectionPruned || !m_selectedNodes.isEmpty() ||
+          !m_selectedConnector.isEmpty() || !m_selectedContainers.isEmpty())
         emit canvasSelectionChanged();
+      emit diagramFilterChanged();
       update();
     });
   }
@@ -1675,10 +1692,30 @@ void DiagramCanvas::setDiagramId(const QString &diagramId) {
   m_sceneDirty = true;
   m_textDirty = true;
   emit diagramIdChanged();
+  emit diagramFilterChanged();
   update();
 }
 
 qreal DiagramCanvas::zoom() const { return m_zoom; }
+bool DiagramCanvas::filterActive() const {
+  const auto *currentDiagram = diagram();
+  return currentDiagram && diagram_filter::isActive(currentDiagram->filter);
+}
+
+int DiagramCanvas::visibleNodeCount() const {
+  const auto *currentDiagram = diagram();
+  if (!currentDiagram)
+    return 0;
+  return static_cast<int>(std::count_if(
+      currentDiagram->nodes.cbegin(), currentDiagram->nodes.cend(),
+      [this](const NodePresentation &node) { return nodePassesFilter(node); }));
+}
+
+int DiagramCanvas::totalNodeCount() const {
+  const auto *currentDiagram = diagram();
+  return currentDiagram ? static_cast<int>(currentDiagram->nodes.size()) : 0;
+}
+
 int DiagramCanvas::selectedNodeCount() const { return m_selectedNodes.size(); }
 int DiagramCanvas::selectedContainerCount() const {
   return m_selectedContainers.size();
@@ -2021,6 +2058,54 @@ const Diagram *DiagramCanvas::diagram() const {
   return m_project ? findDiagram(m_project->data(), m_diagramId) : nullptr;
 }
 
+bool DiagramCanvas::nodePassesFilter(const NodePresentation &node) const {
+  const auto *currentDiagram = diagram();
+  if (!currentDiagram || !m_project)
+    return false;
+  const auto *element = findElement(m_project->data(), node.elementId);
+  return element && diagram_filter::matchesElement(m_project->data(), *element,
+                                                   currentDiagram->filter);
+}
+
+bool DiagramCanvas::connectorPassesFilter(
+    const ConnectorPresentation &connector) const {
+  const auto *source = endpointNode(connector, true);
+  const auto *target = endpointNode(connector, false);
+  return source && target && nodePassesFilter(*source) &&
+         nodePassesFilter(*target);
+}
+
+bool DiagramCanvas::pruneFilteredSelection() {
+  bool changed = false;
+  const auto *currentDiagram = diagram();
+  if (!currentDiagram) {
+    changed = !m_selectedNodes.isEmpty() || !m_selectedConnector.isEmpty();
+    m_selectedNodes.clear();
+    m_selectedNodeOrder.clear();
+    m_selectedConnector.clear();
+    return changed;
+  }
+  for (auto node = m_selectedNodes.begin(); node != m_selectedNodes.end();) {
+    const auto *presentation = findNode(*currentDiagram, *node);
+    if (presentation && nodePassesFilter(*presentation)) {
+      ++node;
+      continue;
+    }
+    m_selectedNodeOrder.removeAll(*node);
+    node = m_selectedNodes.erase(node);
+    changed = true;
+  }
+  if (!m_selectedConnector.isEmpty()) {
+    const auto *connector = findConnector(*currentDiagram, m_selectedConnector);
+    if (!connector || !connectorPassesFilter(*connector)) {
+      m_selectedConnector.clear();
+      m_selectedBendPoint = -1;
+      changed = true;
+    }
+  }
+  return changed;
+}
+
 QRectF DiagramCanvas::nodeGeometry(const NodePresentation &node) const {
   return m_previewGeometry.value(node.id, node.geometry);
 }
@@ -2065,6 +2150,43 @@ QRectF DiagramCanvas::visibleContainerGeometry(
   const QRectF clip = presentationClipRect(container.id, &hasClip);
   return hasClip ? containerGeometry(container).intersected(clip)
                  : containerGeometry(container);
+}
+
+DiagramCanvas::ResizeHandle
+DiagramCanvas::resizeHandleAt(const QRectF &geometry,
+                              const QPointF &scenePoint) const {
+  // Match the visible corner square closely. A larger invisible hit region
+  // would consume ordinary header clicks and relationship-edge gestures.
+  const qreal size = 7.0 / m_zoom;
+  if (QRectF(geometry.left(), geometry.top(), size, size)
+          .contains(scenePoint))
+    return ResizeHandle::TopLeft;
+  if (QRectF(geometry.right() - size, geometry.top(), size, size)
+          .contains(scenePoint))
+    return ResizeHandle::TopRight;
+  if (QRectF(geometry.left(), geometry.bottom() - size, size, size)
+          .contains(scenePoint))
+    return ResizeHandle::BottomLeft;
+  if (QRectF(geometry.right() - size, geometry.bottom() - size, size, size)
+          .contains(scenePoint))
+    return ResizeHandle::BottomRight;
+  return ResizeHandle::None;
+}
+
+Qt::Edges DiagramCanvas::resizeEdges(ResizeHandle handle) {
+  switch (handle) {
+  case ResizeHandle::TopLeft:
+    return Qt::TopEdge | Qt::LeftEdge;
+  case ResizeHandle::TopRight:
+    return Qt::TopEdge | Qt::RightEdge;
+  case ResizeHandle::BottomLeft:
+    return Qt::BottomEdge | Qt::LeftEdge;
+  case ResizeHandle::BottomRight:
+    return Qt::BottomEdge | Qt::RightEdge;
+  case ResizeHandle::None:
+    return {};
+  }
+  return {};
 }
 
 QPointF DiagramCanvas::toScene(const QPointF &point) const {
@@ -2506,10 +2628,13 @@ void DiagramCanvas::updateRelationshipToolboxCandidate(
   }
 
   const QRectF nodeRect = nodeGeometry(*node);
-  const QRectF resizeHandle(nodeRect.right() - 14 / m_zoom,
-                            nodeRect.bottom() - 14 / m_zoom, 14 / m_zoom,
-                            14 / m_zoom);
-  if (resizeHandle.contains(scenePoint)) {
+  // A corner starts as a resize target. Once an edge toolbox is already
+  // visible, however, retain it while the pointer crosses a corner on the way
+  // to the toolbox; clicks still begin the normal resize interaction.
+  const bool retainingRelationshipToolbox =
+      m_relationshipToolboxCandidate && m_relationshipToolboxNodeId == node->id;
+  if (resizeHandleAt(nodeRect, scenePoint) != ResizeHandle::None &&
+      !retainingRelationshipToolbox) {
     clearRelationshipToolboxCandidate();
     return;
   }
@@ -2707,10 +2832,7 @@ void DiagramCanvas::updatePresentationToolboxCandidate(
     const auto *node = hitNode(scenePoint);
     if (node && m_selectedNodes.contains(node->id)) {
       const QRectF nodeRect = nodeGeometry(*node);
-      const QRectF resizeHandle(nodeRect.right() - 14.0 / m_zoom,
-                                nodeRect.bottom() - 14.0 / m_zoom,
-                                14.0 / m_zoom, 14.0 / m_zoom);
-      if (!resizeHandle.contains(scenePoint)) {
+      if (resizeHandleAt(nodeRect, scenePoint) == ResizeHandle::None) {
         candidateId = node->id;
         candidateKind = QStringLiteral("node");
       }
@@ -2730,7 +2852,8 @@ void DiagramCanvas::updatePresentationToolboxCandidate(
       const QRectF visibleHeader = QRectF(geometry.left(), geometry.top(),
                                           geometry.width(), headerHeight)
                                        .intersected(visibleGeometry);
-      if (visibleHeader.contains(scenePoint)) {
+      if (visibleHeader.contains(scenePoint) &&
+          resizeHandleAt(geometry, scenePoint) == ResizeHandle::None) {
         candidateId = container->id;
         candidateKind = QStringLiteral("container");
       }
@@ -2925,7 +3048,12 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
         for (const QString &childId : container.childPresentationIds)
           containerOwnerByChild.insert(childId, container.id);
       }
-      const ui::DiagramClipLayout clipLayout(*d, m_previewGeometry);
+      QSet<QString> filteredPresentationIds;
+      for (const auto &node : d->nodes)
+        if (!nodePassesFilter(node))
+          filteredPresentationIds.insert(node.id);
+      const ui::DiagramClipLayout clipLayout(*d, m_previewGeometry,
+                                             filteredPresentationIds);
       QSet<QString> detachedDragRoots;
       if (m_interaction == Interaction::Move && !m_previewGeometry.isEmpty()) {
         for (const QString &containerId : m_selectedContainers)
@@ -2995,6 +3123,8 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
         return QString{};
       };
       for (const auto &node : d->nodes) {
+        if (!nodePassesFilter(node))
+          continue;
         const QRectF rect = nodeGeometry(node);
         nodeRects.insert(node.elementId, rect);
         const auto element = elements.constFind(node.elementId);
@@ -3192,7 +3322,7 @@ DiagramCanvas::hitNode(const QPointF &scenePoint) const {
   if (!d)
     return nullptr;
   for (auto it = d->nodes.crbegin(); it != d->nodes.crend(); ++it)
-    if (visibleNodeGeometry(*it).contains(scenePoint))
+    if (nodePassesFilter(*it) && visibleNodeGeometry(*it).contains(scenePoint))
       return &*it;
   return nullptr;
 }
@@ -3230,6 +3360,8 @@ DiagramCanvas::hitConnector(const QPointF &scenePoint) const {
   if (!d)
     return nullptr;
   for (auto it = d->connectors.crbegin(); it != d->connectors.crend(); ++it) {
+    if (!connectorPassesFilter(*it))
+      continue;
     const ui::ConnectorRoute route = connectorRoute(*it);
     if (route.points.size() < 2)
       continue;
@@ -3476,6 +3608,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
   m_pressScene = toScene(m_pressView);
   m_lastPointerScene = m_pressScene;
   m_pressModifiers = event->modifiers();
+  m_resizeHandle = ResizeHandle::None;
   if (event->button() == Qt::MiddleButton) {
     m_interaction = Interaction::Pan;
     m_originalPan = m_pan;
@@ -3646,11 +3779,9 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
     selectNode(node->id, toggle);
     m_interactionNode = node->id;
     const QRectF rect = nodeGeometry(*node);
-    const QRectF resizeHandle(rect.right() - 14 / m_zoom,
-                              rect.bottom() - 14 / m_zoom, 14 / m_zoom,
-                              14 / m_zoom);
-    m_interaction = resizeHandle.contains(m_pressScene) ? Interaction::Resize
-                                                        : Interaction::Move;
+    m_resizeHandle = resizeHandleAt(rect, m_pressScene);
+    m_interaction = m_resizeHandle != ResizeHandle::None ? Interaction::Resize
+                                                         : Interaction::Move;
     captureSelectedGeometry();
     if (m_project)
       m_project->selectObject(node->elementId, QStringLiteral("element"));
@@ -3663,9 +3794,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
     }
   } else if (const auto *container = hitContainer(m_pressScene)) {
     const QRectF rect = containerGeometry(*container);
-    const QRectF resizeHandle(rect.right() - 14 / m_zoom,
-                              rect.bottom() - 14 / m_zoom, 14 / m_zoom,
-                              14 / m_zoom);
+    m_resizeHandle = resizeHandleAt(rect, m_pressScene);
     const qreal headerHeight =
         container->subjectKind == QStringLiteral("package")
             ? 24.0
@@ -3673,7 +3802,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
     const bool headerHit =
         QRectF(rect.left(), rect.top(), rect.width(), headerHeight)
             .contains(m_pressScene);
-    if (!headerHit && !resizeHandle.contains(m_pressScene)) {
+    if (!headerHit && m_resizeHandle == ResizeHandle::None) {
       // A container's body is diagram workspace: its child presentations are
       // still ordinary lasso targets. Restrict direct container movement to
       // the header so the frame does not consume interior drag gestures.
@@ -3682,7 +3811,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
       return;
     }
 
-    const bool resize = resizeHandle.contains(m_pressScene);
+    const bool resize = m_resizeHandle != ResizeHandle::None;
     const bool preserveMultiSelection =
         !resize && m_selectedContainers.contains(container->id);
     if (!preserveMultiSelection) {
@@ -3761,7 +3890,7 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
            original != m_originalGeometry.cend(); ++original)
         moving.append({original.key(), original.value()});
       for (const auto &node : d->nodes) {
-        if (!m_originalGeometry.contains(node.id))
+        if (!m_originalGeometry.contains(node.id) && nodePassesFilter(node))
           stationary.append({node.id, node.geometry});
       }
       for (const auto &container : d->containers)
@@ -3793,8 +3922,19 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
     const qreal minimumHeight =
         resizingContainer ? kMinimumContainerHeight : kMinimumNodeHeight;
     QRectF resized = original;
-    resized.setWidth(qMax(minimumWidth, original.width() + delta.x()));
-    resized.setHeight(qMax(minimumHeight, original.height() + delta.y()));
+    const Qt::Edges movingEdges = resizeEdges(m_resizeHandle);
+    if (movingEdges.testFlag(Qt::LeftEdge))
+      resized.setLeft(qMin(original.left() + delta.x(),
+                           original.right() - minimumWidth));
+    else if (movingEdges.testFlag(Qt::RightEdge))
+      resized.setRight(qMax(original.right() + delta.x(),
+                            original.left() + minimumWidth));
+    if (movingEdges.testFlag(Qt::TopEdge))
+      resized.setTop(qMin(original.top() + delta.y(),
+                          original.bottom() - minimumHeight));
+    else if (movingEdges.testFlag(Qt::BottomEdge))
+      resized.setBottom(qMax(original.bottom() + delta.y(),
+                             original.top() + minimumHeight));
 
     ui::DiagramResizeSnapResult snapResult{resized, {}};
     const auto *d = diagram();
@@ -3804,7 +3944,7 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
       QList<ui::DiagramNodeGeometry> stationary;
       stationary.reserve(d->nodes.size() + d->containers.size());
       for (const auto &node : d->nodes)
-        if (node.id != m_interactionNode &&
+        if (node.id != m_interactionNode && nodePassesFilter(node) &&
             (!resizingContainer || !m_originalGeometry.contains(node.id)))
           stationary.append({node.id, node.geometry});
       for (const auto &container : d->containers)
@@ -3814,8 +3954,9 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
       const ui::DiagramSnapOptions options{
           m_snapToGridEnabled, m_alignmentGuidesEnabled,
           static_cast<qreal>(m_gridSpacing), kSnapToleranceViewPixels / m_zoom};
-      snapResult = ui::snapDiagramBottomRightResize(
-          resized, stationary, QSizeF(minimumWidth, minimumHeight), options);
+      snapResult = ui::snapDiagramResize(
+          resized, stationary, QSizeF(minimumWidth, minimumHeight), movingEdges,
+          options);
     }
     m_previewGeometry.insert(m_interactionNode, snapResult.geometry);
     m_alignmentGuides = std::move(snapResult.guides);
@@ -3866,6 +4007,7 @@ void DiagramCanvas::mouseReleaseEvent(QMouseEvent *event) {
   else if (m_interaction == Interaction::MoveAnnotation)
     commitAnnotationPreview();
   m_interaction = Interaction::None;
+  m_resizeHandle = ResizeHandle::None;
   m_originalGeometry.clear();
   m_previewGeometry.clear();
   m_alignmentGuides.clear();
@@ -3921,6 +4063,22 @@ void DiagramCanvas::mouseDoubleClickEvent(QMouseEvent *event) {
 
 void DiagramCanvas::hoverMoveEvent(QHoverEvent *event) {
   m_lastPointerScene = toScene(event->position());
+  ResizeHandle hoveredHandle = ResizeHandle::None;
+  if (const auto *node = hitNode(m_lastPointerScene))
+    hoveredHandle = resizeHandleAt(nodeGeometry(*node), m_lastPointerScene);
+  else if (const auto *container = hitContainer(m_lastPointerScene))
+    hoveredHandle =
+        resizeHandleAt(containerGeometry(*container), m_lastPointerScene);
+
+  if (hoveredHandle == ResizeHandle::TopLeft ||
+      hoveredHandle == ResizeHandle::BottomRight)
+    setCursor(Qt::SizeFDiagCursor);
+  else if (hoveredHandle == ResizeHandle::TopRight ||
+           hoveredHandle == ResizeHandle::BottomLeft)
+    setCursor(Qt::SizeBDiagCursor);
+  else
+    unsetCursor();
+
   updateRelationshipToolboxCandidate(event->position());
   if (m_relationshipToolboxCandidate) {
     clearArrangementToolboxCandidate();
@@ -3943,6 +4101,7 @@ void DiagramCanvas::hoverMoveEvent(QHoverEvent *event) {
 }
 
 void DiagramCanvas::hoverLeaveEvent(QHoverEvent *event) {
+  unsetCursor();
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate();
   clearConnectorToolboxCandidate();
@@ -4035,6 +4194,8 @@ void DiagramCanvas::updateLassoSelection(const QPointF &scenePoint) {
   }
 
   for (const auto &node : d->nodes) {
+    if (!nodePassesFilter(node))
+      continue;
     if (!m_lassoRect.intersects(visibleNodeGeometry(node)))
       continue;
     if (toggle && nextNodes.contains(node.id)) {
@@ -4140,10 +4301,12 @@ void DiagramCanvas::selectAllInContext() {
     // selected as objects, while their children remain outside this scope.
     if (const auto *container = findContainer(*d, scopeContainerId)) {
       for (const QString &childId : container->childPresentationIds) {
-        if (findNode(*d, childId))
-          scopedNodeIds.insert(childId);
-        else if (findContainer(*d, childId))
+        if (const auto *node = findNode(*d, childId)) {
+          if (nodePassesFilter(*node))
+            scopedNodeIds.insert(childId);
+        } else if (findContainer(*d, childId)) {
           scopedContainerIds.insert(childId);
+        }
       }
     }
   } else {
@@ -4152,7 +4315,7 @@ void DiagramCanvas::selectAllInContext() {
       for (const QString &childId : container.childPresentationIds)
         containedPresentationIds.insert(childId);
     for (const auto &node : d->nodes)
-      if (!containedPresentationIds.contains(node.id))
+      if (!containedPresentationIds.contains(node.id) && nodePassesFilter(node))
         scopedNodeIds.insert(node.id);
     for (const auto &container : d->containers)
       if (!containedPresentationIds.contains(container.id))
@@ -4223,8 +4386,12 @@ void DiagramCanvas::fitToContent() {
     content = content.isNull() ? container.geometry
                                : content.united(container.geometry);
   for (const auto &node : d->nodes)
-    content = content.isNull() ? node.geometry : content.united(node.geometry);
+    if (nodePassesFilter(node))
+      content =
+          content.isNull() ? node.geometry : content.united(node.geometry);
   for (const auto &connector : d->connectors) {
+    if (!connectorPassesFilter(connector))
+      continue;
     for (const auto &bendPoint : connector.bendPoints) {
       const QRectF bendBounds(bendPoint.position - QPointF(1.0, 1.0),
                               QSizeF(2.0, 2.0));
@@ -4241,6 +4408,17 @@ void DiagramCanvas::fitToContent() {
   emit viewportChanged();
   update();
 }
+
+QVariantMap DiagramCanvas::diagramFilter() const {
+  return m_project ? m_project->diagramFilter(m_diagramId) : QVariantMap{};
+}
+
+void DiagramCanvas::setDiagramFilter(const QVariantMap &filter) {
+  if (m_project)
+    m_project->setDiagramFilter(m_diagramId, filter);
+}
+
+void DiagramCanvas::clearDiagramFilter() { setDiagramFilter({}); }
 
 void DiagramCanvas::addElementsAt(const QStringList &elementIds, qreal x,
                                   qreal y) {
@@ -4285,9 +4463,12 @@ void DiagramCanvas::createElementAt(const QString &type,
                                  [&](const NodePresentation &candidate) {
                                    return candidate.elementId == elementId;
                                  });
-  if (node != d->nodes.cend())
-    selectNode(node->id, false);
-  else {
+  if (node != d->nodes.cend()) {
+    if (nodePassesFilter(*node))
+      selectNode(node->id, false);
+    else
+      clearCanvasSelection();
+  } else {
     const auto container = std::find_if(
         d->containers.cbegin(), d->containers.cend(),
         [&](const ContainerPresentation &candidate) {

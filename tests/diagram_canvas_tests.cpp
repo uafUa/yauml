@@ -123,6 +123,7 @@ private slots:
   void lassoModifiersAddAndToggleSelection();
   void lassoStartsOnEmptyContainerBody();
   void contextualSelectAllUsesContainerScope();
+  void diagramFiltersHideInteractionAndSelection();
   void clippedChildIsOnlyInteractiveInsideContainer();
   void arrangementAndNudgingAreUndoableTransactions();
   void contextCreationUsesTheClickedDiagramAndPosition();
@@ -141,6 +142,7 @@ private slots:
   void connectorEndpointsDragToReattachAndCancel();
   void connectorPortsSnapAndRemainFreelyPlaceable();
   void liveDragSnappingIsUndoableAndAltSuppressesIt();
+  void allCornerResizeHandlesAreInteractive();
   void folderContainerMovesDescendantsAndResizesIndependently();
   void nestedPackageDiagramMovesRemainPresentational();
 };
@@ -314,6 +316,12 @@ void DiagramCanvasTests::snappingGeometryRulesAreDeterministic() {
       QRectF(10, 10, 127, 93), stationary, QSizeF(120, 60), gridOptions);
   QCOMPARE(resizedOnGrid.geometry, QRectF(10, 10, 130, 90));
   QVERIFY(resizedOnGrid.guides.isEmpty());
+
+  const auto resizedFromTopLeft = ui::snapDiagramResize(
+      QRectF(204, 24, 186, 76), stationary, QSizeF(120, 60),
+      Qt::LeftEdge | Qt::TopEdge, alignmentOptions);
+  QCOMPARE(resizedFromTopLeft.geometry, QRectF(200, 20, 190, 80));
+  QCOMPARE(resizedFromTopLeft.guides.size(), 2);
 }
 
 void DiagramCanvasTests::nestedContainerClippingAndOverflowAreDeterministic() {
@@ -565,6 +573,54 @@ void DiagramCanvasTests::contextualSelectAllUsesContainerScope() {
       }));
   controller.undo();
   QCOMPARE(controller.data().diagrams.first(), beforeRemoval);
+}
+
+void DiagramCanvasTests::diagramFiltersHideInteractionAndSelection() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  controller.addElement(QStringLiteral("class"), diagramId);
+  controller.addElement(QStringLiteral("struct"), diagramId);
+  useStandardInteractionGeometry(controller);
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  QCOMPARE(canvas.totalNodeCount(), 2);
+  QCOMPARE(canvas.visibleNodeCount(), 2);
+  QVERIFY(!canvas.filterActive());
+  const auto nodes = controller.data().diagrams.first().nodes;
+  QVERIFY(!controller
+               .createRelationship(diagramId, nodes.at(0).id, nodes.at(1).id,
+                                   QStringLiteral("dependency"))
+               .isEmpty());
+  canvas.press({315.0, 140.0});
+  canvas.release({315.0, 140.0});
+  QVERIFY(canvas.connectorSelected());
+
+  QVariantMap filter;
+  filter.insert(QStringLiteral("excludedElementTypes"),
+                QStringList{QStringLiteral("struct")});
+  canvas.setDiagramFilter(filter);
+  QVERIFY(canvas.filterActive());
+  QCOMPARE(canvas.visibleNodeCount(), 1);
+  QCOMPARE(canvas.totalNodeCount(), 2);
+  QVERIFY(!canvas.connectorSelected());
+
+  canvas.key(Qt::Key_A, Qt::ControlModifier);
+  QCOMPARE(canvas.selectedNodeCount(), 1);
+
+  canvas.clearCanvasSelection();
+  const NodePresentation &hiddenNode =
+      controller.data().diagrams.first().nodes.at(1);
+  const QPointF viewPan(30.0, 30.0);
+  canvas.press(hiddenNode.geometry.center() + viewPan);
+  canvas.release(hiddenNode.geometry.center() + viewPan);
+  QCOMPARE(canvas.selectedNodeCount(), 0);
+
+  canvas.clearDiagramFilter();
+  QVERIFY(!canvas.filterActive());
+  QCOMPARE(canvas.visibleNodeCount(), 2);
+  canvas.key(Qt::Key_A, Qt::ControlModifier);
+  QCOMPARE(canvas.selectedNodeCount(), 2);
 }
 
 void DiagramCanvasTests::clippedChildIsOnlyInteractiveInsideContainer() {
@@ -1578,6 +1634,36 @@ void DiagramCanvasTests::liveDragSnappingIsUndoableAndAltSuppressesIt() {
            QRectF(50, 50, 246, 123));
   controller.undo();
   QCOMPARE(controller.data().diagrams.first().nodes, before);
+}
+
+void DiagramCanvasTests::allCornerResizeHandlesAreInteractive() {
+  ProjectController controller;
+  populate(controller, 1);
+  useStandardInteractionGeometry(controller);
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+
+  const QRectF original = controller.data().diagrams.first().nodes.first().geometry;
+  const QPointF viewPan(30.0, 30.0);
+  const auto resizeAndUndo = [&](const QPointF &sceneStart,
+                                 const QPointF &delta,
+                                 const QRectF &expected) {
+    canvas.drag(sceneStart + viewPan, sceneStart + viewPan + delta);
+    QCOMPARE(controller.data().diagrams.first().nodes.first().geometry,
+             expected);
+    controller.undo();
+    QCOMPARE(controller.data().diagrams.first().nodes.first().geometry,
+             original);
+  };
+
+  resizeAndUndo(original.topLeft() + QPointF(5, 5), QPointF(-15, -15),
+                QRectF(35, 35, 235, 135));
+  resizeAndUndo(original.topRight() + QPointF(-5, 5), QPointF(15, -15),
+                QRectF(50, 35, 235, 135));
+  resizeAndUndo(original.bottomLeft() + QPointF(5, -5), QPointF(-15, 15),
+                QRectF(35, 50, 235, 135));
+  resizeAndUndo(original.bottomRight() + QPointF(-5, -5), QPointF(15, 15),
+                QRectF(50, 50, 235, 135));
 }
 
 void DiagramCanvasTests::

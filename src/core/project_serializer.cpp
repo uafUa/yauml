@@ -1,6 +1,7 @@
 #include "core/project_serializer.h"
 
 #include "core/connector_port_layout.h"
+#include "core/diagram_filter.h"
 #include "core/json5.h"
 #include "core/project_schema.h"
 #include "core/project_schema_version.h"
@@ -87,6 +88,114 @@ QStringList readStringArray(const QJsonValue &value) {
       result.append(item.toString());
   }
   return result;
+}
+
+QJsonObject filterToJson(const DiagramFilter &filter) {
+  QJsonObject object = filter.extra;
+  const auto writeArray = [&](const QString &key, const QStringList &values) {
+    if (values.isEmpty())
+      object.remove(key);
+    else
+      object.insert(key, stringArray(values));
+  };
+  const auto writeString = [&](const QString &key, const QString &value) {
+    if (value.isEmpty())
+      object.remove(key);
+    else
+      object.insert(key, value);
+  };
+  writeArray(QStringLiteral("excludedElementTypes"),
+             filter.excludedElementTypes);
+  writeArray(QStringLiteral("includedStereotypeIds"),
+             filter.includedStereotypeIds);
+  writeArray(QStringLiteral("excludedStereotypeIds"),
+             filter.excludedStereotypeIds);
+  writeString(QStringLiteral("namePattern"), filter.namePattern);
+  writeString(QStringLiteral("memberPattern"), filter.memberPattern);
+  if (filter.excludeNameMatches)
+    object.insert(QStringLiteral("excludeNameMatches"), true);
+  else
+    object.remove(QStringLiteral("excludeNameMatches"));
+  if (filter.excludeMemberMatches)
+    object.insert(QStringLiteral("excludeMemberMatches"), true);
+  else
+    object.remove(QStringLiteral("excludeMemberMatches"));
+  return object;
+}
+
+DiagramFilter readDiagramFilter(const QJsonValue &value,
+                                const QString &diagramId,
+                                QList<Diagnostic> &diagnostics) {
+  DiagramFilter filter;
+  if (value.isUndefined() || value.isNull())
+    return filter;
+  if (!value.isObject()) {
+    diagnostics.append(error(QStringLiteral("validation"),
+                             QStringLiteral("Diagram filter must be an object"),
+                             diagramId));
+    return filter;
+  }
+
+  const QJsonObject object = value.toObject();
+  const auto readArray = [&](const QString &key) {
+    const QJsonValue field = object.value(key);
+    if (field.isUndefined())
+      return QStringList{};
+    if (!field.isArray()) {
+      diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral("Diagram filter %1 must be an array").arg(key),
+                diagramId));
+      return QStringList{};
+    }
+    return readStringArray(field);
+  };
+  const auto readString = [&](const QString &key) {
+    const QJsonValue field = object.value(key);
+    if (field.isUndefined())
+      return QString{};
+    if (!field.isString()) {
+      diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral("Diagram filter %1 must be text").arg(key),
+                diagramId));
+      return QString{};
+    }
+    return field.toString().trimmed();
+  };
+  const auto readBoolean = [&](const QString &key) {
+    const QJsonValue field = object.value(key);
+    if (field.isUndefined())
+      return false;
+    if (!field.isBool()) {
+      diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral("Diagram filter %1 must be a boolean").arg(key),
+                diagramId));
+      return false;
+    }
+    return field.toBool();
+  };
+
+  filter.excludedElementTypes =
+      readArray(QStringLiteral("excludedElementTypes"));
+  filter.includedStereotypeIds =
+      readArray(QStringLiteral("includedStereotypeIds"));
+  filter.excludedStereotypeIds =
+      readArray(QStringLiteral("excludedStereotypeIds"));
+  filter.namePattern = readString(QStringLiteral("namePattern"));
+  filter.memberPattern = readString(QStringLiteral("memberPattern"));
+  filter.excludeNameMatches = readBoolean(QStringLiteral("excludeNameMatches"));
+  filter.excludeMemberMatches =
+      readBoolean(QStringLiteral("excludeMemberMatches"));
+  filter.extra = withoutKeys(object, {QStringLiteral("excludedElementTypes"),
+                                      QStringLiteral("includedStereotypeIds"),
+                                      QStringLiteral("excludedStereotypeIds"),
+                                      QStringLiteral("namePattern"),
+                                      QStringLiteral("excludeNameMatches"),
+                                      QStringLiteral("memberPattern"),
+                                      QStringLiteral("excludeMemberMatches")});
+  return filter;
 }
 
 int readPortSnapPointCount(const QJsonObject &object, const QString &key,
@@ -581,6 +690,11 @@ QByteArray diagramsBytes(const ProjectData &project) {
       object.insert(QStringLiteral("showOperations"), false);
     else
       object.remove(QStringLiteral("showOperations"));
+    const QJsonObject filter = filterToJson(diagram.filter);
+    if (diagram_filter::isActive(diagram.filter) || !filter.isEmpty())
+      object.insert(QStringLiteral("filter"), filter);
+    else
+      object.remove(QStringLiteral("filter"));
     QJsonArray containers;
     for (const auto &container : diagram.containers)
       containers.append(containerToJson(container));
@@ -1107,11 +1221,14 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
         readDiagramVisibility(QStringLiteral("showAttributes"));
     diagram.showOperations =
         readDiagramVisibility(QStringLiteral("showOperations"));
+    diagram.filter = readDiagramFilter(object.value(QStringLiteral("filter")),
+                                       diagram.id, outcome.diagnostics);
     diagram.extra = withoutKeys(
-        object, {QStringLiteral("id"), QStringLiteral("name"),
-                 QStringLiteral("showAttributes"),
-                 QStringLiteral("showOperations"), QStringLiteral("containers"),
-                 QStringLiteral("nodes"), QStringLiteral("connectors")});
+        object,
+        {QStringLiteral("id"), QStringLiteral("name"),
+         QStringLiteral("showAttributes"), QStringLiteral("showOperations"),
+         QStringLiteral("filter"), QStringLiteral("containers"),
+         QStringLiteral("nodes"), QStringLiteral("connectors")});
     project.diagrams.append(diagram);
   }
 

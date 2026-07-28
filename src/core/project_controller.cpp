@@ -2,6 +2,7 @@
 
 #include "core/connector_port_layout.h"
 #include "core/cpp_import.h"
+#include "core/diagram_filter.h"
 #include "core/presentation_layout.h"
 #include "core/project_command.h"
 #include "core/project_commands.h"
@@ -2896,6 +2897,27 @@ QString ProjectController::diagramName(const QString &diagramId) const {
 void ProjectController::renameDiagram(const QString &diagramId,
                                       const QString &name) {
   editText(diagramId, QStringLiteral("name"), -1, name);
+}
+
+QVariantMap ProjectController::diagramFilter(const QString &diagramId) const {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  return diagram ? diagram_filter::toVariantMap(diagram->filter)
+                 : QVariantMap{};
+}
+
+bool ProjectController::setDiagramFilter(const QString &diagramId,
+                                         const QVariantMap &filterValues) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram)
+    return false;
+  DiagramFilter after = diagram_filter::fromVariantMap(filterValues);
+  // Retain extension fields that this editor does not understand.
+  after.extra = diagram->filter.extra;
+  if (diagram->filter == after)
+    return true;
+  pushCommand(std::make_unique<SetDiagramFilterCommand>(
+      this, diagramId, diagram->filter, std::move(after)));
+  return true;
 }
 
 void ProjectController::updateNodeGeometry(const QString &diagramId,

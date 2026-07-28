@@ -495,6 +495,21 @@ private:
   bool m_after;
 };
 
+class SetDiagramFilterCommand final : public ProjectCommand {
+public:
+  SetDiagramFilterCommand(ProjectController *controller, QString diagramId,
+                          DiagramFilter before, DiagramFilter after);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, const DiagramFilter &filter);
+
+  QString m_diagramId;
+  DiagramFilter m_before;
+  DiagramFilter m_after;
+};
+
 struct NodeCompartmentVisibilityChange {
   QString nodeId;
   std::optional<bool> before;

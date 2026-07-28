@@ -83,7 +83,7 @@ history memory grow with total project size rather than the size of each edit.
   selection-only frames retain text atlases for large-diagram responsiveness.
   Empty container interiors behave as diagram workspace for lasso gestures;
   container movement is intentionally restricted to the frame header and
-  resizing to its bottom-right handle.
+  resizing is available from all four corner handles.
 - Alignment, equal sizing, minimum-gap edge-to-edge distribution, and keyboard
   nudging are implemented through diagram-local actions and shortcuts. The
   distribution fallback gap is an application preference persisted through
@@ -103,6 +103,14 @@ history memory grow with total project size rather than the size of each edit.
   effective visibility drives scene-graph rendering, in-place hit testing, and
   fit-to-content sizing; all settings persist in diagram JSON5 and use compact
   undo commands.
+- Persisted, presentation-only diagram filters are implemented. An always
+  visible diagram badge opens criteria for classifier kind, project
+  stereotypes, name wildcard, and operation/field wildcard; name and member
+  matches can either be included or excluded. Multiple criteria combine, an
+  included stereotype set uses any-match semantics, and excluded stereotypes
+  take precedence. Hidden presentations remain in project data, their
+  connectors are hidden, container frames retain hierarchy context, and
+  selection/arrangement operate only on visible items.
 - Treat a multi-object operation as one undoable transaction.
 
 ### 3.5 Connector routing and direct interaction — implemented

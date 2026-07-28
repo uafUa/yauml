@@ -58,6 +58,8 @@ add_library(uuml_core STATIC
     src/core/cpp_import_controller.h
     src/core/diagnostic_model.cpp
     src/core/diagnostic_model.h
+    src/core/diagram_filter.cpp
+    src/core/diagram_filter.h
     src/core/json5.cpp
     src/core/json5.h
     src/core/presentation_layout.cpp
@@ -205,6 +207,7 @@ qt_add_qml_module(uuml
         qml/CatalogToolButton.qml
         qml/ContextToolboxFrame.qml
         qml/DiagramArea.qml
+        qml/DiagramFilterDialog.qml
         qml/DiagramView.qml
         qml/DiagramWindow.qml
         qml/Main.qml

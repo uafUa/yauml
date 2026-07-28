@@ -127,18 +127,25 @@ void considerGridCandidate(AxisCandidate &best, qreal position, qreal spacing,
 AxisCandidate
 resizeAlignmentCandidate(const QRectF &requestedGeometry,
                          const QList<DiagramNodeGeometry> &stationary,
-                         Qt::Orientation orientation, qreal minimumEdge,
-                         qreal tolerance) {
-  const qreal draggedEdge = orientation == Qt::Horizontal
-                                ? requestedGeometry.right()
-                                : requestedGeometry.bottom();
+                         Qt::Orientation orientation, bool movingMinimumEdge,
+                         qreal fixedEdge, qreal minimumSize, qreal tolerance) {
+  const qreal draggedEdge =
+      orientation == Qt::Horizontal
+          ? (movingMinimumEdge ? requestedGeometry.left()
+                               : requestedGeometry.right())
+          : (movingMinimumEdge ? requestedGeometry.top()
+                               : requestedGeometry.bottom());
   AxisCandidate best;
   for (const auto &node : stationary) {
     const auto features = orientation == Qt::Horizontal
                               ? xFeatures(node.geometry)
                               : yFeatures(node.geometry);
     for (const qreal position : features) {
-      if (position < minimumEdge - kComparisonEpsilon)
+      const bool legal =
+          movingMinimumEdge
+              ? position <= fixedEdge - minimumSize + kComparisonEpsilon
+              : position >= fixedEdge + minimumSize - kComparisonEpsilon;
+      if (!legal)
         continue;
       considerCandidate(best, position - draggedEdge, position,
                         requestedGeometry, node.geometry, true, tolerance);
@@ -148,12 +155,17 @@ resizeAlignmentCandidate(const QRectF &requestedGeometry,
 }
 
 void considerResizeGridCandidate(AxisCandidate &best, qreal position,
-                                 qreal minimumEdge, qreal spacing,
+                                 bool movingMinimumEdge, qreal fixedEdge,
+                                 qreal minimumSize, qreal spacing,
                                  qreal tolerance) {
   if (spacing <= 0.0)
     return;
   const qreal target = std::round(position / spacing) * spacing;
-  if (target < minimumEdge - kComparisonEpsilon)
+  const bool legal =
+      movingMinimumEdge
+          ? target <= fixedEdge - minimumSize + kComparisonEpsilon
+          : target >= fixedEdge + minimumSize - kComparisonEpsilon;
+  if (!legal)
     return;
   considerCandidate(best, target - position, target, {}, {}, false, tolerance);
 }
@@ -220,41 +232,69 @@ DiagramSnapResult snapDiagramMove(const QList<DiagramNodeGeometry> &moving,
 }
 
 DiagramResizeSnapResult
-snapDiagramBottomRightResize(const QRectF &requestedGeometry,
-                             const QList<DiagramNodeGeometry> &stationary,
-                             const QSizeF &minimumSize,
-                             const DiagramSnapOptions &options) {
+snapDiagramResize(const QRectF &requestedGeometry,
+                  const QList<DiagramNodeGeometry> &stationary,
+                  const QSizeF &minimumSize, Qt::Edges movingEdges,
+                  const DiagramSnapOptions &options) {
   DiagramResizeSnapResult result{requestedGeometry, {}};
   if (options.tolerance < 0.0)
     return result;
 
-  const qreal minimumRight = requestedGeometry.left() + minimumSize.width();
-  const qreal minimumBottom = requestedGeometry.top() + minimumSize.height();
+  const bool moveLeft = movingEdges.testFlag(Qt::LeftEdge);
+  const bool moveRight = movingEdges.testFlag(Qt::RightEdge);
+  const bool moveTop = movingEdges.testFlag(Qt::TopEdge);
+  const bool moveBottom = movingEdges.testFlag(Qt::BottomEdge);
   AxisCandidate xCandidate;
   AxisCandidate yCandidate;
   if (options.snapToAlignment && !stationary.isEmpty()) {
-    xCandidate =
-        resizeAlignmentCandidate(requestedGeometry, stationary, Qt::Horizontal,
-                                 minimumRight, options.tolerance);
-    yCandidate =
-        resizeAlignmentCandidate(requestedGeometry, stationary, Qt::Vertical,
-                                 minimumBottom, options.tolerance);
+    if (moveLeft || moveRight) {
+      xCandidate = resizeAlignmentCandidate(
+          requestedGeometry, stationary, Qt::Horizontal, moveLeft,
+          moveLeft ? requestedGeometry.right() : requestedGeometry.left(),
+          minimumSize.width(), options.tolerance);
+    }
+    if (moveTop || moveBottom) {
+      yCandidate = resizeAlignmentCandidate(
+          requestedGeometry, stationary, Qt::Vertical, moveTop,
+          moveTop ? requestedGeometry.bottom() : requestedGeometry.top(),
+          minimumSize.height(), options.tolerance);
+    }
   }
 
   if (options.snapToGrid) {
-    considerResizeGridCandidate(xCandidate, requestedGeometry.right(),
-                                minimumRight, options.gridSpacing,
-                                options.tolerance);
-    considerResizeGridCandidate(yCandidate, requestedGeometry.bottom(),
-                                minimumBottom, options.gridSpacing,
-                                options.tolerance);
+    if (moveLeft || moveRight) {
+      considerResizeGridCandidate(
+          xCandidate,
+          moveLeft ? requestedGeometry.left() : requestedGeometry.right(),
+          moveLeft, moveLeft ? requestedGeometry.right()
+                             : requestedGeometry.left(),
+          minimumSize.width(), options.gridSpacing, options.tolerance);
+    }
+    if (moveTop || moveBottom) {
+      considerResizeGridCandidate(
+          yCandidate,
+          moveTop ? requestedGeometry.top() : requestedGeometry.bottom(),
+          moveTop, moveTop ? requestedGeometry.bottom()
+                           : requestedGeometry.top(),
+          minimumSize.height(), options.gridSpacing, options.tolerance);
+    }
   }
 
-  if (xCandidate.valid)
-    result.geometry.setRight(requestedGeometry.right() + xCandidate.adjustment);
-  if (yCandidate.valid)
-    result.geometry.setBottom(requestedGeometry.bottom() +
-                              yCandidate.adjustment);
+  if (xCandidate.valid) {
+    if (moveLeft)
+      result.geometry.setLeft(requestedGeometry.left() +
+                              xCandidate.adjustment);
+    else
+      result.geometry.setRight(requestedGeometry.right() +
+                               xCandidate.adjustment);
+  }
+  if (yCandidate.valid) {
+    if (moveTop)
+      result.geometry.setTop(requestedGeometry.top() + yCandidate.adjustment);
+    else
+      result.geometry.setBottom(requestedGeometry.bottom() +
+                                yCandidate.adjustment);
+  }
 
   if (xCandidate.valid && xCandidate.alignment) {
     const qreal top =
@@ -277,6 +317,15 @@ snapDiagramBottomRightResize(const QRectF &requestedGeometry,
                                 yCandidate.guidePosition));
   }
   return result;
+}
+
+DiagramResizeSnapResult
+snapDiagramBottomRightResize(const QRectF &requestedGeometry,
+                             const QList<DiagramNodeGeometry> &stationary,
+                             const QSizeF &minimumSize,
+                             const DiagramSnapOptions &options) {
+  return snapDiagramResize(requestedGeometry, stationary, minimumSize,
+                           Qt::RightEdge | Qt::BottomEdge, options);
 }
 
 } // namespace uuml::ui

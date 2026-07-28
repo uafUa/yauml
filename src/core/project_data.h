@@ -206,11 +206,28 @@ struct ConnectorPresentation {
   bool operator==(const ConnectorPresentation &) const = default;
 };
 
+// A diagram filter changes only what is currently presented. It never removes
+// presentations or semantic elements, so clearing the filter restores the
+// exact diagram and connector layout.
+struct DiagramFilter {
+  QStringList excludedElementTypes;
+  QStringList includedStereotypeIds;
+  QStringList excludedStereotypeIds;
+  QString namePattern;
+  bool excludeNameMatches = false;
+  QString memberPattern;
+  bool excludeMemberMatches = false;
+  QJsonObject extra;
+
+  bool operator==(const DiagramFilter &) const = default;
+};
+
 struct Diagram {
   QString id;
   QString name;
   bool showAttributes = true;
   bool showOperations = true;
+  DiagramFilter filter;
   QList<ContainerPresentation> containers;
   QList<NodePresentation> nodes;
   QList<ConnectorPresentation> connectors;

@@ -198,6 +198,11 @@ when conflicts need attention; user-edited model content is never overwritten.
   type's **Attributes** and **Operations** menus can inherit that default or
   explicitly show/hide the compartment. These choices are project data and
   participate in normal undo, save, and reload behavior.
+- Use the **Filter…** badge at the upper-right of a diagram to include or
+  exclude presentations by classifier kind, stereotype, name wildcard, or
+  operation/field wildcard. An emphasized badge with a visible/total count
+  indicates an active filter. Filtering never removes project data; connectors
+  whose endpoint is hidden are hidden with it.
 - On a type presentation, choose **Add types that depend on this** or
   **Add types this depends on** to expand the incoming or outgoing semantic
   relationship neighborhood. The hover toolbox exposes the same two actions.
@@ -205,7 +210,8 @@ when conflicts need attention; user-edited model content is never overwritten.
   gain their connector automatically in the same undoable command.
 - Drag any selected element to move the complete selection as one undoable
   command. Press `Delete` to remove selected presentations from the diagram;
-  deleting a selected connector removes its relationship.
+  deleting a selected connector removes its relationship. Each selected
+  rectangle can be resized from any of its four corners.
 - Right-click a multi-selection and use **Arrange** to align elements, match
   their size, or distribute three or more elements evenly. The displayed
   shortcuts are local to that diagram window. Distribution uses the smallest

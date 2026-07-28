@@ -1,6 +1,7 @@
 #include "core/application_settings.h"
 #include "core/connector_port_layout.h"
 #include "core/cpp_import.h"
+#include "core/diagram_filter.h"
 #include "core/json5.h"
 #include "core/presentation_layout.h"
 #include "core/project_controller.h"
@@ -103,6 +104,7 @@ private slots:
   void largeModelGeometryCommandUndoRedo();
   void bulkDiagramPlacementIsOneUndoableCommand();
   void diagramCompartmentVisibilityPersistsAndIsUndoable();
+  void diagramFiltersPersistMatchAndUndo();
   void relatedTypeNeighborhoodActionsAreDirectionalAndUndoable();
   void diagramDropSizingModes();
   void diagramLabelsReflectPackageContext();
@@ -1851,6 +1853,76 @@ void CoreTests::diagramCompartmentVisibilityPersistsAndIsUndoable() {
   QVERIFY(loaded.ok);
   QCOMPARE(loaded.project, controller.data());
   QCOMPARE(findElement(loaded.project, firstElementId)->attributes.size(), 1);
+}
+
+void CoreTests::diagramFiltersPersistMatchAndUndo() {
+  ProjectData project = createStarterProject(QStringLiteral("Filtered"));
+  ModelElement service;
+  service.id = QStringLiteral("service");
+  service.name = QStringLiteral("api::InvoiceService");
+  service.type = ElementType::Class;
+  service.stereotypeIds = {stereotype_catalog::kApiStereotypeId};
+  service.attributes = {QStringLiteral("- repository: Repository")};
+  service.operations = {QStringLiteral("+ serializeInvoice(): string")};
+
+  ModelElement localStruct;
+  localStruct.id = QStringLiteral("local-struct");
+  localStruct.name = QStringLiteral("detail::InvoiceRecord");
+  localStruct.type = ElementType::Struct;
+  localStruct.stereotypeIds = {stereotype_catalog::kLocalStereotypeId};
+  localStruct.attributes = {QStringLiteral("+ sequence: int")};
+
+  DiagramFilter filter;
+  filter.excludedElementTypes = {QStringLiteral("struct")};
+  filter.includedStereotypeIds = {
+      stereotype_catalog::kApiStereotypeId,
+      QStringLiteral("stale-stereotype-id")};
+  filter.namePattern = QStringLiteral("*Service");
+  filter.memberPattern = QStringLiteral("serialize*");
+  QVERIFY(diagram_filter::isActive(filter));
+  QVERIFY(diagram_filter::matchesElement(project, service, filter));
+  QVERIFY(!diagram_filter::matchesElement(project, localStruct, filter));
+
+  filter.excludeMemberMatches = true;
+  QVERIFY(!diagram_filter::matchesElement(project, service, filter));
+  filter.excludeMemberMatches = false;
+  filter.excludedStereotypeIds = {stereotype_catalog::kApiStereotypeId};
+  QVERIFY(!diagram_filter::matchesElement(project, service, filter));
+
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  QVariantMap values;
+  values.insert(QStringLiteral("excludedElementTypes"),
+                QStringList{QStringLiteral("struct"),
+                            QStringLiteral("enumeration")});
+  values.insert(QStringLiteral("includedStereotypeIds"),
+                QStringList{stereotype_catalog::kPrivateStereotypeId,
+                            stereotype_catalog::kLocalStereotypeId});
+  values.insert(QStringLiteral("namePattern"), QStringLiteral("I*"));
+  values.insert(QStringLiteral("memberPattern"), QStringLiteral("*token*"));
+  values.insert(QStringLiteral("excludeMemberMatches"), true);
+  QVERIFY(controller.setDiagramFilter(diagramId, values));
+  QCOMPARE(controller.undoText(), QStringLiteral("Filter diagram"));
+  QCOMPARE(controller.diagramFilter(diagramId).value(
+               QStringLiteral("excludedElementTypes")),
+           values.value(QStringLiteral("excludedElementTypes")));
+
+  const DiagramFilter applied = controller.data().diagrams.first().filter;
+  controller.undo();
+  QVERIFY(!diagram_filter::isActive(controller.data().diagrams.first().filter));
+  controller.redo();
+  QCOMPARE(controller.data().diagrams.first().filter, applied);
+
+  ProjectData persisted = controller.data();
+  persisted.diagrams.first().filter.extra.insert(
+      QStringLiteral("futureFilterOption"), true);
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(temporary.path(), persisted).ok);
+  const LoadOutcome loaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(loaded.ok);
+  QCOMPARE(loaded.project.diagrams.first().filter,
+           persisted.diagrams.first().filter);
 }
 
 void CoreTests::relatedTypeNeighborhoodActionsAreDirectionalAndUndoable() {

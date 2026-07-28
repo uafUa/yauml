@@ -40,9 +40,15 @@ DiagramSnapResult snapDiagramMove(const QList<DiagramNodeGeometry> &moving,
                                   const QPointF &requestedDelta,
                                   const DiagramSnapOptions &options);
 
-// Snaps a lower-right resize while keeping the requested rectangle's top-left
-// corner fixed. Only the actively dragged right and bottom edges participate;
-// otherwise an already-aligned fixed edge could mask a useful resize target.
+// Snaps the actively dragged edges of a resize. The opposite edges remain
+// fixed, and minimumSize constrains candidates before alignment/grid snapping.
+DiagramResizeSnapResult
+snapDiagramResize(const QRectF &requestedGeometry,
+                  const QList<DiagramNodeGeometry> &stationary,
+                  const QSizeF &minimumSize, Qt::Edges movingEdges,
+                  const DiagramSnapOptions &options);
+
+// Compatibility wrapper for callers that resize from the lower-right corner.
 DiagramResizeSnapResult
 snapDiagramBottomRightResize(const QRectF &requestedGeometry,
                              const QList<DiagramNodeGeometry> &stationary,

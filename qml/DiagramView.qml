@@ -278,6 +278,10 @@ Item {
         relationshipToolbox.dismiss()
     }
 
+    function openDiagramFilterDialog() {
+        diagramFilterDialog.openForCanvas(canvas)
+    }
+
     DiagramCanvas {
         id: canvas
         anchors.fill: parent
@@ -447,6 +451,11 @@ Item {
         id: diagramStereotypeDialog
     }
 
+    DiagramFilterDialog {
+        id: diagramFilterDialog
+        objectName: "diagramFilterDialog"
+    }
+
     StereotypeDropdown {
         id: diagramStereotypeDropdown
         showField: false
@@ -468,9 +477,43 @@ Item {
         }
     }
 
+    Button {
+        id: filterIndicator
+        objectName: "diagramFilterIndicator"
+        anchors.right: parent.right
+        anchors.top: parent.top
+        anchors.rightMargin: 10
+        anchors.topMargin: 52
+        z: 10
+        highlighted: canvas.filterActive
+        text: canvas.filterActive
+              ? qsTr("Filtered: %1 of %2").arg(canvas.visibleNodeCount)
+                    .arg(canvas.totalNodeCount)
+              : qsTr("Filter…")
+        Accessible.name: canvas.filterActive
+                         ? qsTr("Diagram filter is active. %1 of %2 items are visible.")
+                               .arg(canvas.visibleNodeCount)
+                               .arg(canvas.totalNodeCount)
+                         : qsTr("Filter diagram items")
+        ToolTip.visible: hovered
+        ToolTip.text: Accessible.name
+        onClicked: root.openDiagramFilterDialog()
+    }
+
     Menu {
         id: canvasMenu
         title: qsTr("Diagram")
+        MenuItem {
+            text: canvas.filterActive
+                  ? qsTr("Edit active filter…") : qsTr("Filter items…")
+            onTriggered: root.openDiagramFilterDialog()
+        }
+        MenuItem {
+            text: qsTr("Clear filter")
+            visible: canvas.filterActive
+            onTriggered: canvas.clearDiagramFilter()
+        }
+        MenuSeparator {}
         Menu {
             title: qsTr("New element")
             CatalogMenuItem {
