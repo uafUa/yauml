@@ -184,9 +184,13 @@ still produce exit code `3`.
 - Applying a GUI preview is one undoable command. The preview is re-planned
   against current model state immediately before application. Source files are
   read-only and are never rewritten by this workflow.
-- Source declarations or inheritance edges that disappear are reported as
-  missing but retained in the model. This deliberately avoids destructive
-  changes before rename/move matching and explicit conflict resolution exist.
+- Unique, high-confidence source renames and namespace/file moves preserve the
+  existing model, package, relationship, and connector IDs. Matching uses the
+  previous import baseline and requires corroborating location, name, or member
+  structure evidence; simultaneous manual edits still produce the normal
+  explicit conflict. Ambiguous candidates are never guessed: unmatched
+  declarations and relationships are reported as separate new/missing records,
+  and missing model content is retained rather than deleted.
 
 ## Diagram interaction
 

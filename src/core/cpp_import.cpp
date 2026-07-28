@@ -1,5 +1,6 @@
 #include "core/cpp_import.h"
 
+#include "core/cpp_import_matching.h"
 #include "core/stereotype_catalog.h"
 
 #include <QDir>
@@ -451,6 +452,134 @@ CppImportPreview planImport(const CppImportPreview &discovery,
       });
   plannedSymbols.append(result.symbols);
 
+  // Clang identities normally provide exact synchronization. A declaration
+  // rename or namespace/file move can change that identity, so compare only
+  // unmatched current declarations with unmatched prior import baselines.
+  // User-edited model fields are never used as source evidence.
+  QSet<QString> currentSymbolIds;
+  for (const auto &symbol : plannedSymbols)
+    currentSymbolIds.insert(symbol.symbolId);
+
+  QList<CppImportedDeclaration> importedMatchCandidates;
+  for (const auto &element : existingElements) {
+    const QJsonObject binding = sourceBinding(element);
+    const QString symbolId =
+        binding.value(QStringLiteral("symbolId")).toString();
+    const QJsonObject lastObject =
+        binding.value(QStringLiteral("lastImported")).toObject();
+    if (symbolId.isEmpty() || currentSymbolIds.contains(symbolId) ||
+        duplicateBindings.contains(symbolId) || lastObject.isEmpty())
+      continue;
+    const ModelElement baseline = elementFromSnapshot(lastObject);
+    if (baseline.type == ElementType::Package)
+      continue;
+    importedMatchCandidates.append(
+        {element.id, symbolId, baseline.name,
+         binding.value(QStringLiteral("file")).toString(),
+         binding.value(QStringLiteral("line")).toInt(), baseline.type,
+         baseline.attributes, baseline.operations});
+  }
+
+  QList<CppSourceSymbol> sourceMatchCandidates;
+  for (const auto &symbol : result.symbols) {
+    if (byBinding.contains(symbol.symbolId) ||
+        duplicateBindings.contains(symbol.symbolId))
+      continue;
+    const ModelElement *sameName = byName.value(symbol.qualifiedName, nullptr);
+    if (sameName && sourceBinding(*sameName).isEmpty())
+      continue;
+    sourceMatchCandidates.append(symbol);
+  }
+
+  QHash<QString, CppDeclarationMatch> declarationMatchBySourceSymbol;
+  QSet<QString> matchedPreviousSymbolIds;
+  for (const auto &match : matchRenamedCppDeclarations(
+           sourceMatchCandidates, importedMatchCandidates)) {
+    declarationMatchBySourceSymbol.insert(match.sourceSymbolId, match);
+    matchedPreviousSymbolIds.insert(match.previousSymbolId);
+  }
+
+  // A namespace has no independent body to compare. Infer its identity only
+  // from already-unambiguous declaration matches below it, and require a
+  // one-to-one mapping in both directions. Namespace merges and splits remain
+  // explicit new/missing package records.
+  QHash<QString, const ModelElement *> elementById;
+  for (const auto &element : existingElements)
+    elementById.insert(element.id, &element);
+  QHash<QString, QSet<QString>> oldPackageIdsByNewSymbol;
+  QHash<QString, QSet<QString>> newSymbolsByOldPackageId;
+  for (const auto &source : result.symbols) {
+    if (duplicateBindings.contains(source.symbolId))
+      continue;
+    const ModelElement *previous =
+        byBinding.value(source.symbolId, nullptr);
+    if (!previous) {
+      const auto match =
+          declarationMatchBySourceSymbol.constFind(source.symbolId);
+      if (match != declarationMatchBySourceSymbol.cend()) {
+        previous =
+            byBinding.value(match->previousSymbolId, nullptr);
+      }
+    }
+    if (!previous)
+      continue;
+    const QJsonObject previousBaseline =
+        sourceBinding(*previous)
+            .value(QStringLiteral("lastImported"))
+            .toObject();
+    QString oldPackageId =
+        elementFromSnapshot(previousBaseline).packageId;
+    QString newNamespacePath = source.namespacePath;
+    while (!oldPackageId.isEmpty() && !newNamespacePath.isEmpty()) {
+      const ModelElement *oldPackage =
+          elementById.value(oldPackageId, nullptr);
+      if (!oldPackage)
+        break;
+      const QJsonObject oldBinding = sourceBinding(*oldPackage);
+      const QString oldPackageSymbol =
+          oldBinding.value(QStringLiteral("symbolId")).toString();
+      const ModelElement oldBaseline = elementFromSnapshot(
+          oldBinding.value(QStringLiteral("lastImported")).toObject());
+      const QString newPackageSymbol =
+          QStringLiteral("cpp-namespace:%1").arg(newNamespacePath);
+      if (oldBaseline.type != ElementType::Package ||
+          oldPackageSymbol.isEmpty() ||
+          currentSymbolIds.contains(oldPackageSymbol) ||
+          duplicateBindings.contains(oldPackageSymbol) ||
+          !packageSymbolByPath.contains(newNamespacePath))
+        break;
+      oldPackageIdsByNewSymbol[newPackageSymbol].insert(oldPackageId);
+      newSymbolsByOldPackageId[oldPackageId].insert(newPackageSymbol);
+
+      const qsizetype separator =
+          newNamespacePath.lastIndexOf(QStringLiteral("::"));
+      newNamespacePath =
+          separator >= 0 ? newNamespacePath.left(separator) : QString{};
+      oldPackageId = oldBaseline.packageId;
+    }
+  }
+  for (auto candidate = oldPackageIdsByNewSymbol.cbegin();
+       candidate != oldPackageIdsByNewSymbol.cend(); ++candidate) {
+    if (candidate.value().size() != 1 ||
+        byBinding.contains(candidate.key()))
+      continue;
+    const QString oldPackageId = *candidate.value().cbegin();
+    if (newSymbolsByOldPackageId.value(oldPackageId).size() != 1)
+      continue;
+    const ModelElement *oldPackage =
+        elementById.value(oldPackageId, nullptr);
+    if (!oldPackage)
+      continue;
+    const QString oldPackageSymbol =
+        sourceBinding(*oldPackage)
+            .value(QStringLiteral("symbolId"))
+            .toString();
+    declarationMatchBySourceSymbol.insert(
+        candidate.key(),
+        {candidate.key(), oldPackageSymbol, oldPackageId, 100});
+    matchedPreviousSymbolIds.insert(oldPackageSymbol);
+  }
+
   QHash<QString, QString> plannedElementIdBySymbol;
   QHash<QString, QString> packageIdByNamespacePath;
   QHash<QString, QString> typeIdByQualifiedName;
@@ -459,6 +588,10 @@ CppImportPreview planImport(const CppImportPreview &discovery,
     if (const auto *bound = byBinding.value(symbol.symbolId, nullptr)) {
       if (!duplicateBindings.contains(symbol.symbolId))
         id = bound->id;
+    } else if (const auto match =
+                   declarationMatchBySourceSymbol.constFind(symbol.symbolId);
+               match != declarationMatchBySourceSymbol.cend()) {
+      id = match->elementId;
     } else if (const auto *sameName =
                    byName.value(symbol.qualifiedName, nullptr)) {
       // The same-name declaration remains an explicit conflict and is never
@@ -513,7 +646,25 @@ CppImportPreview planImport(const CppImportPreview &discovery,
       continue;
     }
 
+    const auto declarationMatch =
+        declarationMatchBySourceSymbol.constFind(symbol.symbolId);
+    const bool identityMatched =
+        declarationMatch != declarationMatchBySourceSymbol.cend();
     const ModelElement *existing = byBinding.value(symbol.symbolId, nullptr);
+    if (!existing && identityMatched) {
+      existing = byBinding.value(declarationMatch->previousSymbolId, nullptr);
+      if (existing) {
+        result.diagnostics.append(importDiagnostic(
+            DiagnosticSeverity::Info,
+            QStringLiteral("Matched C++ declaration %1 to the previously "
+                           "imported %2 after a rename or move")
+                .arg(symbol.qualifiedName,
+                     sourceBinding(*existing)
+                         .value(QStringLiteral("qualifiedName"))
+                         .toString()),
+            existing->id));
+      }
+    }
     if (!existing) {
       const ModelElement *sameName =
           byName.value(symbol.qualifiedName, nullptr);
@@ -593,25 +744,34 @@ CppImportPreview planImport(const CppImportPreview &discovery,
                          "remains authoritative")
               .arg(symbol.qualifiedName),
           existing->id));
-    } else if (userChanged && !sourceChanged && sourceStereotypesChanged) {
+    } else if (userChanged && !sourceChanged &&
+               (sourceStereotypesChanged || identityMatched)) {
       // Apply the explicit source-derived classification without overwriting
-      // unrelated user edits to source-synchronized fields. The baseline
-      // remains the source snapshot, so later conflicts are still detected.
+      // unrelated user edits to source-synchronized fields. A matched
+      // file-only move similarly refreshes provenance while preserving the
+      // user-owned model. The baseline remains the source snapshot, so later
+      // conflicts are still detected.
       ModelElement stereotypeOnlyUpdate = *existing;
-      stereotypeOnlyUpdate.stereotypeIds = item.desiredElement.stereotypeIds;
+      if (sourceStereotypesChanged) {
+        stereotypeOnlyUpdate.stereotypeIds = item.desiredElement.stereotypeIds;
+      }
       stereotypeOnlyUpdate.extra = item.desiredElement.extra;
       item.desiredElement = std::move(stereotypeOnlyUpdate);
       item.action = CppImportAction::Update;
-      item.message =
-          QStringLiteral("Refresh source-derived stereotypes; user-edited "
-                         "model retained");
+      item.message = identityMatched
+                         ? QStringLiteral("Refresh matched C++ declaration "
+                                          "binding; user-edited model retained")
+                         : QStringLiteral("Refresh source-derived stereotypes; "
+                                          "user-edited model retained");
     } else if (userChanged && !sourceChanged) {
       item.action = CppImportAction::UserModified;
       item.message = QStringLiteral("User-edited model retained");
-    } else if (sourceChanged || sourceStereotypesChanged ||
+    } else if (identityMatched || sourceChanged || sourceStereotypesChanged ||
                (converged && userChanged)) {
       item.action = CppImportAction::Update;
-      if (sourceStereotypesChanged && !sourceChanged)
+      if (identityMatched)
+        item.message = QStringLiteral("Matched C++ declaration rename or move");
+      else if (sourceStereotypesChanged && !sourceChanged)
         item.message = QStringLiteral("Source-derived stereotypes changed");
       else
         item.message = converged ? QStringLiteral("Refresh source baseline")
@@ -627,7 +787,8 @@ CppImportPreview planImport(const CppImportPreview &discovery,
     const QJsonObject binding = sourceBinding(element);
     const QString symbolId =
         binding.value(QStringLiteral("symbolId")).toString();
-    if (symbolId.isEmpty() || discoveredIds.contains(symbolId))
+    if (symbolId.isEmpty() || discoveredIds.contains(symbolId) ||
+        matchedPreviousSymbolIds.contains(symbolId))
       continue;
     CppImportItem item;
     item.action = CppImportAction::MissingSource;
@@ -655,6 +816,9 @@ CppImportPreview planImport(const CppImportPreview &discovery,
   for (const auto &item : result.items) {
     if (item.action == CppImportAction::Create)
       elementIdBySymbol.insert(item.symbol.symbolId, item.desiredElement.id);
+    else if (declarationMatchBySourceSymbol.contains(item.symbol.symbolId) &&
+             !item.existingElementId.isEmpty())
+      elementIdBySymbol.insert(item.symbol.symbolId, item.existingElementId);
   }
 
   QHash<QString, const Relationship *> relationshipsByBinding;
@@ -690,6 +854,12 @@ CppImportPreview planImport(const CppImportPreview &discovery,
     }
   }
 
+  QSet<QString> currentRelationshipSymbolIds;
+  for (const auto &source : result.relationships)
+    currentRelationshipSymbolIds.insert(source.symbolId);
+  QSet<QString> matchedPreviousRelationshipIds;
+  QSet<QString> matchedRelationshipModelIds;
+
   QSet<QString> discoveredRelationshipIds;
   for (const auto &source : result.relationships) {
     discoveredRelationshipIds.insert(source.symbolId);
@@ -723,6 +893,49 @@ CppImportPreview planImport(const CppImportPreview &discovery,
 
     const Relationship *existing =
         relationshipsByBinding.value(source.symbolId, nullptr);
+    bool identityMatched = false;
+    if (!existing) {
+      QList<const Relationship *> candidates;
+      for (const auto &candidate : existingRelationships) {
+        const QJsonObject binding = sourceBinding(candidate);
+        const QString previousSymbolId =
+            binding.value(QStringLiteral("symbolId")).toString();
+        if (previousSymbolId.isEmpty() ||
+            currentRelationshipSymbolIds.contains(previousSymbolId) ||
+            duplicateRelationshipBindings.contains(previousSymbolId) ||
+            matchedRelationshipModelIds.contains(candidate.id) ||
+            binding.value(QStringLiteral("kind")).toString() !=
+                source.evidenceKind)
+          continue;
+        const QJsonObject lastObject =
+            binding.value(QStringLiteral("lastImported")).toObject();
+        if (lastObject.isEmpty())
+          continue;
+        const Relationship baseline = relationshipFromSnapshot(lastObject);
+        if (baseline.sourceId != sourceElementId ||
+            baseline.targetId != targetElementId)
+          continue;
+        if (source.evidenceKind == QStringLiteral("member") &&
+            baseline.sourceEnd.role != source.sourceRole)
+          continue;
+        candidates.append(&candidate);
+      }
+      if (candidates.size() == 1) {
+        existing = candidates.first();
+        identityMatched = true;
+        const QString previousSymbolId = sourceBinding(*existing)
+                                             .value(QStringLiteral("symbolId"))
+                                             .toString();
+        matchedPreviousRelationshipIds.insert(previousSymbolId);
+        matchedRelationshipModelIds.insert(existing->id);
+        result.diagnostics.append(importDiagnostic(
+            DiagnosticSeverity::Info,
+            QStringLiteral("Matched C++ relationship %1 → %2 after a "
+                           "declaration rename or move")
+                .arg(source.sourceName, source.targetName),
+            existing->id));
+      }
+    }
     if (!existing) {
       const auto sameRelationship = std::find_if(
           existingRelationships.cbegin(), existingRelationships.cend(),
@@ -795,13 +1008,26 @@ CppImportPreview planImport(const CppImportPreview &discovery,
                          "user-edited model remains authoritative")
               .arg(source.sourceName, source.targetName),
           existing->id));
+    } else if (userChanged && !sourceChanged && identityMatched) {
+      Relationship bindingOnlyUpdate = *existing;
+      bindingOnlyUpdate.extra = item.desiredRelationship.extra;
+      item.desiredRelationship = std::move(bindingOnlyUpdate);
+      item.action = CppImportAction::Update;
+      item.message = QStringLiteral(
+          "Refresh matched C++ relationship binding; user-edited model "
+          "retained");
     } else if (userChanged && !sourceChanged) {
       item.action = CppImportAction::UserModified;
       item.message = QStringLiteral("User-edited relationship retained");
-    } else if (sourceChanged || (converged && userChanged)) {
+    } else if (identityMatched || sourceChanged || (converged && userChanged)) {
       item.action = CppImportAction::Update;
-      item.message = converged ? QStringLiteral("Refresh source baseline")
-                               : QStringLiteral("Source changed");
+      if (identityMatched)
+        item.message =
+            QStringLiteral("Matched relationship after C++ declaration "
+                           "rename or move");
+      else
+        item.message = converged ? QStringLiteral("Refresh source baseline")
+                                 : QStringLiteral("Source changed");
     } else {
       item.action = CppImportAction::Unchanged;
       item.message = QStringLiteral("Already synchronized");
@@ -818,7 +1044,8 @@ CppImportPreview planImport(const CppImportPreview &discovery,
       continue;
     const QString symbolId =
         binding.value(QStringLiteral("symbolId")).toString();
-    if (symbolId.isEmpty() || discoveredRelationshipIds.contains(symbolId))
+    if (symbolId.isEmpty() || discoveredRelationshipIds.contains(symbolId) ||
+        matchedPreviousRelationshipIds.contains(symbolId))
       continue;
     CppRelationshipImportItem item;
     item.action = CppImportAction::MissingSource;

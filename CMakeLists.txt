@@ -54,6 +54,8 @@ add_library(uuml_core STATIC
     src/core/connector_port_layout.h
     src/core/cpp_import.cpp
     src/core/cpp_import.h
+    src/core/cpp_import_matching.cpp
+    src/core/cpp_import_matching.h
     src/core/cpp_import_controller.cpp
     src/core/cpp_import_controller.h
     src/core/diagnostic_model.cpp

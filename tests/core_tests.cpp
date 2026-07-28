@@ -1,6 +1,7 @@
 #include "core/application_settings.h"
 #include "core/connector_port_layout.h"
 #include "core/cpp_import.h"
+#include "core/cpp_import_matching.h"
 #include "core/diagram_filter.h"
 #include "core/json5.h"
 #include "core/presentation_layout.h"
@@ -94,6 +95,8 @@ private slots:
   void saveAsRequiresExplicitProjectReplacement();
   void validationFindsBrokenReferences();
   void commandUndoRedo();
+  void cppRenameMatchingRequiresUniqueHighConfidence();
+  void cppImportPreservesIdsAcrossRenamesAndMoves();
   void cppImportUsesClangAndProtectsUserEdits();
   void cppImportAssignsLocalStereotypeToImplementationTypes();
   void cppInterfacePatternClassifiesRealization();
@@ -857,6 +860,307 @@ void CoreTests::commandUndoRedo() {
   controller.setSelectedName(controller.selectedName());
   QCOMPARE(controller.redoText(), pendingRedo);
   QCOMPARE(stateChanges.count(), 5);
+}
+
+void CoreTests::cppRenameMatchingRequiresUniqueHighConfidence() {
+  CppImportedDeclaration previous;
+  previous.elementId = QStringLiteral("element-old");
+  previous.symbolId = QStringLiteral("symbol-old");
+  previous.qualifiedName = QStringLiteral("old_space::Service");
+  previous.filePath = QStringLiteral("C:/repo/service.hpp");
+  previous.line = 20;
+  previous.elementType = ElementType::Class;
+  previous.attributes = {QStringLiteral("- state: int")};
+  previous.operations = {QStringLiteral("+ run(): void")};
+
+  CppSourceSymbol renamed;
+  renamed.symbolId = QStringLiteral("symbol-new");
+  renamed.qualifiedName = QStringLiteral("new_space::RenamedService");
+  renamed.filePath = previous.filePath;
+  renamed.line = previous.line;
+  renamed.elementType = previous.elementType;
+  renamed.attributes = previous.attributes;
+  renamed.operations = previous.operations;
+
+  QList<CppDeclarationMatch> matches =
+      matchRenamedCppDeclarations({renamed}, {previous});
+  QCOMPARE(matches.size(), 1);
+  QCOMPARE(matches.first().sourceSymbolId, renamed.symbolId);
+  QCOMPARE(matches.first().previousSymbolId, previous.symbolId);
+  QCOMPARE(matches.first().elementId, previous.elementId);
+
+  CppSourceSymbol namespaceMoved = renamed;
+  namespaceMoved.symbolId = QStringLiteral("symbol-namespace-moved");
+  namespaceMoved.qualifiedName = QStringLiteral("new_space::Service");
+  namespaceMoved.line += 3;
+  matches = matchRenamedCppDeclarations({namespaceMoved}, {previous});
+  QCOMPARE(matches.size(), 1);
+
+  CppSourceSymbol fileMoved = renamed;
+  fileMoved.symbolId = QStringLiteral("symbol-file-moved");
+  fileMoved.qualifiedName = previous.qualifiedName;
+  fileMoved.filePath = QStringLiteral("C:/repo/public/service.hpp");
+  matches = matchRenamedCppDeclarations({fileMoved}, {previous});
+  QCOMPARE(matches.size(), 1);
+
+  CppImportedDeclaration equallyLikely = previous;
+  equallyLikely.elementId = QStringLiteral("element-other");
+  equallyLikely.symbolId = QStringLiteral("symbol-other");
+  matches = matchRenamedCppDeclarations({renamed}, {previous, equallyLikely});
+  QVERIFY(matches.isEmpty());
+
+  CppSourceSymbol wrongKind = renamed;
+  wrongKind.elementType = ElementType::Struct;
+  matches = matchRenamedCppDeclarations({wrongKind}, {previous});
+  QVERIFY(matches.isEmpty());
+
+  CppImportedDeclaration weakPrevious = previous;
+  weakPrevious.attributes.clear();
+  weakPrevious.operations.clear();
+  CppSourceSymbol weakMove = fileMoved;
+  weakMove.attributes.clear();
+  weakMove.operations.clear();
+  matches = matchRenamedCppDeclarations({weakMove}, {weakPrevious});
+  QVERIFY(matches.isEmpty());
+
+  CppSourceSymbol locationOnly = renamed;
+  locationOnly.attributes.clear();
+  locationOnly.operations.clear();
+  locationOnly.qualifiedName = QStringLiteral("unrelated::Replacement");
+  matches = matchRenamedCppDeclarations({locationOnly}, {weakPrevious});
+  QVERIFY(matches.isEmpty());
+}
+
+void CoreTests::cppImportPreservesIdsAcrossRenamesAndMoves() {
+  if (!CppImportService::available())
+    QSKIP("This build was configured without libclang");
+
+  QTemporaryDir sourceDirectory;
+  QVERIFY(sourceDirectory.isValid());
+  const QString sourcePath =
+      sourceDirectory.filePath(QStringLiteral("renames.cpp"));
+  const auto writeSource = [&](const QByteArray &namespaceName,
+                               const QByteArray &baseName,
+                               const QByteArray &derivedName) {
+    writeTestFile(sourcePath, QByteArray("namespace ") + namespaceName +
+                                  QByteArray(" {\n"
+                                             "class ") +
+                                  baseName +
+                                  QByteArray(" {\n"
+                                             "public:\n"
+                                             "    virtual void run();\n"
+                                             "};\n"
+                                             "class ") +
+                                  derivedName + QByteArray(" : public ") +
+                                  baseName +
+                                  QByteArray(" {\n"
+                                             "public:\n"
+                                             "    void work();\n"
+                                             "};\n"
+                                             "}\n"));
+  };
+  writeSource("old_space", "Base", "Worker");
+
+  QJsonObject command;
+  command.insert(QStringLiteral("directory"), sourceDirectory.path());
+  command.insert(QStringLiteral("file"), sourcePath);
+  command.insert(QStringLiteral("arguments"),
+                 QJsonArray{QStringLiteral("clang++"),
+                            QStringLiteral("-std=c++20"), sourcePath});
+  writeTestFile(
+      sourceDirectory.filePath(QStringLiteral("compile_commands.json")),
+      QJsonDocument(QJsonArray{command}).toJson(QJsonDocument::Indented));
+
+  ProjectController controller;
+  CppImportPreview initial = CppImportService::preview(
+      sourceDirectory.path(), controller.data().elements,
+      controller.data().relationships);
+  QVERIFY(initial.ok);
+  QCOMPARE(controller.applyCppImportPlan(initial), 4);
+
+  const auto importedElement = [&](const QString &name) {
+    return std::find_if(
+        controller.data().elements.cbegin(), controller.data().elements.cend(),
+        [&](const ModelElement &element) { return element.name == name; });
+  };
+  const auto oldBase = importedElement(QStringLiteral("old_space::Base"));
+  const auto oldWorker = importedElement(QStringLiteral("old_space::Worker"));
+  const auto oldPackage = importedElement(QStringLiteral("old_space"));
+  QVERIFY(oldBase != controller.data().elements.cend());
+  QVERIFY(oldWorker != controller.data().elements.cend());
+  QVERIFY(oldPackage != controller.data().elements.cend());
+  const QString baseId = oldBase->id;
+  const QString workerId = oldWorker->id;
+  const QString packageId = oldPackage->id;
+
+  const QString diagramId = controller.data().diagrams.first().id;
+  QCOMPARE(controller.addElementsToDiagram(diagramId, {baseId, workerId}, 40.0,
+                                           40.0),
+           2);
+  QCOMPARE(controller.data().diagrams.first().connectors.size(), 1);
+  QSet<QString> relationshipIds;
+  for (const auto &relationship : controller.data().relationships)
+    relationshipIds.insert(relationship.id);
+  QSet<QString> connectorIds;
+  for (const auto &connector : controller.data().diagrams.first().connectors)
+    connectorIds.insert(connector.id);
+
+  writeSource("new_space", "Foundation", "Agent");
+
+  // A simultaneous user edit and source rename is still a normal explicit
+  // three-way conflict; matching does not weaken user authority.
+  controller.editText(workerId, QStringLiteral("name"), -1,
+                      QStringLiteral("Manually named worker"));
+  const CppImportPreview conflictPreview = CppImportService::preview(
+      sourceDirectory.path(), controller.data().elements,
+      controller.data().relationships);
+  const auto conflictedAgent = std::find_if(
+      conflictPreview.items.cbegin(), conflictPreview.items.cend(),
+      [](const CppImportItem &item) {
+        return item.symbol.qualifiedName == QStringLiteral("new_space::Agent");
+      });
+  QVERIFY(conflictedAgent != conflictPreview.items.cend());
+  QVERIFY(conflictedAgent->action == CppImportAction::Conflict);
+  QVERIFY(conflictedAgent->isResolvableConflict());
+  QCOMPARE(conflictedAgent->existingElementId, workerId);
+  controller.undo();
+
+  ProjectData packageConflictProject = controller.data();
+  auto manuallyNamedPackage =
+      std::find_if(packageConflictProject.elements.begin(),
+                   packageConflictProject.elements.end(),
+                   [&](const ModelElement &element) {
+                     return element.id == packageId;
+                   });
+  QVERIFY(manuallyNamedPackage != packageConflictProject.elements.end());
+  manuallyNamedPackage->name = QStringLiteral("Manually named package");
+  const CppImportPreview packageConflict = CppImportService::preview(
+      sourceDirectory.path(), packageConflictProject.elements,
+      packageConflictProject.relationships);
+  const auto conflictedPackage = std::find_if(
+      packageConflict.items.cbegin(), packageConflict.items.cend(),
+      [](const CppImportItem &item) {
+        return item.symbol.qualifiedName == QStringLiteral("new_space");
+      });
+  QVERIFY(conflictedPackage != packageConflict.items.cend());
+  QVERIFY(conflictedPackage->action == CppImportAction::Conflict);
+  QCOMPARE(conflictedPackage->existingElementId, packageId);
+
+  // Applying the independently safe type updates must not make a deferred
+  // package conflict lose its inferred identity on the next preview.
+  QVERIFY(CppImportService::apply(packageConflictProject, packageConflict) > 0);
+  const CppImportPreview repeatedPackageConflict = CppImportService::preview(
+      sourceDirectory.path(), packageConflictProject.elements,
+      packageConflictProject.relationships);
+  const auto repeatedPackage = std::find_if(
+      repeatedPackageConflict.items.cbegin(),
+      repeatedPackageConflict.items.cend(), [](const CppImportItem &item) {
+        return item.symbol.qualifiedName == QStringLiteral("new_space");
+      });
+  QVERIFY(repeatedPackage != repeatedPackageConflict.items.cend());
+  QVERIFY(repeatedPackage->action == CppImportAction::Conflict);
+  QCOMPARE(repeatedPackage->existingElementId, packageId);
+
+  const ProjectData beforeRename = controller.data();
+  const CppImportPreview renamed = CppImportService::preview(
+      sourceDirectory.path(), controller.data().elements,
+      controller.data().relationships);
+  QVERIFY(renamed.ok);
+  const auto renamedItem = [&](const QString &name) {
+    return std::find_if(renamed.items.cbegin(), renamed.items.cend(),
+                        [&](const CppImportItem &item) {
+                          return item.symbol.qualifiedName == name;
+                        });
+  };
+  const auto renamedBase = renamedItem(QStringLiteral("new_space::Foundation"));
+  const auto renamedWorker = renamedItem(QStringLiteral("new_space::Agent"));
+  const auto renamedPackage = renamedItem(QStringLiteral("new_space"));
+  QVERIFY(renamedBase != renamed.items.cend());
+  QVERIFY(renamedWorker != renamed.items.cend());
+  QVERIFY(renamedPackage != renamed.items.cend());
+  QVERIFY(renamedBase->action == CppImportAction::Update);
+  QVERIFY(renamedWorker->action == CppImportAction::Update);
+  QVERIFY(renamedPackage->action == CppImportAction::Update);
+  QCOMPARE(renamedBase->existingElementId, baseId);
+  QCOMPARE(renamedWorker->existingElementId, workerId);
+  QCOMPARE(renamedPackage->existingElementId, packageId);
+  QCOMPARE(renamedBase->desiredElement.id, baseId);
+  QCOMPARE(renamedWorker->desiredElement.id, workerId);
+  QCOMPARE(renamedPackage->desiredElement.id, packageId);
+  QVERIFY(std::none_of(renamed.items.cbegin(), renamed.items.cend(),
+                       [](const CppImportItem &item) {
+                         return item.action == CppImportAction::MissingSource &&
+                                (item.symbol.qualifiedName ==
+                                     QStringLiteral("old_space::Base") ||
+                                 item.symbol.qualifiedName ==
+                                     QStringLiteral("old_space::Worker"));
+                       }));
+
+  QCOMPARE(renamed.relationshipItems.size(), 1);
+  for (const auto &item : renamed.relationshipItems) {
+    QVERIFY(item.action == CppImportAction::Update);
+    QVERIFY(relationshipIds.contains(item.existingRelationshipId));
+    QCOMPARE(item.desiredRelationship.id, item.existingRelationshipId);
+  }
+
+  QCOMPARE(controller.applyCppImportPlan(renamed), 4);
+  const auto newBase = importedElement(QStringLiteral("new_space::Foundation"));
+  const auto newWorker = importedElement(QStringLiteral("new_space::Agent"));
+  const auto newPackage = importedElement(QStringLiteral("new_space"));
+  QVERIFY(newBase != controller.data().elements.cend());
+  QVERIFY(newWorker != controller.data().elements.cend());
+  QVERIFY(newPackage != controller.data().elements.cend());
+  QCOMPARE(newBase->id, baseId);
+  QCOMPARE(newWorker->id, workerId);
+  QCOMPARE(newPackage->id, packageId);
+  QCOMPARE(controller.data().elements.size(), 3);
+  QCOMPARE(newBase->extra.value(QStringLiteral("sourceBinding"))
+               .toObject()
+               .value(QStringLiteral("symbolId"))
+               .toString(),
+           renamedBase->symbol.symbolId);
+  QSet<QString> updatedRelationshipIds;
+  for (const auto &relationship : controller.data().relationships)
+    updatedRelationshipIds.insert(relationship.id);
+  QCOMPARE(updatedRelationshipIds, relationshipIds);
+  QCOMPARE(controller.data()
+               .relationships.first()
+               .extra.value(QStringLiteral("sourceBinding"))
+               .toObject()
+               .value(QStringLiteral("symbolId"))
+               .toString(),
+           renamed.relationshipItems.first().source.symbolId);
+  QSet<QString> updatedConnectorIds;
+  for (const auto &connector : controller.data().diagrams.first().connectors)
+    updatedConnectorIds.insert(connector.id);
+  QCOMPARE(updatedConnectorIds, connectorIds);
+
+  const CppImportPreview synchronized = CppImportService::preview(
+      sourceDirectory.path(), controller.data().elements,
+      controller.data().relationships);
+  QCOMPARE(synchronized.applicableCount(), 0);
+  QCOMPARE(synchronized.conflictCount(), 0);
+  const auto synchronizedAgent = std::find_if(
+      synchronized.items.cbegin(), synchronized.items.cend(),
+      [](const CppImportItem &item) {
+        return item.symbol.qualifiedName == QStringLiteral("new_space::Agent");
+      });
+  QVERIFY(synchronizedAgent != synchronized.items.cend());
+  QVERIFY(synchronizedAgent->action == CppImportAction::Unchanged);
+  QCOMPARE(synchronized.relationshipItems.size(), 1);
+  QVERIFY(synchronized.relationshipItems.first().action ==
+          CppImportAction::Unchanged);
+
+  controller.undo();
+  QCOMPARE(controller.data(), beforeRename);
+  controller.redo();
+  const auto redoneBase =
+      importedElement(QStringLiteral("new_space::Foundation"));
+  const auto redoneWorker = importedElement(QStringLiteral("new_space::Agent"));
+  QVERIFY(redoneBase != controller.data().elements.cend());
+  QVERIFY(redoneWorker != controller.data().elements.cend());
+  QCOMPARE(redoneBase->id, baseId);
+  QCOMPARE(redoneWorker->id, workerId);
 }
 
 void CoreTests::cppImportUsesClangAndProtectsUserEdits() {

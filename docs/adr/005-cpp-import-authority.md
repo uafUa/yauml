@@ -90,18 +90,18 @@ the current evidence is a member or operation signature, so preference-driven
 or source-driven reclassification updates the existing relationship through the
 same baseline and conflict rules.
 
-Until rename/move matching and explicit resolution are available, a bound
-declaration or relationship that disappears from discovery is reported but not
-deleted. This prevents incomplete best-effort parsing or a partial compilation
-database from causing destructive model changes.
+When a bound declaration or relationship disappears from discovery, it is
+reported but not deleted unless a unique, high-confidence rename/move match is
+available. This prevents incomplete best-effort parsing or a partial
+compilation database from causing destructive model changes.
 
 ## Consequences
 
 The initial importer is conservative and repeatable. Manual model edits survive
 source evolution, except for the explicitly source-derived `local`
 classification, and every conflict is visible in the existing log panel. The
-stored baseline also provides the foundation for later explicit resolution,
-rename matching, and continuous synchronization.
+stored baseline also drives explicit conflict resolution and conservative
+rename/move matching during continuous synchronization.
 
 The source-folder mode trades compiler-exact preprocessing for an immediately
 usable import: missing third-party headers and unavailable build-specific
@@ -111,6 +111,10 @@ Projects persist the normalized folder list, and legacy singular source-root
 settings are read compatibly. Each selected subtree automatically gains
 compiler-exact flags if a compilation database is added later.
 
-Clang symbol identities can change on source renames or moves. Those cases are
-intentionally deferred to a later rename-matching slice rather than guessed in
-this foundation.
+Clang symbol identities can change on source renames or moves. The importer
+reconnects only unique mutual-best declaration matches supported by at least
+two independent forms of evidence among source location, language-level name,
+and imported member structure. Namespace packages are reconnected only through
+a one-to-one mapping of matched descendants; semantic relationships are
+reconnected by their stable model endpoints and evidence kind. Ambiguous cases
+remain separate new/missing preview records rather than being guessed.

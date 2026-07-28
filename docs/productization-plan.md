@@ -1,10 +1,9 @@
 # uuml Productization Plan
 
 Status: command foundation, the Phase 3 core, contextual toolboxes,
-relationship annotations, and stereotypes are implemented. Phase 4 source
-import and relationship inference are implemented, with
-synchronization hardening in progress. Phase 5 release and persistence
-hardening is underway
+relationship annotations, and stereotypes are implemented. Phase 4 C++ import
+and synchronization are implemented. Phase 5 release, scale, and persistence
+hardening is underway.
 
 The product owner accepted the MVP on 2026-07-21. This plan turns the broader
 architecture roadmap into bounded, testable delivery tranches. MVP audit notes
@@ -371,7 +370,7 @@ history memory grow with total project size rather than the size of each edit.
   Persistence, schema migration, command undo/redo, validation, canvas
   interaction, and application smoke tests protect the delivered behavior.
 
-## Phase 4: C++ import and synchronization — in progress
+## Phase 4: C++ import and synchronization — complete
 
 - Multi-folder-first libclang AST indexing is implemented for classes, structs,
   fields, methods, base relationships, member types, and operation-signature
@@ -438,7 +437,16 @@ history memory grow with total project size rather than the size of each edit.
   Headless preview/import exposes the same bulk policies through an explicit
   `--conflicts` option and retains exit code 3 while any unsafe or unselected
   conflict remains unresolved.
-- Add rename/move matching in a subsequent slice.
+- Conservative rename/move matching is implemented for imported declarations.
+  It compares only unmatched source declarations with their previous import
+  baselines and requires a unique mutual-best match supported by at least two
+  independent evidence categories: source location, language-level name, and
+  member structure. One-to-one descendant evidence carries renamed namespace
+  package identity, while endpoint and evidence matching carries relationship
+  identity. Model IDs therefore remain stable for diagrams, styles, folders,
+  annotations, and connector presentations. Ambiguous matches remain explicit
+  new/missing records and are never guessed. All matched updates still use the
+  normal three-way user-authority and conflict-resolution rules.
 
 ## Phase 5: scale and hardening
 
