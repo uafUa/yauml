@@ -199,12 +199,20 @@ private:
 // Adding a presentation can materialize several semantic relationships at
 // once. Existing endpoint nodes may therefore need denser snap-point sets in
 // the same undoable command.
+struct ConnectorAnchorOffsetChange {
+  QString connectorId;
+  bool source = false;
+  qreal before = 0.5;
+  qreal after = 0.5;
+};
+
 struct NodePortSnapPointChange {
   QString nodeId;
   int beforeHorizontal = 1;
   int beforeVertical = 1;
   int afterHorizontal = 1;
   int afterVertical = 1;
+  QList<ConnectorAnchorOffsetChange> anchorChanges;
 };
 
 class AddElementToDiagramCommand final : public ProjectCommand {
@@ -465,21 +473,15 @@ private:
 class SetNodePortSnapPointsCommand final : public ProjectCommand {
 public:
   SetNodePortSnapPointsCommand(ProjectController *controller, QString diagramId,
-                               QString nodeId, int beforeHorizontal,
-                               int beforeVertical, int afterHorizontal,
-                               int afterVertical);
+                               NodePortSnapPointChange change);
 
 private:
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
-  void apply(ProjectData &project, int horizontal, int vertical);
+  void apply(ProjectData &project, bool forward);
 
   QString m_diagramId;
-  QString m_nodeId;
-  int m_beforeHorizontal;
-  int m_beforeVertical;
-  int m_afterHorizontal;
-  int m_afterVertical;
+  NodePortSnapPointChange m_change;
 };
 
 class SetDiagramCompartmentVisibilityCommand final : public ProjectCommand {

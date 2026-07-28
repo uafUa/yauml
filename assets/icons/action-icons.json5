@@ -347,6 +347,16 @@
         contexts: ["presentation toolbox"],
         svg: "",
       },
+      copyToDiagram: {
+        label: "Copy selected presentations to another diagram",
+        contexts: ["element context menu", "container context menu"],
+        svg: "",
+      },
+      moveToDiagram: {
+        label: "Move selected presentations to another diagram",
+        contexts: ["element context menu", "container context menu"],
+        svg: "",
+      },
       removeElement: {
         label: "Remove element presentation from diagram",
         contexts: ["element context menu", "Delete shortcut"],

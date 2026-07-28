@@ -310,6 +310,16 @@ Item {
         portSnapPointsDialog.open()
     }
 
+    function openPresentationTransferDialog(movePresentations) {
+        presentationTransferDialog.movePresentations = movePresentations
+        presentationTransferDialog.targets =
+                projectController.diagramTransferTargets(root.diagramId)
+        transferTarget.currentIndex =
+                presentationTransferDialog.targets.length > 1 ? 1 : 0
+        transferDiagramName.clear()
+        presentationTransferDialog.open()
+    }
+
     DiagramCanvas {
         id: canvas
         anchors.fill: parent
@@ -454,6 +464,60 @@ Item {
                 validator: RegularExpressionValidator {
                     regularExpression: /^(?:[13579]|[12][13579]|31)$/
                 }
+            }
+        }
+    }
+
+    CatalogDialog {
+        id: presentationTransferDialog
+        property bool movePresentations: false
+        property var targets: []
+
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(430, parent.width - 40)
+        modal: true
+        focus: true
+        title: movePresentations
+               ? qsTr("Move presentations to diagram")
+               : qsTr("Copy presentations to diagram")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onAccepted: {
+            const targetDiagramId = canvas.transferSelectedPresentations(
+                        transferTarget.currentValue,
+                        movePresentations,
+                        transferDiagramName.text)
+            if (targetDiagramId.length > 0)
+                workspaceController.activeDiagramId = targetDiagramId
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: presentationTransferDialog.movePresentations
+                      ? qsTr("Move the selected presentations to:")
+                      : qsTr("Copy the selected presentations to:")
+            }
+            ComboBox {
+                id: transferTarget
+                Layout.fillWidth: true
+                model: presentationTransferDialog.targets
+                textRole: "name"
+                valueRole: "id"
+            }
+            Label {
+                visible: transferTarget.currentValue === ""
+                text: qsTr("New diagram name (optional)")
+            }
+            TextField {
+                id: transferDiagramName
+                visible: transferTarget.currentValue === ""
+                Layout.fillWidth: true
+                placeholderText: qsTr("Use the default name")
+                Keys.onReturnPressed: presentationTransferDialog.accept()
             }
         }
     }
@@ -711,6 +775,17 @@ Item {
         }
         MenuSeparator {}
         CatalogMenuItem {
+            catalogId: "presentation.copyToDiagram"
+            text: qsTr("Copy selected to diagram…")
+            onTriggered: root.openPresentationTransferDialog(false)
+        }
+        CatalogMenuItem {
+            catalogId: "presentation.moveToDiagram"
+            text: qsTr("Move selected to diagram…")
+            onTriggered: root.openPresentationTransferDialog(true)
+        }
+        MenuSeparator {}
+        CatalogMenuItem {
             catalogId: "presentation.removeElement"
             text: canvas.selectedNodeCount > 1
                   ? qsTr("Remove presentations from diagram")
@@ -810,6 +885,17 @@ Item {
             }
             onManageRequested: presentationStyleDialog.openFor(
                                    canvas.selectedStyleId)
+        }
+        MenuSeparator {}
+        CatalogMenuItem {
+            catalogId: "presentation.copyToDiagram"
+            text: qsTr("Copy selected to diagram…")
+            onTriggered: root.openPresentationTransferDialog(false)
+        }
+        CatalogMenuItem {
+            catalogId: "presentation.moveToDiagram"
+            text: qsTr("Move selected to diagram…")
+            onTriggered: root.openPresentationTransferDialog(true)
         }
         MenuSeparator {}
         CatalogMenuItem {

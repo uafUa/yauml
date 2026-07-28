@@ -224,6 +224,9 @@ public:
   Q_INVOKABLE void arrangeSelection(const QString &operation);
   Q_INVOKABLE void nudgeSelection(qreal deltaX, qreal deltaY);
   Q_INVOKABLE void removeSelectedPresentations();
+  Q_INVOKABLE QString
+  transferSelectedPresentations(const QString &targetDiagramId, bool move,
+                                const QString &newDiagramName = {});
   Q_INVOKABLE void deleteSelectedConnector();
   Q_INVOKABLE void clearCanvasSelection();
   Q_INVOKABLE void refreshTheme();

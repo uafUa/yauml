@@ -52,6 +52,31 @@ qreal snapOffset(qreal freeOffset, qreal sideLength, int pointCount,
   return nearestOffset;
 }
 
+qreal remapAttachedOffset(qreal offset, int beforePointCount,
+                          int afterPointCount, bool *attached) {
+  if (attached)
+    *attached = false;
+  const QVector<qreal> before = snapOffsets(beforePointCount);
+  const QVector<qreal> after = snapOffsets(afterPointCount);
+  constexpr qreal kAttachedOffsetTolerance = 0.000001;
+  int beforeIndex = -1;
+  for (int index = 0; index < before.size(); ++index) {
+    if (std::abs(before.at(index) - offset) <= kAttachedOffsetTolerance) {
+      beforeIndex = index;
+      break;
+    }
+  }
+  if (beforeIndex < 0)
+    return offset;
+
+  if (attached)
+    *attached = true;
+  const qsizetype ordinal = beforeIndex - before.size() / 2;
+  const qsizetype afterIndex =
+      std::clamp(after.size() / 2 + ordinal, qsizetype{0}, after.size() - 1);
+  return after.at(afterIndex);
+}
+
 int snapPointCountForSide(const NodePresentation &node, ConnectorSide side) {
   switch (side) {
   case ConnectorSide::Top:

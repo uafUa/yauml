@@ -136,8 +136,10 @@ private slots:
   void relationshipTypesAndPresentationRemoval();
   void connectorAnchorUndoRedo();
   void nodePortSnapPointsUndoRedo();
+  void nodePortSnapPointChangesPreserveAttachedAnchors();
   void connectorRoutingUndoRedo();
   void connectorBendPointsUndoRedo();
+  void diagramPresentationTransferPreservesLayoutAndIsUndoable();
   void multipleDiagramWorkspace();
   void detachedWindowModelAndGeometryRemainStable();
   void closingAllDetachedWindowsReturnsTheirDiagrams();
@@ -3985,6 +3987,58 @@ void CoreTests::nodePortSnapPointsUndoRedo() {
            connector_ports::kMaximumSnapPointCount);
 }
 
+void CoreTests::nodePortSnapPointChangesPreserveAttachedAnchors() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  controller.addElement(QStringLiteral("class"), diagramId);
+  controller.addElement(QStringLiteral("class"), diagramId);
+  controller.addElement(QStringLiteral("class"), diagramId);
+  const auto initialNodes = controller.data().diagrams.first().nodes;
+  const QString sourceNodeId = initialNodes.at(0).id;
+
+  controller.setNodePortSnapPoints(diagramId, sourceNodeId, 1, 3);
+  const QString attachedConnectorId = controller.createRelationship(
+      diagramId, sourceNodeId, initialNodes.at(1).id,
+      QStringLiteral("dependency"));
+  const QString freeConnectorId = controller.createRelationship(
+      diagramId, sourceNodeId, initialNodes.at(2).id,
+      QStringLiteral("dependency"));
+  QVERIFY(!attachedConnectorId.isEmpty());
+  QVERIFY(!freeConnectorId.isEmpty());
+
+  controller.updateConnectorAnchor(diagramId, attachedConnectorId, true,
+                                   QStringLiteral("right"), 0.25);
+  controller.updateConnectorAnchor(diagramId, freeConnectorId, true,
+                                   QStringLiteral("right"), 0.29);
+  const auto sourceAnchorOffset = [&](const QString &connectorId) {
+    const auto *connector =
+        findConnector(controller.data().diagrams.first(), connectorId);
+    return connector ? connector->sourceAnchor.offset : -1.0;
+  };
+
+  controller.setNodePortSnapPoints(diagramId, sourceNodeId, 1, 5);
+  QVERIFY(std::abs(sourceAnchorOffset(attachedConnectorId) - (1.0 / 3.0)) <
+          0.000001);
+  QVERIFY(std::abs(sourceAnchorOffset(freeConnectorId) - 0.29) < 0.000001);
+
+  controller.undo();
+  QVERIFY(std::abs(sourceAnchorOffset(attachedConnectorId) - 0.25) < 0.000001);
+  QVERIFY(std::abs(sourceAnchorOffset(freeConnectorId) - 0.29) < 0.000001);
+  controller.redo();
+  QVERIFY(std::abs(sourceAnchorOffset(attachedConnectorId) - (1.0 / 3.0)) <
+          0.000001);
+
+  // Reducing the number of points keeps an attached endpoint attached to the
+  // nearest available ordinal; undo restores the exact former point.
+  controller.updateConnectorAnchor(diagramId, attachedConnectorId, true,
+                                   QStringLiteral("right"), 1.0 / 6.0);
+  controller.setNodePortSnapPoints(diagramId, sourceNodeId, 1, 3);
+  QVERIFY(std::abs(sourceAnchorOffset(attachedConnectorId) - 0.25) < 0.000001);
+  controller.undo();
+  QVERIFY(std::abs(sourceAnchorOffset(attachedConnectorId) - (1.0 / 6.0)) <
+          0.000001);
+}
+
 void CoreTests::connectorRoutingUndoRedo() {
   ProjectController controller;
   const QString diagramId = controller.data().diagrams.first().id;
@@ -4080,6 +4134,140 @@ void CoreTests::connectorBendPointsUndoRedo() {
   QCOMPARE(connector()->bendPoints, movedBends);
   controller.undo();
   QCOMPARE(connector()->bendPoints, movedBends);
+}
+
+void CoreTests::diagramPresentationTransferPreservesLayoutAndIsUndoable() {
+  ProjectController controller;
+  const QString sourceDiagramId = controller.data().diagrams.first().id;
+  const QString firstElement = controller.addElement(QStringLiteral("class"));
+  const QString secondElement = controller.addElement(QStringLiteral("struct"));
+  const QString rootFolder = controller.addBrowserFolder(
+      QStringLiteral("model"), {}, QStringLiteral("Architecture"));
+  const QString childFolder = controller.addBrowserFolder(
+      QStringLiteral("folder"), rootFolder, QStringLiteral("Details"));
+
+  const auto itemJson = [](const QString &kind, const QString &id) {
+    return QString::fromUtf8(
+        QJsonDocument(QJsonArray{QJsonObject{{QStringLiteral("kind"), kind},
+                                             {QStringLiteral("id"), id}}})
+            .toJson(QJsonDocument::Compact));
+  };
+  QVERIFY(controller.moveBrowserItems(
+      itemJson(QStringLiteral("element"), firstElement),
+      QStringLiteral("folder"), rootFolder));
+  QVERIFY(controller.moveBrowserItems(
+      itemJson(QStringLiteral("element"), secondElement),
+      QStringLiteral("folder"), childFolder));
+  QCOMPARE(controller.addTreeItemsToDiagram(
+               sourceDiagramId, {firstElement, secondElement},
+               itemJson(QStringLiteral("folder"), rootFolder), 120.0, 90.0),
+           4);
+
+  const Diagram &populatedSource = controller.data().diagrams.first();
+  const auto sourceRoot = std::find_if(
+      populatedSource.containers.cbegin(), populatedSource.containers.cend(),
+      [&](const ContainerPresentation &container) {
+        return container.subjectId == rootFolder;
+      });
+  QVERIFY(sourceRoot != populatedSource.containers.cend());
+  const QString rootPresentationId = sourceRoot->id;
+  const QString connectorId = controller.createRelationship(
+      sourceDiagramId, populatedSource.nodes.at(0).id,
+      populatedSource.nodes.at(1).id, QStringLiteral("aggregation"));
+  QVERIFY(!connectorId.isEmpty());
+  controller.setConnectorRouting(sourceDiagramId, connectorId,
+                                 QStringLiteral("orthogonal"));
+  controller.updateConnectorAnchor(sourceDiagramId, connectorId, true,
+                                   QStringLiteral("right"), 0.5);
+  controller.insertConnectorBendPoint(sourceDiagramId, connectorId, 0, 330.0,
+                                      170.0);
+  const Diagram sourceBeforeTransfer = controller.data().diagrams.first();
+  const ConnectorPresentation sourceConnector =
+      *findConnector(sourceBeforeTransfer, connectorId);
+
+  const QString targetDiagramId = controller.addDiagram();
+  QCOMPARE(controller.transferDiagramPresentations(sourceDiagramId,
+                                                   targetDiagramId, {},
+                                                   {rootPresentationId}, false),
+           targetDiagramId);
+  QCOMPARE(controller.data().diagrams.first(), sourceBeforeTransfer);
+  const Diagram *copiedTarget = findDiagram(controller.data(), targetDiagramId);
+  QVERIFY(copiedTarget);
+  QCOMPARE(copiedTarget->nodes.size(), 2);
+  QCOMPARE(copiedTarget->containers.size(), 2);
+  QCOMPARE(copiedTarget->connectors.size(), 1);
+  QCOMPARE(copiedTarget->connectors.first().relationshipId,
+           sourceConnector.relationshipId);
+  QVERIFY(copiedTarget->connectors.first().routing == sourceConnector.routing);
+  QCOMPARE(copiedTarget->connectors.first().sourceAnchor,
+           sourceConnector.sourceAnchor);
+  QCOMPARE(copiedTarget->connectors.first().targetAnchor,
+           sourceConnector.targetAnchor);
+  QCOMPARE(copiedTarget->connectors.first().bendPoints,
+           sourceConnector.bendPoints);
+
+  for (const auto &sourceNode : sourceBeforeTransfer.nodes) {
+    const auto targetNode =
+        std::find_if(copiedTarget->nodes.cbegin(), copiedTarget->nodes.cend(),
+                     [&](const NodePresentation &candidate) {
+                       return candidate.elementId == sourceNode.elementId;
+                     });
+    QVERIFY(targetNode != copiedTarget->nodes.cend());
+    QCOMPARE(targetNode->geometry, sourceNode.geometry);
+    QCOMPARE(targetNode->horizontalPortSnapPoints,
+             sourceNode.horizontalPortSnapPoints);
+    QCOMPARE(targetNode->verticalPortSnapPoints,
+             sourceNode.verticalPortSnapPoints);
+    QCOMPARE(targetNode->showAttributes, sourceNode.showAttributes);
+    QCOMPARE(targetNode->showOperations, sourceNode.showOperations);
+    QCOMPARE(targetNode->styleId, sourceNode.styleId);
+    QCOMPARE(targetNode->extra, sourceNode.extra);
+  }
+  const auto copiedRoot = std::find_if(
+      copiedTarget->containers.cbegin(), copiedTarget->containers.cend(),
+      [&](const ContainerPresentation &container) {
+        return container.subjectId == rootFolder;
+      });
+  const auto copiedChild = std::find_if(
+      copiedTarget->containers.cbegin(), copiedTarget->containers.cend(),
+      [&](const ContainerPresentation &container) {
+        return container.subjectId == childFolder;
+      });
+  QVERIFY(copiedRoot != copiedTarget->containers.cend());
+  QVERIFY(copiedChild != copiedTarget->containers.cend());
+  QVERIFY(copiedRoot->childPresentationIds.contains(copiedChild->id));
+  QCOMPARE(ProjectSerializer::validate(controller.data()).size(), 0);
+
+  controller.undo();
+  copiedTarget = findDiagram(controller.data(), targetDiagramId);
+  QVERIFY(copiedTarget);
+  QVERIFY(copiedTarget->nodes.isEmpty());
+  QVERIFY(copiedTarget->containers.isEmpty());
+  controller.redo();
+  QCOMPARE(findDiagram(controller.data(), targetDiagramId)->nodes.size(), 2);
+
+  const QString movedDiagramId = controller.transferDiagramPresentations(
+      sourceDiagramId, {}, {}, {rootPresentationId}, true,
+      QStringLiteral("Moved selection"));
+  QVERIFY(!movedDiagramId.isEmpty());
+  QVERIFY(movedDiagramId != sourceDiagramId);
+  QCOMPARE(findDiagram(controller.data(), movedDiagramId)->name,
+           QStringLiteral("Moved selection"));
+  QVERIFY(findDiagram(controller.data(), sourceDiagramId)->nodes.isEmpty());
+  QVERIFY(
+      findDiagram(controller.data(), sourceDiagramId)->containers.isEmpty());
+  QCOMPARE(ProjectSerializer::validate(controller.data()).size(), 0);
+
+  // Creating the target, copying the subtree, and removing the source is one
+  // user-visible command.
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.size(), 2);
+  QCOMPARE(*findDiagram(controller.data(), sourceDiagramId),
+           sourceBeforeTransfer);
+  controller.redo();
+  QCOMPARE(controller.data().diagrams.size(), 3);
+  QVERIFY(findDiagram(controller.data(), sourceDiagramId)->nodes.isEmpty());
+  QCOMPARE(findDiagram(controller.data(), movedDiagramId)->nodes.size(), 2);
 }
 
 void CoreTests::relationshipTypesAndPresentationRemoval() {

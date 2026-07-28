@@ -24,6 +24,13 @@ QVector<qreal> snapOffsets(int count);
 qreal snapOffset(qreal freeOffset, qreal sideLength, int pointCount,
                  qreal tolerance, bool *snapped = nullptr);
 
+// Moves an offset that lies on the old snap grid to the corresponding logical
+// marker on a resized grid. Markers are identified by their signed ordinal
+// around the center point, so adding markers retains left/right or top/bottom
+// ordering. Freely placed offsets are returned unchanged.
+qreal remapAttachedOffset(qreal offset, int beforePointCount,
+                          int afterPointCount, bool *attached = nullptr);
+
 int snapPointCountForSide(const NodePresentation &node, ConnectorSide side);
 
 } // namespace yauml::connector_ports

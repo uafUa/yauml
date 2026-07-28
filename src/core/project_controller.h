@@ -142,6 +142,12 @@ public:
   QString addElementCenteredAt(const QString &type, const QString &diagramId,
                                qreal centerX, qreal centerY);
   Q_INVOKABLE QString addDiagram();
+  Q_INVOKABLE QVariantList
+  diagramTransferTargets(const QString &sourceDiagramId) const;
+  Q_INVOKABLE QString transferDiagramPresentations(
+      const QString &sourceDiagramId, const QString &targetDiagramId,
+      const QStringList &nodeIds, const QStringList &containerIds, bool move,
+      const QString &newDiagramName = {});
   Q_INVOKABLE QString addBrowserFolder(const QString &parentKind,
                                        const QString &parentId,
                                        const QString &name);

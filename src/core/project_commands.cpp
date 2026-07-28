@@ -143,6 +143,13 @@ void applyPortSnapPointChanges(Diagram &diagram,
       node->verticalPortSnapPoints =
           forward ? change.afterVertical : change.beforeVertical;
     }
+    for (const auto &anchorChange : change.anchorChanges) {
+      if (auto *connector = findConnector(diagram, anchorChange.connectorId)) {
+        ConnectorAnchor &anchor = anchorChange.source ? connector->sourceAnchor
+                                                      : connector->targetAnchor;
+        anchor.offset = forward ? anchorChange.after : anchorChange.before;
+      }
+    }
   }
 }
 
@@ -1017,31 +1024,23 @@ void UpdatePresentationGeometriesCommand::apply(ProjectData &project,
 }
 
 SetNodePortSnapPointsCommand::SetNodePortSnapPointsCommand(
-    ProjectController *controller, QString diagramId, QString nodeId,
-    int beforeHorizontal, int beforeVertical, int afterHorizontal,
-    int afterVertical)
+    ProjectController *controller, QString diagramId,
+    NodePortSnapPointChange change)
     : ProjectCommand(controller,
                      QStringLiteral("Change connector snap points")),
-      m_diagramId(std::move(diagramId)), m_nodeId(std::move(nodeId)),
-      m_beforeHorizontal(beforeHorizontal), m_beforeVertical(beforeVertical),
-      m_afterHorizontal(afterHorizontal), m_afterVertical(afterVertical) {}
+      m_diagramId(std::move(diagramId)), m_change(std::move(change)) {}
 
 void SetNodePortSnapPointsCommand::execute(ProjectData &project) {
-  apply(project, m_afterHorizontal, m_afterVertical);
+  apply(project, true);
 }
 
 void SetNodePortSnapPointsCommand::revert(ProjectData &project) {
-  apply(project, m_beforeHorizontal, m_beforeVertical);
+  apply(project, false);
 }
 
-void SetNodePortSnapPointsCommand::apply(ProjectData &project, int horizontal,
-                                         int vertical) {
-  if (auto *diagram = findDiagram(project, m_diagramId)) {
-    if (auto *node = findNode(*diagram, m_nodeId)) {
-      node->horizontalPortSnapPoints = horizontal;
-      node->verticalPortSnapPoints = vertical;
-    }
-  }
+void SetNodePortSnapPointsCommand::apply(ProjectData &project, bool forward) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    applyPortSnapPointChanges(*diagram, {m_change}, forward);
 }
 
 SetDiagramCompartmentVisibilityCommand::SetDiagramCompartmentVisibilityCommand(

@@ -3699,12 +3699,16 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
       target = QStringLiteral("connector");
       emit canvasSelectionChanged();
     } else if (const auto *container = hitContainer(m_pressScene)) {
-      m_selectedNodes.clear();
-      m_selectedNodeOrder.clear();
+      const bool preserveMultiSelection =
+          m_selectedContainers.contains(container->id);
+      if (!preserveMultiSelection) {
+        m_selectedNodes.clear();
+        m_selectedNodeOrder.clear();
+        selectOnlyContainer(container->id);
+      }
       m_selectedConnectors.clear();
       m_selectedConnector.clear();
       m_selectedBendPoint = -1;
-      selectOnlyContainer(container->id);
       if (m_project)
         m_project->clearSelection();
       target = QStringLiteral("container");
@@ -5004,6 +5008,19 @@ void DiagramCanvas::removeSelectedPresentations() {
   m_project->removeDiagramPresentations(m_diagramId, m_selectedNodes.values(),
                                         m_selectedContainers.values());
   clearCanvasSelection();
+}
+
+QString DiagramCanvas::transferSelectedPresentations(
+    const QString &targetDiagramId, bool move, const QString &newDiagramName) {
+  if (!m_project ||
+      (m_selectedNodes.isEmpty() && m_selectedContainers.isEmpty()))
+    return {};
+  const QString transferredTo = m_project->transferDiagramPresentations(
+      m_diagramId, targetDiagramId, m_selectedNodes.values(),
+      m_selectedContainers.values(), move, newDiagramName);
+  if (move && !transferredTo.isEmpty())
+    clearCanvasSelection();
+  return transferredTo;
 }
 
 void DiagramCanvas::deleteSelectedConnector() {

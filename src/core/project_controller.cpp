@@ -791,9 +791,70 @@ void attachNewConnectorsToSnapPoints(const ProjectData &project,
   }
 }
 
+int snapPointCountForSide(ConnectorSide side, int horizontal, int vertical) {
+  switch (side) {
+  case ConnectorSide::Top:
+  case ConnectorSide::Bottom:
+    return horizontal;
+  case ConnectorSide::Left:
+  case ConnectorSide::Right:
+    return vertical;
+  case ConnectorSide::Automatic:
+    return connector_ports::kDefaultSnapPointCount;
+  }
+  return connector_ports::kDefaultSnapPointCount;
+}
+
+NodePortSnapPointChange nodePortSnapPointChange(const ProjectData &project,
+                                                const Diagram &diagram,
+                                                const NodePresentation &node,
+                                                int afterHorizontal,
+                                                int afterVertical) {
+  NodePortSnapPointChange change{node.id,
+                                 node.horizontalPortSnapPoints,
+                                 node.verticalPortSnapPoints,
+                                 afterHorizontal,
+                                 afterVertical,
+                                 {}};
+  const auto appendEndpointChange = [&](const ConnectorPresentation &connector,
+                                        bool source) {
+    const auto *relationship =
+        findRelationship(project, connector.relationshipId);
+    if (!relationship)
+      return;
+    const QString &endpointElementId =
+        source ? relationship->sourceId : relationship->targetId;
+    if (endpointElementId != node.elementId)
+      return;
+    const ConnectorAnchor &anchor =
+        source ? connector.sourceAnchor : connector.targetAnchor;
+    if (anchor.side == ConnectorSide::Automatic)
+      return;
+
+    const int beforeCount =
+        snapPointCountForSide(anchor.side, node.horizontalPortSnapPoints,
+                              node.verticalPortSnapPoints);
+    const int afterCount =
+        snapPointCountForSide(anchor.side, afterHorizontal, afterVertical);
+    if (beforeCount == afterCount)
+      return;
+    bool attached = false;
+    const qreal remapped = connector_ports::remapAttachedOffset(
+        anchor.offset, beforeCount, afterCount, &attached);
+    if (attached && !qFuzzyCompare(remapped, anchor.offset))
+      change.anchorChanges.append(
+          {connector.id, source, anchor.offset, remapped});
+  };
+  for (const auto &connector : diagram.connectors) {
+    appendEndpointChange(connector, true);
+    appendEndpointChange(connector, false);
+  }
+  return change;
+}
+
 QList<NodePortSnapPointChange>
-existingNodePortChanges(const Diagram &before, const Diagram &after,
-                        const QSet<QString> &newNodeIds) {
+existingNodePortChanges(const ProjectData &project, const Diagram &before,
+                        Diagram &after, const QSet<QString> &newNodeIds) {
   QList<NodePortSnapPointChange> changes;
   for (const auto &beforeNode : before.nodes) {
     if (newNodeIds.contains(beforeNode.id))
@@ -805,10 +866,17 @@ existingNodePortChanges(const Diagram &before, const Diagram &after,
                            afterNode->verticalPortSnapPoints)) {
       continue;
     }
-    changes.append({beforeNode.id, beforeNode.horizontalPortSnapPoints,
-                    beforeNode.verticalPortSnapPoints,
-                    afterNode->horizontalPortSnapPoints,
-                    afterNode->verticalPortSnapPoints});
+    NodePortSnapPointChange change = nodePortSnapPointChange(
+        project, before, beforeNode, afterNode->horizontalPortSnapPoints,
+        afterNode->verticalPortSnapPoints);
+    for (const auto &anchorChange : change.anchorChanges) {
+      if (auto *connector = findConnector(after, anchorChange.connectorId)) {
+        ConnectorAnchor &anchor = anchorChange.source ? connector->sourceAnchor
+                                                      : connector->targetAnchor;
+        anchor.offset = anchorChange.after;
+      }
+    }
+    changes.append(std::move(change));
   }
   return changes;
 }
@@ -1680,6 +1748,21 @@ QString ProjectController::addDiagram() {
   return diagram.id;
 }
 
+QVariantList ProjectController::diagramTransferTargets(
+    const QString &sourceDiagramId) const {
+  QVariantList targets;
+  targets.append(QVariantMap{
+      {QStringLiteral("id"), QString{}},
+      {QStringLiteral("name"), QStringLiteral("New diagram\u2026")}});
+  for (const auto &diagram : m_data.diagrams) {
+    if (diagram.id == sourceDiagramId)
+      continue;
+    targets.append(QVariantMap{{QStringLiteral("id"), diagram.id},
+                               {QStringLiteral("name"), diagram.name}});
+  }
+  return targets;
+}
+
 QString ProjectController::addBrowserFolder(const QString &parentKind,
                                             const QString &parentId,
                                             const QString &name) {
@@ -2180,7 +2263,7 @@ int ProjectController::addElementsToDiagram(const QString &diagramId,
   for (const auto &presentation : presentations)
     newNodeIds.insert(presentation.id);
   const QList<NodePortSnapPointChange> portChanges =
-      existingNodePortChanges(*diagram, prospective, newNodeIds);
+      existingNodePortChanges(m_data, *diagram, prospective, newNodeIds);
   pushCommand(std::make_unique<AddElementsToDiagramCommand>(
       this, m_data, diagramId, std::move(presentations), std::move(connectors),
       portChanges));
@@ -2609,7 +2692,7 @@ int ProjectController::addTreeItemsToDiagram(const QString &diagramId,
   for (const auto &node : newNodes)
     newNodeIds.insert(node.id);
   const QList<NodePortSnapPointChange> portChanges =
-      existingNodePortChanges(*diagram, prospective, newNodeIds);
+      existingNodePortChanges(m_data, *diagram, prospective, newNodeIds);
 
   if (newContainers.isEmpty() && newNodes.isEmpty() &&
       membershipChanges.isEmpty()) {
@@ -2786,6 +2869,207 @@ bool ProjectController::wrapPresentationInPackage(
       std::move(geometryChanges),
       QStringLiteral("Wrap presentation in parent namespace")));
   return true;
+}
+
+QString ProjectController::transferDiagramPresentations(
+    const QString &sourceDiagramId, const QString &requestedTargetDiagramId,
+    const QStringList &nodeIds, const QStringList &containerIds, bool move,
+    const QString &newDiagramName) {
+  const auto *source = findDiagram(m_data, sourceDiagramId);
+  if (!source)
+    return {};
+  if (!requestedTargetDiagramId.isEmpty() &&
+      requestedTargetDiagramId == sourceDiagramId) {
+    m_diagnostics.addWarning(
+        QStringLiteral("command"),
+        QStringLiteral("Source and target diagram must be different"),
+        sourceDiagramId);
+    return {};
+  }
+
+  const QSet<QString> requestedNodes(nodeIds.cbegin(), nodeIds.cend());
+  const QSet<QString> requestedContainers(containerIds.cbegin(),
+                                          containerIds.cend());
+  QSet<QString> includedNodeIds;
+  QSet<QString> includedContainerIds;
+  const auto includeContainer = [&](const auto &self,
+                                    const QString &containerId) -> void {
+    if (includedContainerIds.contains(containerId))
+      return;
+    const auto *container = findContainer(*source, containerId);
+    if (!container)
+      return;
+    includedContainerIds.insert(containerId);
+    for (const QString &childId : container->childPresentationIds) {
+      if (findNode(*source, childId))
+        includedNodeIds.insert(childId);
+      else
+        self(self, childId);
+    }
+  };
+  for (const auto &node : source->nodes)
+    if (requestedNodes.contains(node.id))
+      includedNodeIds.insert(node.id);
+  for (const auto &container : source->containers)
+    if (requestedContainers.contains(container.id))
+      includeContainer(includeContainer, container.id);
+  if (includedNodeIds.isEmpty() && includedContainerIds.isEmpty())
+    return {};
+
+  QStringList orderedNodeIds;
+  QStringList orderedContainerIds;
+  for (const auto &node : source->nodes)
+    if (includedNodeIds.contains(node.id))
+      orderedNodeIds.append(node.id);
+  for (const auto &container : source->containers)
+    if (includedContainerIds.contains(container.id))
+      orderedContainerIds.append(container.id);
+
+  const auto targetAcceptsSelection = [&](const Diagram &target) {
+    QSet<QString> targetElementIds;
+    for (const auto &node : target.nodes)
+      targetElementIds.insert(node.elementId);
+    for (const QString &nodeId : orderedNodeIds) {
+      const auto *node = findNode(*source, nodeId);
+      if (node && targetElementIds.contains(node->elementId))
+        return false;
+    }
+
+    QSet<QString> targetSubjects;
+    for (const auto &container : target.containers)
+      targetSubjects.insert(container.subjectKind + u':' + container.subjectId);
+    for (const QString &containerId : orderedContainerIds) {
+      const auto *container = findContainer(*source, containerId);
+      if (container && targetSubjects.contains(container->subjectKind + u':' +
+                                               container->subjectId))
+        return false;
+    }
+    return true;
+  };
+
+  const bool createTarget = requestedTargetDiagramId.isEmpty();
+  if (!createTarget) {
+    const auto *target = findDiagram(m_data, requestedTargetDiagramId);
+    if (!target)
+      return {};
+    if (!targetAcceptsSelection(*target)) {
+      m_diagnostics.addWarning(
+          QStringLiteral("command"),
+          QStringLiteral("The target diagram already contains one or more "
+                         "selected presentations"),
+          requestedTargetDiagramId);
+      return {};
+    }
+  }
+
+  const QString description =
+      move ? QStringLiteral("Move presentations to diagram")
+           : QStringLiteral("Copy presentations to diagram");
+  const bool groupedCommand = move || createTarget;
+  if (groupedCommand)
+    m_undoStack.beginMacro(description);
+
+  QString targetDiagramId = requestedTargetDiagramId;
+  if (createTarget) {
+    targetDiagramId = addDiagram();
+    const QString requestedName = newDiagramName.trimmed();
+    if (!requestedName.isEmpty())
+      editText(targetDiagramId, QStringLiteral("name"), -1, requestedName);
+  }
+
+  // addDiagram() mutates the project and invalidates pointers into m_data.
+  source = findDiagram(m_data, sourceDiagramId);
+  const auto *target = findDiagram(m_data, targetDiagramId);
+  Q_ASSERT(source && target);
+  if (!source || !target) {
+    if (groupedCommand)
+      m_undoStack.endMacro();
+    return {};
+  }
+
+  QHash<QString, QString> clonedIdBySourceId;
+  QList<NodePresentation> clonedNodes;
+  QList<ContainerPresentation> clonedContainers;
+  clonedNodes.reserve(orderedNodeIds.size());
+  clonedContainers.reserve(orderedContainerIds.size());
+  for (const QString &containerId : orderedContainerIds)
+    clonedIdBySourceId.insert(containerId, newId());
+  for (const QString &nodeId : orderedNodeIds)
+    clonedIdBySourceId.insert(nodeId, newId());
+
+  QSet<QString> includedElementIds;
+  for (const QString &nodeId : orderedNodeIds) {
+    const auto *sourceNode = findNode(*source, nodeId);
+    if (!sourceNode)
+      continue;
+    NodePresentation clone = *sourceNode;
+    clone.id = clonedIdBySourceId.value(nodeId);
+    includedElementIds.insert(clone.elementId);
+    clonedNodes.append(std::move(clone));
+  }
+  for (const QString &containerId : orderedContainerIds) {
+    const auto *sourceContainer = findContainer(*source, containerId);
+    if (!sourceContainer)
+      continue;
+    ContainerPresentation clone = *sourceContainer;
+    clone.id = clonedIdBySourceId.value(containerId);
+    clone.childPresentationIds.clear();
+    for (const QString &childId : sourceContainer->childPresentationIds) {
+      const QString clonedChildId = clonedIdBySourceId.value(childId);
+      if (!clonedChildId.isEmpty())
+        clone.childPresentationIds.append(clonedChildId);
+    }
+    clonedContainers.append(std::move(clone));
+  }
+
+  QList<ConnectorPresentation> clonedConnectors;
+  for (const auto &connector : source->connectors) {
+    const auto *relationship =
+        findRelationship(m_data, connector.relationshipId);
+    if (!relationship || !includedElementIds.contains(relationship->sourceId) ||
+        !includedElementIds.contains(relationship->targetId))
+      continue;
+    ConnectorPresentation clone = connector;
+    clone.id = newId();
+    clonedConnectors.append(std::move(clone));
+  }
+
+  Diagram prospective = *target;
+  prospective.nodes.append(clonedNodes);
+  prospective.containers.append(clonedContainers);
+  prospective.connectors.append(clonedConnectors);
+
+  // Relationships to presentations already present in the target are
+  // materialized too. Connectors copied from the source retain their route and
+  // annotations; only these additional connectors receive automatic ports.
+  QSet<QString> autoConnectorIds;
+  for (const auto &node : clonedNodes) {
+    auto additions =
+        connectorsForNewPresentation(m_data, prospective, node.elementId);
+    for (const auto &connector : additions)
+      autoConnectorIds.insert(connector.id);
+    prospective.connectors.append(additions);
+    clonedConnectors.append(std::move(additions));
+  }
+  attachNewConnectorsToSnapPoints(m_data, prospective, autoConnectorIds);
+  copyAutoAttachedPresentations(prospective, clonedNodes, clonedConnectors);
+  QSet<QString> newNodeIds;
+  for (const auto &node : clonedNodes)
+    newNodeIds.insert(node.id);
+  const QList<NodePortSnapPointChange> portChanges =
+      existingNodePortChanges(m_data, *target, prospective, newNodeIds);
+
+  pushCommand(std::make_unique<AddContainerPresentationsCommand>(
+      this, m_data, targetDiagramId, std::move(clonedContainers),
+      std::move(clonedNodes), std::move(clonedConnectors),
+      QList<ContainerChildrenChange>{}, portChanges,
+      QList<PresentationGeometryChange>{}, description));
+  if (move)
+    removeDiagramPresentations(sourceDiagramId, orderedNodeIds,
+                               orderedContainerIds);
+  if (groupedCommand)
+    m_undoStack.endMacro();
+  return targetDiagramId;
 }
 
 void ProjectController::removePresentations(const QString &diagramId,
@@ -3009,8 +3293,8 @@ void ProjectController::setNodePortSnapPoints(const QString &diagramId,
     return;
 
   pushCommand(std::make_unique<SetNodePortSnapPointsCommand>(
-      this, diagramId, nodeId, node->horizontalPortSnapPoints,
-      node->verticalPortSnapPoints, horizontal, vertical));
+      this, diagramId,
+      nodePortSnapPointChange(m_data, *diagram, *node, horizontal, vertical)));
 }
 
 void ProjectController::setDiagramCompartmentVisible(const QString &diagramId,
