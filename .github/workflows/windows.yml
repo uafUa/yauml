@@ -213,6 +213,10 @@ jobs:
         shell: bash
         env:
           GH_TOKEN: ${{ github.token }}
+          # This job intentionally downloads only the verified artifacts. Give
+          # gh an explicit repository because there is no checkout/.git tree
+          # from which it could infer one.
+          GH_REPO: ${{ github.repository }}
         run: |
           set -euo pipefail
           shopt -s nullglob

@@ -380,6 +380,31 @@ history memory grow with total project size rather than the size of each edit.
   Persistence, schema migration, command undo/redo, validation, canvas
   interaction, and application smoke tests protect the delivered behavior.
 
+### 3.10 Automatic layout and obstacle-aware connector routing — planned
+
+- Reconsider automatic element arrangement and automatic connector routing as
+  a dedicated diagram-productivity tranche. Keep this separate from the
+  already implemented manual alignment/distribution tools and basic Manhattan
+  connector routing.
+- Start with a short technical and UX evaluation of candidate layout engines
+  such as ELK and Graphviz. Compare deterministic output, container and nested
+  package support, pinned-node constraints, licensing, deployment size, and
+  the ability to preserve user-authored geometry.
+- Offer layout for the current diagram or selected container scope, with an
+  explicit preview before commit. Hidden filtered items, nested containers,
+  pinned presentations, and manually positioned ports must have defined,
+  visible behavior rather than being silently moved.
+- Commit an accepted layout as one compact undoable command. Cancelling the
+  preview must leave the project unchanged, and repeated layout of unchanged
+  input must produce the same geometry.
+- Extend orthogonal routing with obstacle avoidance only after the layout
+  contract is settled. Automatic rerouting must preserve semantic endpoints,
+  snap-point attachment, connector annotations, and manual routes unless the
+  user explicitly includes those routes.
+- Validate the chosen approach on real large C++ diagrams before making it the
+  default. Automatic layout and routing remain opt-in until their results are
+  predictable enough not to damage carefully authored views.
+
 ## Phase 4: C++ import and synchronization — complete
 
 - Multi-folder-first libclang AST indexing is implemented for classes, structs,
