@@ -6,7 +6,7 @@
 
 #include <optional>
 
-namespace uuml {
+namespace yauml {
 
 // Small application-facing description published beside the Qt Installer
 // Framework repository. Keeping this separate from IFW's internal Updates.xml
@@ -30,4 +30,4 @@ UpdateManifestOutcome parseUpdateManifest(const QByteArray &document);
 bool isNewerApplicationVersion(const QString &candidate,
                                const QString &current);
 
-} // namespace uuml
+} // namespace yauml

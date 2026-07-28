@@ -17,7 +17,7 @@
 #include <algorithm>
 #include <cmath>
 
-using namespace uuml;
+using namespace yauml;
 
 namespace {
 
@@ -244,7 +244,7 @@ private slots:
 void RenderRegressionTests::initTestCase() {
   // Do not let a developer's saved application theme or geometry preferences
   // influence the reference image.
-  QCoreApplication::setOrganizationName(QStringLiteral("uuml-tests"));
+  QCoreApplication::setOrganizationName(QStringLiteral("yauml-tests"));
   QCoreApplication::setApplicationName(
       QStringLiteral("render-regression-tests"));
   QSettings settings;
@@ -260,10 +260,10 @@ void RenderRegressionTests::initTestCase() {
 }
 
 void RenderRegressionTests::canonicalDiagramMatchesBaseline() {
-  const QString baselinePath = QDir(QStringLiteral(UUML_RENDER_BASELINE_DIR))
+  const QString baselinePath = QDir(QStringLiteral(YAUML_RENDER_BASELINE_DIR))
                                    .filePath(baselineFileName());
   const bool updateBaseline =
-      qEnvironmentVariableIntValue("UUML_UPDATE_RENDER_BASELINES") == 1;
+      qEnvironmentVariableIntValue("YAUML_UPDATE_RENDER_BASELINES") == 1;
   if (!updateBaseline && !QFileInfo::exists(baselinePath)) {
     QSKIP(qPrintable(
         QStringLiteral("No reference image exists for this platform: %1")
@@ -274,7 +274,7 @@ void RenderRegressionTests::canonicalDiagramMatchesBaseline() {
   QVERIFY(populateCanonicalDiagram(controller));
 
   QQuickWindow window;
-  window.setTitle(QStringLiteral("u uml render regression"));
+  window.setTitle(QStringLiteral("yauml render regression"));
   window.setColor(ui::uiPalette().surface);
   if (QScreen *primaryScreen = QGuiApplication::primaryScreen()) {
     window.setScreen(primaryScreen);
@@ -323,7 +323,7 @@ void RenderRegressionTests::canonicalDiagramMatchesBaseline() {
       difference.changedPixelRatio() <= kMaximumChangedPixelRatio &&
       difference.meanChannelDelta <= kMaximumMeanChannelDelta;
   if (!matches) {
-    const QDir artifacts(QStringLiteral(UUML_RENDER_ARTIFACT_DIR));
+    const QDir artifacts(QStringLiteral(YAUML_RENDER_ARTIFACT_DIR));
     QVERIFY(QDir().mkpath(artifacts.path()));
     const QString expectedArtifact =
         artifacts.filePath(QStringLiteral("canonical-diagram-expected.png"));

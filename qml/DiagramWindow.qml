@@ -12,7 +12,7 @@ Window {
     x: workspaceController.hostX(hostId)
     y: workspaceController.hostY(hostId)
     visible: true
-    title: qsTr("u uml — Diagram Area")
+    title: qsTr("yauml — Diagram Area")
     color: uiTheme.windowBackground
 
     DiagramArea {

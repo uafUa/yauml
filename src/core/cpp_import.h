@@ -8,7 +8,7 @@
 #include <functional>
 #include <optional>
 
-namespace uuml {
+namespace yauml {
 
 enum class CppImportAction {
   Create,
@@ -216,4 +216,4 @@ public:
   static int apply(ProjectData &project, const CppImportPreview &preview);
 };
 
-} // namespace uuml
+} // namespace yauml

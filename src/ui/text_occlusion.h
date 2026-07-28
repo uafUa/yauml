@@ -4,7 +4,7 @@
 #include <QRectF>
 #include <QVector>
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 // Returns the axis-aligned fragments of `target` that remain visible after
 // later-painted opaque rectangles cover it. The fragments never overlap,
@@ -13,4 +13,4 @@ namespace uuml::ui {
 QVector<QRectF> visibleRectangleFragments(const QRectF &target,
                                           const QList<QRectF> &opaqueOccluders);
 
-} // namespace uuml::ui
+} // namespace yauml::ui

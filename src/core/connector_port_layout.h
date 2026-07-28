@@ -4,7 +4,7 @@
 
 #include <QVector>
 
-namespace uuml::connector_ports {
+namespace yauml::connector_ports {
 
 // Odd counts retain a point at the exact center of every side. Keeping the
 // upper bound modest avoids unusably dense markers on small presentations.
@@ -26,4 +26,4 @@ qreal snapOffset(qreal freeOffset, qreal sideLength, int pointCount,
 
 int snapPointCountForSide(const NodePresentation &node, ConnectorSide side);
 
-} // namespace uuml::connector_ports
+} // namespace yauml::connector_ports

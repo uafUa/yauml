@@ -2,7 +2,7 @@
 
 #include <QVector>
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 struct TriangleBatch {
   qsizetype firstVertex = 0;
@@ -15,4 +15,4 @@ QVector<TriangleBatch>
 triangleBatches(qsizetype vertexCount,
                 qsizetype maximumVerticesPerBatch = 60'000);
 
-} // namespace uuml::ui
+} // namespace yauml::ui

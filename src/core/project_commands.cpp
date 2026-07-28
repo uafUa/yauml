@@ -6,7 +6,7 @@
 #include <algorithm>
 #include <utility>
 
-namespace uuml {
+namespace yauml {
 namespace {
 
 template <typename T>
@@ -1667,4 +1667,4 @@ void DeleteStereotypeDefinitionCommand::restoreAssignments(
   }
 }
 
-} // namespace uuml
+} // namespace yauml

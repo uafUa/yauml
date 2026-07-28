@@ -12,16 +12,16 @@
 #include <QSet>
 #include <algorithm>
 
-#ifndef UUML_HAS_LIBCLANG
-#define UUML_HAS_LIBCLANG 0
+#ifndef YAUML_HAS_LIBCLANG
+#define YAUML_HAS_LIBCLANG 0
 #endif
 
-#if UUML_HAS_LIBCLANG
+#if YAUML_HAS_LIBCLANG
 #include <clang-c/CXCompilationDatabase.h>
 #include <clang-c/Index.h>
 #endif
 
-namespace uuml {
+namespace yauml {
 namespace {
 
 constexpr auto kBindingKey = "sourceBinding";
@@ -1080,7 +1080,7 @@ CppImportPreview planImport(const CppImportPreview &discovery,
   return result;
 }
 
-#if UUML_HAS_LIBCLANG
+#if YAUML_HAS_LIBCLANG
 
 QString takeString(CXString string) {
   const char *characters = clang_getCString(string);
@@ -2726,7 +2726,7 @@ void CppImportPreview::resolveAllConflicts(
       item.resolution = resolution;
 }
 
-bool CppImportService::available() { return UUML_HAS_LIBCLANG != 0; }
+bool CppImportService::available() { return YAUML_HAS_LIBCLANG != 0; }
 
 CppImportPreview
 CppImportService::preview(const QString &searchPath,
@@ -2744,7 +2744,7 @@ CppImportService::preview(const QStringList &searchPaths,
                           const QList<Relationship> &existingRelationships,
                           const CppImportOptions &options,
                           const CppImportProgressCallback &progress) {
-#if UUML_HAS_LIBCLANG
+#if YAUML_HAS_LIBCLANG
   CppImportPreview discovery = discover(searchPaths, options, progress);
   reportProgress(progress, CppImportProgressStage::PlanningChanges,
                  QStringLiteral("Planning synchronization changes"));
@@ -2807,4 +2807,4 @@ int CppImportService::apply(ProjectData &project,
   return applied;
 }
 
-} // namespace uuml
+} // namespace yauml

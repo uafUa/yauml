@@ -1,11 +1,11 @@
-# uuml: Product and Architecture Brainstorm
+# yauml: Product and Architecture Brainstorm
 
 Status: Phase 3 productization underway; MVP accepted on 2026-07-21 in
 [`mvp-scope.md`](mvp-scope.md)
 
 ## 1. Working vision
 
-`uuml` is a local-first modeling tool for software architecture and detailed
+`yauml` is a local-first modeling tool for software architecture and detailed
 design. It combines precise manual diagram editing with reliable synchronization
 from C++ source code. Models are stored in a human-readable, Git-friendly form.
 
@@ -328,7 +328,7 @@ identity changes.
 Proposed structure:
 
 ```text
-example.uuml/
+example.yauml/
   manifest.json5
   model/
     architecture.json5
@@ -357,7 +357,7 @@ small shared workspace file for intentional team defaults.
 - Keep diagram geometry out of semantic files.
 - Write changed files to temporary siblings, flush, and atomically replace.
 - Include an explicit schema version and deterministic migration pipeline.
-- Provide `uuml validate` and `uuml format` command-line operations.
+- Provide `yauml validate` and `yauml format` command-line operations.
 - Establish the headless import/change-set boundary from the beginning, even
   though concrete C++ import and synchronization are post-MVP.
 - Never require users to understand internal IDs for ordinary edits, while keeping

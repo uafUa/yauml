@@ -4,7 +4,7 @@
 #include <cmath>
 #include <limits>
 
-namespace uuml::connector_ports {
+namespace yauml::connector_ports {
 
 bool isValidSnapPointCount(int count) {
   return count >= kDefaultSnapPointCount && count <= kMaximumSnapPointCount &&
@@ -66,4 +66,4 @@ int snapPointCountForSide(const NodePresentation &node, ConnectorSide side) {
   return kDefaultSnapPointCount;
 }
 
-} // namespace uuml::connector_ports
+} // namespace yauml::connector_ports

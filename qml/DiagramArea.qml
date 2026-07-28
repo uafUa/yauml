@@ -4,10 +4,10 @@ import QtQuick.Layouts
 
 Rectangle {
     id: root
-    readonly property string diagramMimeType: "application/x-uuml-diagram-id"
-    readonly property string elementsMimeType: "application/x-uuml-element-ids"
+    readonly property string diagramMimeType: "application/x-yauml-diagram-id"
+    readonly property string elementsMimeType: "application/x-yauml-element-ids"
     readonly property string diagramSubjectsMimeType:
-        "application/x-uuml-diagram-subjects"
+        "application/x-yauml-diagram-subjects"
     required property string hostId
     property int modelRevision: 0
     property var diagramIds: {

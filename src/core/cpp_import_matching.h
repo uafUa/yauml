@@ -5,7 +5,7 @@
 #include <QList>
 #include <QString>
 
-namespace uuml {
+namespace yauml {
 
 // A source declaration captured by the previous successful import. Matching
 // deliberately uses the baseline rather than the current model fields because
@@ -39,4 +39,4 @@ QList<CppDeclarationMatch> matchRenamedCppDeclarations(
     const QList<CppSourceSymbol> &sourceDeclarations,
     const QList<CppImportedDeclaration> &importedDeclarations);
 
-} // namespace uuml
+} // namespace yauml

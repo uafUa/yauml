@@ -10,7 +10,7 @@
 #include <memory>
 #include <vector>
 
-namespace uuml {
+namespace yauml {
 
 class ProjectController;
 
@@ -96,4 +96,4 @@ private:
   ProjectController *m_controller;
 };
 
-} // namespace uuml
+} // namespace yauml

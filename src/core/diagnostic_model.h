@@ -3,7 +3,7 @@
 #include <QAbstractListModel>
 #include <QDateTime>
 
-namespace uuml {
+namespace yauml {
 
 enum class DiagnosticSeverity { Info, Warning, Error };
 
@@ -54,4 +54,4 @@ private:
 
 QString toString(DiagnosticSeverity severity);
 
-} // namespace uuml
+} // namespace yauml

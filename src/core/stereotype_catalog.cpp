@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace uuml::stereotype_catalog {
+namespace yauml::stereotype_catalog {
 namespace {
 
 StereotypeDefinition defaultDefinition(QString id, QString name,
@@ -123,4 +123,4 @@ QString displayText(const ProjectData &project,
              : QStringLiteral("«%1»").arg(names.join(QStringLiteral(", ")));
 }
 
-} // namespace uuml::stereotype_catalog
+} // namespace yauml::stereotype_catalog

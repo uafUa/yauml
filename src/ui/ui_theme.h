@@ -6,7 +6,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 // Semantic palette shared by QML controls and native scene-graph rendering.
 // Names describe intent so a future light/dark theme can change values without
@@ -187,4 +187,4 @@ private:
   void persist(const QStringList &roles) const;
 };
 
-} // namespace uuml::ui
+} // namespace yauml::ui

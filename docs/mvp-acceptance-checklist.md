@@ -1,4 +1,4 @@
-# uuml MVP Acceptance Checklist
+# yauml MVP Acceptance Checklist
 
 Use this checklist for a release-candidate audit against the accepted MVP scope.
 Run the cases in order because later cases reuse the scratch project created in
@@ -33,9 +33,9 @@ an automatic release blocker.
 
 - [+] Use a new scratch project. Do not perform destructive tests on a real
       project.
-- [+] Close other copies of `uuml.exe`.
+- [+] Close other copies of `yauml.exe`.
 - [+] Open PowerShell in the repository root.
-- [-] Confirm that `build-release/Release/uuml.exe` exists (MSVC Release build).
+- [-] Confirm that `build-release/Release/yauml.exe` exists (MSVC Release build).
 - [+] If multi-monitor testing is available, connect and enable the additional
       monitor before starting.
 
@@ -77,7 +77,7 @@ Notes/defect: ______________________________________________________________
 Run:
 
 ```powershell
-.\build-release\Release\uuml.exe
+.\build-release\Release\yauml.exe
 ```
 
 Actions and expected results:
@@ -308,7 +308,7 @@ Actions and expected results:
 - [+] Close the application and reopen the saved project with:
 
 ```powershell
-.\build-release\Release\uuml.exe "<scratch-project-directory>"
+.\build-release\Release\yauml.exe "<scratch-project-directory>"
 ```
 
 - [+] Project/diagram names, element types, attributes, operations, parameters,
@@ -357,8 +357,8 @@ Notes/defect: ______________________________________________________________
 Run:
 
 ```powershell
-.\build-release\Release\uuml.exe validate .\examples\sample.uuml
-.\build-release\Release\uuml.exe validate .\examples\performance.uuml
+.\build-release\Release\yauml.exe validate .\examples\sample.yauml
+.\build-release\Release\yauml.exe validate .\examples\performance.yauml
 ```
 
 Expected:
@@ -371,13 +371,13 @@ Expected:
 Create an isolated invalid fixture:
 
 ```powershell
-$InvalidProject = Join-Path $env:TEMP ("uuml-invalid-" + [guid]::NewGuid() + ".uuml")
-Copy-Item -LiteralPath .\examples\sample.uuml -Destination $InvalidProject -Recurse
+$InvalidProject = Join-Path $env:TEMP ("yauml-invalid-" + [guid]::NewGuid() + ".yauml")
+Copy-Item -LiteralPath .\examples\sample.yauml -Destination $InvalidProject -Recurse
 $DiagramFile = Join-Path $InvalidProject "diagrams\diagrams.json5"
 $Broken = (Get-Content -LiteralPath $DiagramFile -Raw) -replace `
   "019b0000-0000-7000-8000-000000000010", "missing-element"
 Set-Content -LiteralPath $DiagramFile -Value $Broken -Encoding utf8
-.\build-release\Release\uuml.exe validate $InvalidProject
+.\build-release\Release\yauml.exe validate $InvalidProject
 $LASTEXITCODE
 ```
 
@@ -390,16 +390,16 @@ Expected:
 Result: [ ] Pass  [ ] Fail  [+] Blocked
 
 Notes/defect:
-1. .\build-release\Release\uuml.exe validate .\examples\performance.uuml command produces unreadable characters in output:
- "PS D:\DatWork\uaf\2026\yauml> .\build-release\Release\uuml.exe validate .\examples\performance.uuml
-Valid uuml project: Performance Example ΓÇö 600 classes (600 elements, 1 diagrams)"
+1. .\build-release\Release\yauml.exe validate .\examples\performance.yauml command produces unreadable characters in output:
+ "PS D:\DatWork\uaf\2026\yauml> .\build-release\Release\yauml.exe validate .\examples\performance.yauml
+Valid yauml project: Performance Example ΓÇö 600 classes (600 elements, 1 diagrams)"
 
 ## 13. GUI diagnostics and automatic log opening — Required
 
 Using the invalid fixture from case 12:
 
 ```powershell
-.\build-release\Release\uuml.exe $InvalidProject
+.\build-release\Release\yauml.exe $InvalidProject
 ```
 
 Expected:
@@ -442,7 +442,7 @@ Notes/defect: ______________________________________________________________
 The routine acceptance run uses the controlled automated recovery test from case
 1 rather than terminating the application during a real write.
 
-- [ ] `uuml_core_tests` passed its interrupted-save recovery case.
+- [ ] `yauml_core_tests` passed its interrupted-save recovery case.
 - [ ] Recovery restores the last valid semantic and diagram files as one
       consistent project state.
 - [ ] No recovery test overwrote the scratch project's only valid copy.
@@ -456,7 +456,7 @@ Notes/defect: ______________________________________________________________
 Run:
 
 ```powershell
-.\build-release\Release\uuml.exe .\examples\performance.uuml
+.\build-release\Release\yauml.exe .\examples\performance.yauml
 ```
 
 The current reference contains 600 nodes and 1,150 connectors on one diagram.

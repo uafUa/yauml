@@ -8,7 +8,7 @@
 #include <QVariantList>
 #include <QVariantMap>
 
-namespace uuml {
+namespace yauml {
 
 // Application-wide preferences that are independent of the currently open
 // project. Values are persisted through QSettings and exposed to QML through
@@ -67,6 +67,11 @@ public:
   static QVariantList defaultCppMemberTypeRules();
   static QVariantMap defaultContextToolboxConfiguration();
   static QString defaultPackageReassignmentPolicy();
+  // Copies settings from a previous product identity exactly once. Existing
+  // values in the current scope always win, and the legacy scope is retained
+  // so downgrading does not lose preferences.
+  static void migrateLegacyScope(const QString &legacyOrganization,
+                                 const QString &legacyApplication);
 
   explicit ApplicationSettings(QObject *parent = nullptr);
 
@@ -149,4 +154,4 @@ private:
   QStringList m_recentProjectPaths;
 };
 
-} // namespace uuml
+} // namespace yauml

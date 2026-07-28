@@ -7,7 +7,7 @@
 #include <QRectF>
 #include <QSet>
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 // Keep child content clear of the container outline. The outline itself is
 // rendered in view-pixel units, so it is also redrawn above child geometry;
@@ -54,6 +54,6 @@ private:
   QSet<QString> m_excludedPresentationIds;
 };
 
-} // namespace uuml::ui
+} // namespace yauml::ui
 
-Q_DECLARE_OPERATORS_FOR_FLAGS(uuml::ui::ContainerOverflowEdges)
+Q_DECLARE_OPERATORS_FOR_FLAGS(yauml::ui::ContainerOverflowEdges)

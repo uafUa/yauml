@@ -6,7 +6,7 @@
 class QNetworkAccessManager;
 class QNetworkReply;
 
-namespace uuml {
+namespace yauml {
 
 class ApplicationSettings;
 class DiagnosticModel;
@@ -75,4 +75,4 @@ private:
 };
 
 } // namespace ui
-} // namespace uuml
+} // namespace yauml

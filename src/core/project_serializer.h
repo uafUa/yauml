@@ -7,7 +7,7 @@
 #include <QMap>
 #include <QStringList>
 
-namespace uuml {
+namespace yauml {
 
 // Byte-level fingerprints of the files that produced an in-memory project.
 // They are deliberately kept outside ProjectData: revisions describe the
@@ -50,4 +50,4 @@ public:
   static QString normalizeProjectPath(const QString &path);
 };
 
-} // namespace uuml
+} // namespace yauml

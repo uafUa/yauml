@@ -4,7 +4,7 @@
 #include <QSet>
 #include <algorithm>
 
-namespace uuml::diagram_filter {
+namespace yauml::diagram_filter {
 namespace {
 
 QStringList uniqueTrimmedValues(const QVariant &value) {
@@ -153,4 +153,4 @@ DiagramFilter fromVariantMap(const QVariantMap &values) {
   return filter;
 }
 
-} // namespace uuml::diagram_filter
+} // namespace yauml::diagram_filter

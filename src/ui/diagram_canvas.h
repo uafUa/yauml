@@ -12,7 +12,7 @@
 #include <QStringList>
 #include <QVariantMap>
 
-namespace uuml {
+namespace yauml {
 
 struct ConnectorPresentation;
 struct ContainerPresentation;
@@ -491,4 +491,4 @@ private:
   quint64 m_themeRevision = 0;
 };
 
-} // namespace uuml
+} // namespace yauml

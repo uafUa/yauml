@@ -3,7 +3,7 @@
 #include <QDir>
 #include <QFileInfo>
 
-namespace uuml {
+namespace yauml {
 namespace {
 
 constexpr int kMinimumMatchConfidence = 75;
@@ -140,4 +140,4 @@ QList<CppDeclarationMatch> matchRenamedCppDeclarations(
   return matches;
 }
 
-} // namespace uuml
+} // namespace yauml

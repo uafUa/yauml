@@ -4,7 +4,7 @@
 #include <QSettings>
 #include <array>
 
-namespace uuml::ui {
+namespace yauml::ui {
 namespace {
 
 constexpr auto kSettingsGroup = "preferences/theme/colors";
@@ -212,54 +212,54 @@ UiPalette uiPalette() {
 
 UiTheme::UiTheme(QObject *parent) : QObject(parent) { load(); }
 
-#define UUML_THEME_GETTER(name)                                                \
+#define YAUML_THEME_GETTER(name)                                                \
   QColor UiTheme::name() const { return uiPalette().name; }
 
-UUML_THEME_GETTER(accent)
-UUML_THEME_GETTER(surface)
-UUML_THEME_GETTER(windowBackground)
-UUML_THEME_GETTER(panelHeader)
-UUML_THEME_GETTER(hoverBackground)
-UUML_THEME_GETTER(controlBorder)
-UUML_THEME_GETTER(overlayBorder)
-UUML_THEME_GETTER(bodyText)
-UUML_THEME_GETTER(nodeTitleText)
-UUML_THEME_GETTER(mutedText)
-UUML_THEME_GETTER(emptyStateText)
-UUML_THEME_GETTER(zoomText)
-UUML_THEME_GETTER(tabStrip)
-UUML_THEME_GETTER(tabStripBorder)
-UUML_THEME_GETTER(activeTab)
-UUML_THEME_GETTER(inactiveTab)
-UUML_THEME_GETTER(badgeBackground)
-UUML_THEME_GETTER(badgeBorder)
-UUML_THEME_GETTER(warningBackground)
-UUML_THEME_GETTER(warningBorder)
-UUML_THEME_GETTER(editorBackground)
-UUML_THEME_GETTER(errorRow)
-UUML_THEME_GETTER(warningRow)
-UUML_THEME_GETTER(alternateRow)
-UUML_THEME_GETTER(canvasGrid)
-UUML_THEME_GETTER(alignmentGuide)
-UUML_THEME_GETTER(selectionOverlay)
-UUML_THEME_GETTER(connector)
-UUML_THEME_GETTER(containerFill)
-UUML_THEME_GETTER(containerHeaderFill)
-UUML_THEME_GETTER(containerBorder)
-UUML_THEME_GETTER(containerTitleText)
-UUML_THEME_GETTER(nodeBorder)
-UUML_THEME_GETTER(compartmentLine)
-UUML_THEME_GETTER(compartmentDivider)
-UUML_THEME_GETTER(activeHandleFill)
-UUML_THEME_GETTER(packageFill)
-UUML_THEME_GETTER(classFill)
-UUML_THEME_GETTER(structFill)
-UUML_THEME_GETTER(enumerationFill)
-UUML_THEME_GETTER(dragGhostBorder)
-UUML_THEME_GETTER(dragGhostFill)
-UUML_THEME_GETTER(dragGhostText)
+YAUML_THEME_GETTER(accent)
+YAUML_THEME_GETTER(surface)
+YAUML_THEME_GETTER(windowBackground)
+YAUML_THEME_GETTER(panelHeader)
+YAUML_THEME_GETTER(hoverBackground)
+YAUML_THEME_GETTER(controlBorder)
+YAUML_THEME_GETTER(overlayBorder)
+YAUML_THEME_GETTER(bodyText)
+YAUML_THEME_GETTER(nodeTitleText)
+YAUML_THEME_GETTER(mutedText)
+YAUML_THEME_GETTER(emptyStateText)
+YAUML_THEME_GETTER(zoomText)
+YAUML_THEME_GETTER(tabStrip)
+YAUML_THEME_GETTER(tabStripBorder)
+YAUML_THEME_GETTER(activeTab)
+YAUML_THEME_GETTER(inactiveTab)
+YAUML_THEME_GETTER(badgeBackground)
+YAUML_THEME_GETTER(badgeBorder)
+YAUML_THEME_GETTER(warningBackground)
+YAUML_THEME_GETTER(warningBorder)
+YAUML_THEME_GETTER(editorBackground)
+YAUML_THEME_GETTER(errorRow)
+YAUML_THEME_GETTER(warningRow)
+YAUML_THEME_GETTER(alternateRow)
+YAUML_THEME_GETTER(canvasGrid)
+YAUML_THEME_GETTER(alignmentGuide)
+YAUML_THEME_GETTER(selectionOverlay)
+YAUML_THEME_GETTER(connector)
+YAUML_THEME_GETTER(containerFill)
+YAUML_THEME_GETTER(containerHeaderFill)
+YAUML_THEME_GETTER(containerBorder)
+YAUML_THEME_GETTER(containerTitleText)
+YAUML_THEME_GETTER(nodeBorder)
+YAUML_THEME_GETTER(compartmentLine)
+YAUML_THEME_GETTER(compartmentDivider)
+YAUML_THEME_GETTER(activeHandleFill)
+YAUML_THEME_GETTER(packageFill)
+YAUML_THEME_GETTER(classFill)
+YAUML_THEME_GETTER(structFill)
+YAUML_THEME_GETTER(enumerationFill)
+YAUML_THEME_GETTER(dragGhostBorder)
+YAUML_THEME_GETTER(dragGhostFill)
+YAUML_THEME_GETTER(dragGhostText)
 
-#undef UUML_THEME_GETTER
+#undef YAUML_THEME_GETTER
 
 QVariantList UiTheme::colorRoles() const {
   QVariantList roles;
@@ -378,4 +378,4 @@ void UiTheme::persist(const QStringList &roles) const {
   settings.sync();
 }
 
-} // namespace uuml::ui
+} // namespace yauml::ui

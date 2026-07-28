@@ -21,8 +21,9 @@ Its main advantages are:
 - **Maximum practical rendering performance.** The diagram canvas is built on
   the GPU-accelerated Qt Quick/QML scene graph and is designed to remain
   responsive with large architecture views.
-- **An open model format.** Projects are stored as readable JSON5 directories
-  that can be inspected, version-controlled, and processed without yauml.
+- **An open model format.** Projects are ordinary directories containing
+  readable JSON5 files that can be inspected, version-controlled, and processed
+  without yauml.
 - **Robust synchronization with source files.** Repeated imports distinguish
   source changes from manual model edits, preserve user-owned information, and
   report real conflicts instead of silently overwriting work.
@@ -85,7 +86,7 @@ folders.
 
 ### Local and safe
 
-- Projects are ordinary local, readable JSON5 directories.
+- Projects are ordinary local directories containing readable JSON5 files.
 - Source import never rewrites C++ files.
 - Unsaved, externally changed, and interrupted saves are handled explicitly.
 - Validation and import are also available for headless workflows.
@@ -113,6 +114,12 @@ The product direction and completed feature slices are tracked in
 [the productization plan](docs/productization-plan.md). Release and packaging
 instructions are in [the release guide](docs/releasing.md).
 
+## Credits
+
+`yauml` was conceived and product-directed by [uafUa](https://github.com/uafUa).
+Its code was generated and developed by OpenAI Codex in close collaboration
+with the project author.
+
 <details>
 <summary>Build from source on Windows</summary>
 
@@ -122,11 +129,11 @@ import:
 ```powershell
 cmake -S . -B build-release -G "Visual Studio 17 2022" -A x64 `
   -DCMAKE_PREFIX_PATH=C:/Qt/6.11.1/msvc2022_64 `
-  -DUUML_REQUIRE_LIBCLANG=ON
+  -DYAUML_REQUIRE_LIBCLANG=ON
 cmake --build build-release --config Release
 ctest --test-dir build-release -C Release --output-on-failure
 ```
 
-The executable is created at `build-release/Release/uuml.exe`.
+The executable is created at `build-release/Release/yauml.exe`.
 
 </details>

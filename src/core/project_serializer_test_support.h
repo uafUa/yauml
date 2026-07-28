@@ -4,7 +4,7 @@
 
 #include <functional>
 
-namespace uuml::test_support {
+namespace yauml::test_support {
 
 // Persistence writes have different recovery semantics depending on their
 // purpose. Tests use these values to fail the real atomic-write path at precise
@@ -50,4 +50,4 @@ bool shouldInjectProjectWriteFault(const ProjectWriteBoundary &boundary);
 
 } // namespace detail
 
-} // namespace uuml::test_support
+} // namespace yauml::test_support

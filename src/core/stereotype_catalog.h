@@ -2,7 +2,7 @@
 
 #include "core/project_data.h"
 
-namespace uuml::stereotype_catalog {
+namespace yauml::stereotype_catalog {
 
 inline const QString kRelationshipApplicability =
     QStringLiteral("relationship");
@@ -36,4 +36,4 @@ QString displayName(const ProjectData &project, const QString &stereotypeId);
 QString displayText(const ProjectData &project,
                     const QStringList &stereotypeIds);
 
-} // namespace uuml::stereotype_catalog
+} // namespace yauml::stereotype_catalog

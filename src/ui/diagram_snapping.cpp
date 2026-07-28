@@ -6,7 +6,7 @@
 #include <iterator>
 #include <limits>
 
-namespace uuml::ui {
+namespace yauml::ui {
 namespace {
 
 constexpr qreal kComparisonEpsilon = 0.001;
@@ -328,4 +328,4 @@ snapDiagramBottomRightResize(const QRectF &requestedGeometry,
                            Qt::RightEdge | Qt::BottomEdge, options);
 }
 
-} // namespace uuml::ui
+} // namespace yauml::ui

@@ -2,7 +2,7 @@
 
 #include <utility>
 
-namespace uuml::test_support {
+namespace yauml::test_support {
 namespace {
 
 thread_local ProjectWriteFaultInjector currentInjector;
@@ -26,4 +26,4 @@ bool shouldInjectProjectWriteFault(const ProjectWriteBoundary &boundary) {
 }
 
 } // namespace detail
-} // namespace uuml::test_support
+} // namespace yauml::test_support

@@ -1,4 +1,4 @@
-# uuml Productization Plan
+# yauml Productization Plan
 
 Status: command foundation, the Phase 3 core, contextual toolboxes,
 relationship annotations, and stereotypes are implemented. Phase 4 C++ import

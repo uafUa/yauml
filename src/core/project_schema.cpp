@@ -9,7 +9,7 @@
 #include <limits>
 #include <utility>
 
-namespace uuml {
+namespace yauml {
 namespace {
 
 Diagnostic schemaError(const QString &message) {
@@ -128,7 +128,7 @@ ProjectSchemaMigrator::migrate(ProjectJsonDocuments documents) {
   if (outcome.sourceVersion > kCurrentProjectSchemaVersion) {
     outcome.diagnostics.append(schemaError(
         QStringLiteral("Project schema version %1 is newer than the supported "
-                       "version %2; update uuml before opening this project")
+                       "version %2; update yauml before opening this project")
             .arg(outcome.sourceVersion)
             .arg(kCurrentProjectSchemaVersion)));
     return outcome;
@@ -169,4 +169,4 @@ ProjectSchemaMigrator::migrate(ProjectJsonDocuments documents) {
   return outcome;
 }
 
-} // namespace uuml
+} // namespace yauml

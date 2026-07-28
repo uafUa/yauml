@@ -5,7 +5,7 @@
 #include <QUrl>
 #include <QVector>
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 // Loads the editable JSON5 catalog once and exposes resource URLs to QML.
 // Missing assignments deliberately return an empty URL so a partially filled
@@ -53,4 +53,4 @@ private:
   QStringList m_errors;
 };
 
-} // namespace uuml::ui
+} // namespace yauml::ui

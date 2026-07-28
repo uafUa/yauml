@@ -2,7 +2,7 @@
 
 #include <utility>
 
-namespace uuml::ui {
+namespace yauml::ui {
 namespace {
 
 void appendIfVisible(QVector<QRectF> &fragments, const QRectF &candidate) {
@@ -55,4 +55,4 @@ visibleRectangleFragments(const QRectF &target,
   return visible;
 }
 
-} // namespace uuml::ui
+} // namespace yauml::ui

@@ -4,7 +4,7 @@
 
 #include <QJsonObject>
 
-namespace uuml {
+namespace yauml {
 
 // Migrations operate on all persisted documents together. This keeps future
 // cross-file changes atomic and prevents migration details from leaking into
@@ -28,4 +28,4 @@ public:
   static SchemaMigrationOutcome migrate(ProjectJsonDocuments documents);
 };
 
-} // namespace uuml
+} // namespace yauml

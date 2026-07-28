@@ -18,7 +18,7 @@
 #include <QSignalSpy>
 #include <QtTest>
 
-using namespace uuml;
+using namespace yauml;
 
 namespace {
 

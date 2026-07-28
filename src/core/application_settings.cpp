@@ -12,7 +12,7 @@
 #include <algorithm>
 #include <utility>
 
-namespace uuml {
+namespace yauml {
 namespace {
 
 constexpr auto kSettingsGroup = "preferences/diagram";
@@ -39,6 +39,8 @@ constexpr auto kAutomaticUpdateChecksEnabledKey = "automaticChecksEnabled";
 constexpr auto kLastUpdateCheckUtcKey = "lastCheckUtc";
 constexpr auto kHistorySettingsGroup = "history";
 constexpr auto kRecentProjectsKey = "recentProjects";
+constexpr auto kLegacyScopeMigratedKey =
+    "migration/previousProductSettingsImported";
 constexpr qint64 kAutomaticUpdateCheckIntervalSeconds = 24 * 60 * 60;
 
 int validDistributionGap(int gap) {
@@ -413,6 +415,22 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
   }
 }
 
+void ApplicationSettings::migrateLegacyScope(
+    const QString &legacyOrganization, const QString &legacyApplication) {
+  QSettings current;
+  if (current.value(QLatin1String(kLegacyScopeMigratedKey)).toBool())
+    return;
+
+  QSettings legacy(QSettings::NativeFormat, QSettings::UserScope,
+                   legacyOrganization, legacyApplication);
+  for (const QString &key : legacy.allKeys()) {
+    if (!current.contains(key))
+      current.setValue(key, legacy.value(key));
+  }
+  current.setValue(QLatin1String(kLegacyScopeMigratedKey), true);
+  current.sync();
+}
+
 int ApplicationSettings::defaultDistributionGap() const {
   return m_defaultDistributionGap;
 }
@@ -770,4 +788,4 @@ void ApplicationSettings::persistRecentProjects() const {
   settings.sync();
 }
 
-} // namespace uuml
+} // namespace yauml

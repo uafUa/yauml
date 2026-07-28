@@ -1,6 +1,6 @@
 #include "core/diagnostic_model.h"
 
-namespace uuml {
+namespace yauml {
 
 DiagnosticModel::DiagnosticModel(QObject *parent)
     : QAbstractListModel(parent) {}
@@ -85,4 +85,4 @@ QString toString(DiagnosticSeverity severity) {
   return QStringLiteral("info");
 }
 
-} // namespace uuml
+} // namespace yauml

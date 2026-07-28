@@ -6,10 +6,10 @@ Accepted and implemented.
 
 ## Context
 
-A u uml project is a directory of canonical JSON5 files. Git operations, text
+A yauml project is a directory of canonical JSON5 files. Git operations, text
 editors, scripts, or another application instance can modify those files after
 the project has been opened. Interrupted-save recovery protects against a
-partially completed u uml write, but it cannot by itself prevent a later save
+partially completed yauml write, but it cannot by itself prevent a later save
 from silently replacing valid external work.
 
 The domain model and undo stack must remain independent from this concern.

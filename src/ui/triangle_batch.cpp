@@ -2,7 +2,7 @@
 
 #include <algorithm>
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 QVector<TriangleBatch> triangleBatches(qsizetype vertexCount,
                                        qsizetype maximumVerticesPerBatch) {
@@ -25,4 +25,4 @@ QVector<TriangleBatch> triangleBatches(qsizetype vertexCount,
   return batches;
 }
 
-} // namespace uuml::ui
+} // namespace yauml::ui

@@ -2,7 +2,7 @@
 
 #include <QtMath>
 
-namespace uuml::ui {
+namespace yauml::ui {
 namespace {
 
 enum class Axis { Horizontal, Vertical };
@@ -107,4 +107,4 @@ buildConnectorRoute(const QPointF &source, const QVector<QPointF> &bendPoints,
   return route;
 }
 
-} // namespace uuml::ui
+} // namespace yauml::ui

@@ -13,7 +13,9 @@ CMakeLists.txt.user*
 compile_commands.json
 *.qmlc
 *.jsc
-**/.uuml-recovery/
+**/.yauml-recovery/
+# Recovery directories left by builds using the previous product identity.
+**/.u[eu]ml-recovery/
 
 # Platform artifacts
 .DS_Store

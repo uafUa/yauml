@@ -1,23 +1,23 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Installer>
-    <Name>uuml</Name>
+    <Name>yauml</Name>
     <Version>{{PRODUCT_VERSION}}</Version>
-    <Title>uuml Setup</Title>
-    <Publisher>uuml project</Publisher>
+    <Title>yauml Setup</Title>
+    <Publisher>yauml project</Publisher>
     <ProductUrl>https://github.com/uafUa/yauml</ProductUrl>
-    <StartMenuDir>uuml</StartMenuDir>
-    <TargetDir>@ApplicationsDirX64@/uuml</TargetDir>
+    <StartMenuDir>yauml</StartMenuDir>
+    <TargetDir>@ApplicationsDirX64@/yauml</TargetDir>
     <MaintenanceToolName>maintenancetool</MaintenanceToolName>
     <ControlScript>controlscript.qs</ControlScript>
-    <RunProgram>@TargetDir@/uuml.exe</RunProgram>
-    <RunProgramDescription>Start uuml</RunProgramDescription>
+    <RunProgram>@TargetDir@/yauml.exe</RunProgram>
+    <RunProgramDescription>Start yauml</RunProgramDescription>
     <AllowNonAsciiCharacters>true</AllowNonAsciiCharacters>
     <AllowRepositoriesForOfflineInstaller>false</AllowRepositoriesForOfflineInstaller>
     <RemoteRepositories>
         <Repository>
             <Url>{{UPDATE_REPOSITORY_URL}}</Url>
             <Enabled>1</Enabled>
-            <DisplayName>uuml stable updates</DisplayName>
+            <DisplayName>yauml stable updates</DisplayName>
         </Repository>
     </RemoteRepositories>
     <SupportsModify>false</SupportsModify>

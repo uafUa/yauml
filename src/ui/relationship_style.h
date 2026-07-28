@@ -2,7 +2,7 @@
 
 #include "core/project_data.h"
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 enum class RelationshipLineStyle { Solid, Dashed };
 enum class RelationshipDecoration {
@@ -24,4 +24,4 @@ struct RelationshipVisualStyle {
 
 RelationshipVisualStyle relationshipVisualStyle(RelationshipType type);
 
-} // namespace uuml::ui
+} // namespace yauml::ui

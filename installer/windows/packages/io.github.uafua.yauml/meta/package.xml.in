@@ -1,6 +1,6 @@
 <?xml version="1.0" encoding="UTF-8"?>
 <Package>
-    <DisplayName>uuml application</DisplayName>
+    <DisplayName>yauml application</DisplayName>
     <Description>UML and software-architecture modeling application.</Description>
     <Version>{{PRODUCT_VERSION}}</Version>
     <ReleaseDate>{{RELEASE_DATE}}</ReleaseDate>

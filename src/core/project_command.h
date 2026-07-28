@@ -2,7 +2,7 @@
 
 #include <QUndoCommand>
 
-namespace uuml {
+namespace yauml {
 
 class ProjectController;
 struct ProjectData;
@@ -28,4 +28,4 @@ private:
   ProjectController *m_controller;
 };
 
-} // namespace uuml
+} // namespace yauml

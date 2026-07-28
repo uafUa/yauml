@@ -2,7 +2,7 @@
 
 #include <QSet>
 
-namespace uuml::project_style {
+namespace yauml::project_style {
 namespace {
 
 struct Subject {
@@ -108,4 +108,4 @@ effectiveStyleForContainer(const ProjectData &project,
                                   container.subjectId);
 }
 
-} // namespace uuml::project_style
+} // namespace yauml::project_style

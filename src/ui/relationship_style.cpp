@@ -1,6 +1,6 @@
 #include "ui/relationship_style.h"
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 RelationshipVisualStyle relationshipVisualStyle(RelationshipType type) {
   switch (type) {
@@ -30,4 +30,4 @@ RelationshipVisualStyle relationshipVisualStyle(RelationshipType type) {
   return {};
 }
 
-} // namespace uuml::ui
+} // namespace yauml::ui

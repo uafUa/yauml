@@ -11,7 +11,7 @@
 #include <memory>
 #include <optional>
 
-namespace uuml {
+namespace yauml {
 
 class ProjectCommand;
 struct CppImportPreview;
@@ -379,4 +379,4 @@ private:
   DiagramListModel *m_diagramModel;
 };
 
-} // namespace uuml
+} // namespace yauml

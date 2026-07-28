@@ -136,7 +136,7 @@ function Assert-ArchiveChecksum {
     }
 }
 
-function Get-UumlUninstallEntries {
+function Get-YaumlUninstallEntries {
     param([string]$InstallationRoot)
 
     $normalizedRoot = [System.IO.Path]::GetFullPath(
@@ -180,13 +180,13 @@ function Get-UumlUninstallEntries {
 function Assert-WindowsUninstallEntry {
     param([string]$InstallationRoot)
 
-    $entries = @(Get-UumlUninstallEntries -InstallationRoot $InstallationRoot)
+    $entries = @(Get-YaumlUninstallEntries -InstallationRoot $InstallationRoot)
     if ($entries.Count -ne 1) {
         throw "Expected one Windows uninstall entry for '$InstallationRoot', " +
             "but found $($entries.Count)."
     }
     $properties = $entries[0].Properties
-    if ($properties.DisplayName -ne "uuml") {
+    if ($properties.DisplayName -ne "yauml") {
         throw "The Windows uninstall entry has an unexpected display name."
     }
     if ([int]$properties.NoModify -ne 1) {
@@ -211,7 +211,7 @@ function Invoke-InstallerVerificationInstall {
         --accept-licenses `
         --confirm-command `
         install io.github.uafua.yauml `
-        UumlSkipShellIntegration=true
+        YaumlSkipShellIntegration=true
     if ($LASTEXITCODE -ne 0) {
         $action = $ReplaceExisting ? "replacement" : "installation"
         throw "The generated installer's headless $action failed."
@@ -239,7 +239,7 @@ if ($Version -notmatch '^[0-9A-Za-z][0-9A-Za-z.+-]*$') {
     throw "Installer version '$Version' is not safe for an artifact name."
 }
 
-$projectVersion = Get-UumlProjectVersion -RepositoryRoot $repositoryRoot
+$projectVersion = Get-YaumlProjectVersion -RepositoryRoot $repositoryRoot
 $resolvedArchive = [System.IO.Path]::GetFullPath(
     (Join-Path $repositoryRoot $PortableArchive))
 if (-not (Test-Path -LiteralPath $resolvedArchive -PathType Leaf)) {
@@ -397,9 +397,9 @@ try {
             -InstallationRoot $verificationRoot
         Assert-WindowsUninstallEntry -InstallationRoot $verificationRoot
 
-        $installedExecutable = Join-Path $verificationRoot "uuml.exe"
+        $installedExecutable = Join-Path $verificationRoot "yauml.exe"
         & $installedExecutable validate `
-            (Join-Path $repositoryRoot "examples\sample.uuml")
+            (Join-Path $repositoryRoot "examples\sample.yauml")
         if ($LASTEXITCODE -ne 0) {
             throw "The installed application's validation check failed."
         }
@@ -407,7 +407,7 @@ try {
         # Also test installing the downloaded installer over an existing copy.
         # A marker distinguishes a real replacement from an unsafe file overlay.
         $upgradeMarker = Join-Path $verificationRoot `
-            ".uuml-replace-existing"
+            ".yauml-replace-existing"
         Set-Content -LiteralPath $upgradeMarker `
             -Value "must be removed during replacement" -Encoding ascii
         Invoke-InstallerVerificationInstall `
@@ -419,7 +419,7 @@ try {
         }
         Assert-WindowsUninstallEntry -InstallationRoot $verificationRoot
         & $installedExecutable validate `
-            (Join-Path $repositoryRoot "examples\sample.uuml")
+            (Join-Path $repositoryRoot "examples\sample.yauml")
         if ($LASTEXITCODE -ne 0) {
             throw "The replaced application's validation check failed."
         }
@@ -433,9 +433,9 @@ try {
             throw "The generated uninstaller failed to remove the test install."
         }
         if (Test-Path -LiteralPath $installedExecutable) {
-            throw "The test installation still contains uuml.exe after purge."
+            throw "The test installation still contains yauml.exe after purge."
         }
-        if (@(Get-UumlUninstallEntries `
+        if (@(Get-YaumlUninstallEntries `
                 -InstallationRoot $verificationRoot).Count -ne 0) {
             throw "The uninstaller left its Windows registration behind."
         }

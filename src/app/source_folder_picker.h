@@ -5,7 +5,7 @@
 
 class QWindow;
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 // Qt Quick's FolderDialog selects one directory. The Windows shell supports
 // selecting several folders in one native picker, which is important when a
@@ -25,4 +25,4 @@ signals:
   void errorOccurred(const QString &message);
 };
 
-} // namespace uuml::ui
+} // namespace yauml::ui

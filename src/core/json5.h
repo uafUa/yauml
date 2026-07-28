@@ -4,7 +4,7 @@
 #include <QJsonDocument>
 #include <QString>
 
-namespace uuml {
+namespace yauml {
 
 struct Json5Result {
   QJsonDocument document;
@@ -24,4 +24,4 @@ public:
             QJsonDocument::JsonFormat format = QJsonDocument::Indented);
 };
 
-} // namespace uuml
+} // namespace yauml

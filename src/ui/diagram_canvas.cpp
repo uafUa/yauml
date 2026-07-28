@@ -36,7 +36,7 @@
 #include <limits>
 #include <optional>
 
-namespace uuml {
+namespace yauml {
 namespace {
 
 constexpr qreal kHeaderHeight = presentation_layout::kNodeHeaderHeight;
@@ -5130,4 +5130,4 @@ void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
   QQuickItem::keyPressEvent(event);
 }
 
-} // namespace uuml
+} // namespace yauml

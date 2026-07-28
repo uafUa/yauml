@@ -8,7 +8,7 @@
 #include <QJsonObject>
 #include <algorithm>
 
-namespace uuml::ui {
+namespace yauml::ui {
 namespace {
 
 constexpr auto kCatalogResource = ":/icons/action-icons.json5";
@@ -153,4 +153,4 @@ void IconRegistry::load() {
   }
 }
 
-} // namespace uuml::ui
+} // namespace yauml::ui

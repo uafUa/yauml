@@ -9,7 +9,7 @@
 #include <QtConcurrentRun>
 #include <algorithm>
 
-namespace uuml {
+namespace yauml {
 namespace {
 
 QString summarizedValues(const QStringList &values) {
@@ -512,4 +512,4 @@ void CppImportController::rebuildViewState() {
   }
 }
 
-} // namespace uuml
+} // namespace yauml

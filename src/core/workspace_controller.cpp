@@ -14,12 +14,12 @@
 #include <QSettings>
 #include <algorithm>
 
-namespace uuml {
+namespace yauml {
 namespace {
 
 constexpr int kDefaultDetachedWidth = 900;
 constexpr int kDefaultDetachedHeight = 650;
-constexpr auto kDiagramMimeType = "application/x-uuml-diagram-id";
+constexpr auto kDiagramMimeType = "application/x-yauml-diagram-id";
 
 QRect defaultDetachedGeometry(int x = 120, int y = 120) {
   return {x, y, kDefaultDetachedWidth, kDefaultDetachedHeight};
@@ -562,4 +562,4 @@ void WorkspaceController::restoreUiSettings() {
   settings.endGroup();
 }
 
-} // namespace uuml
+} // namespace yauml

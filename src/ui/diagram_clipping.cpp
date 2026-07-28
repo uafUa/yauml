@@ -4,7 +4,7 @@
 
 #include <QSet>
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 DiagramClipLayout::DiagramClipLayout(
     const Diagram &diagram, const QHash<QString, QRectF> &geometryOverrides,
@@ -93,4 +93,4 @@ DiagramClipLayout::overflowEdges(const ContainerPresentation &container) const {
   return result;
 }
 
-} // namespace uuml::ui
+} // namespace yauml::ui

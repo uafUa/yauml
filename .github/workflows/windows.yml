@@ -112,8 +112,8 @@ jobs:
           cmake -S . -B $env:BUILD_DIRECTORY `
             -G "Visual Studio 17 2022" -A x64 `
             -DCMAKE_PREFIX_PATH="$env:QT_ROOT_DIR" `
-            -DUUML_REQUIRE_LIBCLANG=ON `
-            -DUUML_DEPLOY_QT_RUNTIME=OFF
+            -DYAUML_REQUIRE_LIBCLANG=ON `
+            -DYAUML_DEPLOY_QT_RUNTIME=OFF
 
       - name: Build
         shell: pwsh

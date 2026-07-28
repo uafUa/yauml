@@ -23,12 +23,24 @@
 
 namespace {
 
-void writeDiagnostics(const QList<uuml::Diagnostic> &diagnostics,
+QString previousProductIdentity() {
+  // Keep the previous identifier out of new user-facing strings while still
+  // allowing a one-time QSettings migration after the product rename.
+  return QStringLiteral("u") + QStringLiteral("uml");
+}
+
+void migratePreviousProductSettings() {
+  const QString legacyIdentity = previousProductIdentity();
+  yauml::ApplicationSettings::migrateLegacyScope(legacyIdentity,
+                                                 legacyIdentity);
+}
+
+void writeDiagnostics(const QList<yauml::Diagnostic> &diagnostics,
                       QTextStream &out, QTextStream &err) {
   for (const auto &diagnostic : diagnostics) {
     QTextStream &stream =
-        diagnostic.severity == uuml::DiagnosticSeverity::Error ? err : out;
-    stream << uuml::toString(diagnostic.severity).toUpper() << " ["
+        diagnostic.severity == yauml::DiagnosticSeverity::Error ? err : out;
+    stream << yauml::toString(diagnostic.severity).toUpper() << " ["
            << diagnostic.category << "] " << diagnostic.message;
     if (!diagnostic.elementId.isEmpty())
       stream << " (" << diagnostic.elementId << ")";
@@ -38,19 +50,19 @@ void writeDiagnostics(const QList<uuml::Diagnostic> &diagnostics,
 
 int runValidation(int argc, char *argv[]) {
   QCoreApplication application(argc, argv);
-  application.setApplicationName(QStringLiteral("uuml"));
+  application.setApplicationName(QStringLiteral("yauml"));
   QTextStream out(stdout);
   QTextStream err(stderr);
   const QStringList arguments = application.arguments();
   if (arguments.size() < 3) {
-    err << "Usage: uuml validate <project-directory>\n";
+    err << "Usage: yauml validate <project-directory>\n";
     return 64;
   }
 
-  const auto outcome = uuml::ProjectSerializer::load(arguments.at(2));
+  const auto outcome = yauml::ProjectSerializer::load(arguments.at(2));
   writeDiagnostics(outcome.diagnostics, out, err);
   if (outcome.ok) {
-    out << "Valid uuml project: " << outcome.project.name << " ("
+    out << "Valid yauml project: " << outcome.project.name << " ("
         << outcome.project.elements.size() << " elements, "
         << outcome.project.diagrams.size() << " diagrams)\n";
     return 0;
@@ -60,13 +72,14 @@ int runValidation(int argc, char *argv[]) {
 
 int runCppImportCommand(int argc, char *argv[], bool apply) {
   QCoreApplication application(argc, argv);
-  application.setApplicationName(QStringLiteral("uuml"));
-  application.setOrganizationName(QStringLiteral("uuml"));
+  application.setApplicationName(QStringLiteral("yauml"));
+  application.setOrganizationName(QStringLiteral("yauml"));
+  migratePreviousProductSettings();
   QTextStream out(stdout);
   QTextStream err(stderr);
   const QStringList arguments = application.arguments();
   if (arguments.size() < 3) {
-    err << "Usage: uuml " << (apply ? "cpp-import" : "cpp-preview")
+    err << "Usage: yauml " << (apply ? "cpp-import" : "cpp-preview")
         << " <project-directory> "
            "[--conflicts=unresolved|keep-model|use-source] "
         << (apply ? "[--overwrite-external-changes] " : "")
@@ -75,13 +88,13 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   }
 
   const QString projectPath = arguments.at(2);
-  const auto load = uuml::ProjectSerializer::load(projectPath);
+  const auto load = yauml::ProjectSerializer::load(projectPath);
   writeDiagnostics(load.diagnostics, out, err);
   if (!load.ok)
     return 2;
 
-  uuml::CppImportConflictResolution conflictResolution =
-      uuml::CppImportConflictResolution::Unresolved;
+  yauml::CppImportConflictResolution conflictResolution =
+      yauml::CppImportConflictResolution::Unresolved;
   bool overwriteExternalChanges = false;
   QStringList requestedSourcePaths;
   const QString conflictOption = QStringLiteral("--conflicts=");
@@ -89,7 +102,7 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
     const QString argument = arguments.at(index);
     if (argument.startsWith(conflictOption)) {
       bool ok = false;
-      conflictResolution = uuml::cppImportConflictResolutionFromString(
+      conflictResolution = yauml::cppImportConflictResolutionFromString(
           argument.mid(conflictOption.size()), &ok);
       if (!ok) {
         err << "Unknown C++ conflict resolution: " << argument << '\n';
@@ -114,45 +127,45 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
     return 64;
   }
 
-  uuml::ApplicationSettings settings;
-  uuml::CppImportOptions options;
+  yauml::ApplicationSettings settings;
+  yauml::CppImportOptions options;
   options.interfacePattern = settings.cppInterfacePattern();
   options.memberTypeRules = settings.cppMemberTypeRuleValues();
-  uuml::configureCppImportStereotypes(options, load.project);
-  uuml::CppImportPreview preview = uuml::CppImportService::preview(
+  yauml::configureCppImportStereotypes(options, load.project);
+  yauml::CppImportPreview preview = yauml::CppImportService::preview(
       sourcePaths, load.project.elements, load.project.relationships, options);
   preview.resolveAllConflicts(conflictResolution);
   writeDiagnostics(preview.diagnostics, out, err);
   for (const auto &item : preview.items) {
-    out << uuml::toString(item.action).toUpper() << " "
+    out << yauml::toString(item.action).toUpper() << " "
         << item.symbol.qualifiedName;
     if (!item.symbol.filePath.isEmpty())
       out << " — " << item.symbol.filePath << ':' << item.symbol.line;
     if (!item.message.isEmpty())
       out << " — " << item.message;
-    if (item.action == uuml::CppImportAction::Conflict)
+    if (item.action == yauml::CppImportAction::Conflict)
       out << " — "
           << (item.isResolvableConflict()
                   ? QStringLiteral("resolution: %1")
-                        .arg(uuml::toString(item.resolution))
+                        .arg(yauml::toString(item.resolution))
                   : QStringLiteral("manual repair required"));
     out << '\n';
   }
   for (const auto &item : preview.relationshipItems) {
-    out << uuml::toString(item.action).toUpper() << " "
+    out << yauml::toString(item.action).toUpper() << " "
         << item.source.sourceName << " -> " << item.source.targetName << " ("
-        << uuml::toString(item.source.relationshipType) << ')';
+        << yauml::toString(item.source.relationshipType) << ')';
     if (!item.source.filePath.isEmpty())
       out << " — " << item.source.filePath << ':' << item.source.line;
     if (!item.message.isEmpty())
       out << " — " << item.message;
     if (!item.source.classificationReason.isEmpty())
       out << " — " << item.source.classificationReason;
-    if (item.action == uuml::CppImportAction::Conflict)
+    if (item.action == yauml::CppImportAction::Conflict)
       out << " — "
           << (item.isResolvableConflict()
                   ? QStringLiteral("resolution: %1")
-                        .arg(uuml::toString(item.resolution))
+                        .arg(yauml::toString(item.resolution))
                   : QStringLiteral("manual repair required"));
     out << '\n';
   }
@@ -171,12 +184,12 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
     return preview.unresolvedConflictCount() > 0 ? 3 : 0;
   }
 
-  uuml::ProjectData imported = load.project;
+  yauml::ProjectData imported = load.project;
   const QStringList previousSourceRoots = imported.cppImport.sourceRoots;
-  const int appliedCount = uuml::CppImportService::apply(imported, preview);
+  const int appliedCount = yauml::CppImportService::apply(imported, preview);
   if (appliedCount > 0 ||
       imported.cppImport.sourceRoots != previousSourceRoots) {
-    const auto save = uuml::ProjectSerializer::save(
+    const auto save = yauml::ProjectSerializer::save(
         projectPath, imported, load.revision, overwriteExternalChanges);
     writeDiagnostics(save.diagnostics, out, err);
     if (!save.ok)
@@ -213,31 +226,32 @@ int main(int argc, char *argv[]) {
 
   QQuickStyle::setStyle(QStringLiteral("Fusion"));
   QGuiApplication application(argc, argv);
-  application.setApplicationName(QStringLiteral("uuml"));
-  application.setApplicationDisplayName(QStringLiteral("u uml"));
-  application.setApplicationVersion(QStringLiteral(UUML_VERSION));
-  application.setOrganizationName(QStringLiteral("uuml"));
+  application.setApplicationName(QStringLiteral("yauml"));
+  application.setApplicationDisplayName(QStringLiteral("yauml"));
+  application.setApplicationVersion(QStringLiteral(YAUML_VERSION));
+  application.setOrganizationName(QStringLiteral("yauml"));
+  migratePreviousProductSettings();
 
-  qmlRegisterType<uuml::DiagramCanvas>("Uuml.Native", 1, 0, "DiagramCanvas");
+  qmlRegisterType<yauml::DiagramCanvas>("Yauml.Native", 1, 0, "DiagramCanvas");
 
-  uuml::ProjectController project;
-  uuml::ApplicationSettings applicationSettings;
-  uuml::CppImportController cppImport(&project, &applicationSettings);
-  uuml::WorkspaceController workspace(&project, true);
-  uuml::ui::SourceFolderPicker sourceFolderPicker;
-  uuml::ui::IconRegistry iconRegistry;
-  uuml::ui::UiTheme uiTheme;
-  uuml::ui::UpdateController updateController(
+  yauml::ProjectController project;
+  yauml::ApplicationSettings applicationSettings;
+  yauml::CppImportController cppImport(&project, &applicationSettings);
+  yauml::WorkspaceController workspace(&project, true);
+  yauml::ui::SourceFolderPicker sourceFolderPicker;
+  yauml::ui::IconRegistry iconRegistry;
+  yauml::ui::UiTheme uiTheme;
+  yauml::ui::UpdateController updateController(
       application.applicationVersion(),
-      QUrl(QStringLiteral(UUML_UPDATE_MANIFEST_URL)), &applicationSettings,
+      QUrl(QStringLiteral(YAUML_UPDATE_MANIFEST_URL)), &applicationSettings,
       project.diagnostics());
   for (const QString &error : iconRegistry.errors())
     project.diagnostics()->addWarning(QStringLiteral("icons"), error);
-  QObject::connect(&project, &uuml::ProjectController::projectOpened,
+  QObject::connect(&project, &yauml::ProjectController::projectOpened,
                    &applicationSettings,
-                   &uuml::ApplicationSettings::addRecentProject);
+                   &yauml::ApplicationSettings::addRecentProject);
   QObject::connect(
-      &sourceFolderPicker, &uuml::ui::SourceFolderPicker::errorOccurred,
+      &sourceFolderPicker, &yauml::ui::SourceFolderPicker::errorOccurred,
       &project, [&project](const QString &message) {
         project.diagnostics()->addError(QStringLiteral("cpp-import"), message);
       });
@@ -267,10 +281,10 @@ int main(int argc, char *argv[]) {
   QObject::connect(
       &engine, &QQmlApplicationEngine::objectCreationFailed, &application,
       [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
-  engine.loadFromModule(QStringLiteral("Uuml"), QStringLiteral("Main"));
+  engine.loadFromModule(QStringLiteral("Yauml"), QStringLiteral("Main"));
   if (!application.arguments().contains(QStringLiteral("--smoke-test"))) {
     QTimer::singleShot(1500, &updateController,
-                       &uuml::ui::UpdateController::checkAutomaticallyIfDue);
+                       &yauml::ui::UpdateController::checkAutomaticallyIfDue);
   }
   if (application.arguments().contains(QStringLiteral("--smoke-test"))) {
     if (!iconRegistry.isValid()) {

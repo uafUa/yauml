@@ -1,7 +1,7 @@
 import QtQuick
 import QtQuick.Controls
 import QtQuick.Layouts
-import Uuml.Native
+import Yauml.Native
 
 Item {
     id: root

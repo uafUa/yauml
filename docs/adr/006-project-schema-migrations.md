@@ -50,5 +50,5 @@ same-named custom entries or restoring unrelated defaults a user deleted.
 
 Opening an unversioned project produces an informational log entry and marks the
 loaded representation as migrated, but does not itself make an external write.
-A future-version project fails early with guidance to update uuml, protecting
+A future-version project fails early with guidance to update yauml, protecting
 data the running application cannot understand.

@@ -13,7 +13,7 @@ ApplicationWindow {
     minimumWidth: 900
     minimumHeight: 600
     visible: true
-    title: (projectController.dirty ? "*" : "") + projectController.projectName + " — u uml"
+    title: (projectController.dirty ? "*" : "") + projectController.projectName + " — yauml"
 
     property bool leftPanelVisible: workspaceController.projectTreeVisible
     property bool rightPanelVisible: workspaceController.propertiesVisible
@@ -57,7 +57,7 @@ ApplicationWindow {
             } else {
                 updateResultFailed = true
                 updateResultMessage =
-                        qsTr("The maintenance tool is not available. Reinstall uuml using the latest installer to enable in-place updates.")
+                        qsTr("The maintenance tool is not available. Reinstall yauml using the latest installer to enable in-place updates.")
                 updateCheckResultDialog.open()
             }
         }
@@ -464,7 +464,7 @@ ApplicationWindow {
                     selectionBehavior: TableView.SelectRows
                     selectionMode: TableView.ExtendedSelection
                     readonly property string browserItemsMimeType:
-                        "application/x-uuml-browser-items"
+                        "application/x-yauml-browser-items"
                     property bool selectionOriginatesFromTree: false
                     function toggleBranch(row) {
                         if (row >= 0)
@@ -1395,7 +1395,7 @@ ApplicationWindow {
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
-                text: qsTr("uuml %1 is available. You are currently using %2.")
+                text: qsTr("yauml %1 is available. You are currently using %2.")
                       .arg(updateController.availableVersion)
                       .arg(updateController.currentVersion)
             }
@@ -1404,7 +1404,7 @@ ApplicationWindow {
                 wrapMode: Text.Wrap
                 color: uiTheme.mutedText
                 text: updateController.maintenanceToolAvailable
-                      ? qsTr("Your project will follow the normal save prompt before uuml closes and starts the maintenance tool.")
+                      ? qsTr("Your project will follow the normal save prompt before yauml closes and starts the maintenance tool.")
                       : qsTr("This portable copy has no maintenance tool. The release page will open so you can download the latest installer.")
             }
             Label {
@@ -2414,7 +2414,7 @@ ApplicationWindow {
         contentItem: Label {
             wrapMode: Text.Wrap
             padding: 16
-            text: qsTr("The selected folder already contains a u uml project. "
+            text: qsTr("The selected folder already contains a yauml project. "
                        + "Saving here will replace its manifest, model, and "
                        + "diagram files. Continue?")
         }
@@ -2440,7 +2440,7 @@ ApplicationWindow {
         modal: true
         focus: true
         closePolicy: Popup.NoAutoClose
-        title: qsTr("Project files changed outside u uml")
+        title: qsTr("Project files changed outside yauml")
 
         contentItem: ColumnLayout {
             spacing: 12
@@ -2450,7 +2450,7 @@ ApplicationWindow {
                 wrapMode: Text.Wrap
                 text: qsTr("Saving was stopped to avoid overwriting files "
                            + "changed by another application, Git operation, "
-                           + "or u uml instance.")
+                           + "or yauml instance.")
             }
 
             Label {
@@ -2812,13 +2812,13 @@ ApplicationWindow {
 
     FolderDialog {
         id: openDialog
-        title: qsTr("Open u uml project directory")
+        title: qsTr("Open yauml project directory")
         onAccepted: projectController.openProject(selectedFolder)
     }
 
     FolderDialog {
         id: saveDialog
-        title: qsTr("Choose u uml project directory")
+        title: qsTr("Choose yauml project directory")
         onAccepted: {
             root.pendingSaveUrl = selectedFolder
             if (projectController.saveDestinationContainsProject(selectedFolder))

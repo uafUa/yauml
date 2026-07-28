@@ -9,7 +9,7 @@
 #include <QSizeF>
 #include <QVector>
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 // Options are expressed in scene units. DiagramCanvas converts the visual
 // tolerance from view pixels so snapping feels consistent at every zoom level.
@@ -55,4 +55,4 @@ snapDiagramBottomRightResize(const QRectF &requestedGeometry,
                              const QSizeF &minimumSize,
                              const DiagramSnapOptions &options);
 
-} // namespace uuml::ui
+} // namespace yauml::ui

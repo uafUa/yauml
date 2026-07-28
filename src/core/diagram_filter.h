@@ -4,7 +4,7 @@
 
 #include <QVariantMap>
 
-namespace uuml::diagram_filter {
+namespace yauml::diagram_filter {
 
 // Returns true when at least one persisted criterion can affect visibility.
 bool isActive(const DiagramFilter &filter);
@@ -18,4 +18,4 @@ bool matchesElement(const ProjectData &project, const ModelElement &element,
 QVariantMap toVariantMap(const DiagramFilter &filter);
 DiagramFilter fromVariantMap(const QVariantMap &values);
 
-} // namespace uuml::diagram_filter
+} // namespace yauml::diagram_filter

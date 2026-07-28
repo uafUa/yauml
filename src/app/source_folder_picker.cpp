@@ -11,7 +11,7 @@
 #include <wrl/client.h>
 #endif
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 SourceFolderPicker::SourceFolderPicker(QObject *parent) : QObject(parent) {}
 
@@ -128,4 +128,4 @@ void SourceFolderPicker::open(QObject *parentWindow,
 #endif
 }
 
-} // namespace uuml::ui
+} // namespace yauml::ui

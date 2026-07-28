@@ -11,7 +11,7 @@
 #include <QStringList>
 #include <optional>
 
-namespace uuml {
+namespace yauml {
 
 enum class ElementType { Package, Class, Struct, Enumeration };
 enum class RelationshipType {
@@ -301,9 +301,9 @@ ConnectorPresentation *findConnector(Diagram &diagram, const QString &id);
 const ConnectorPresentation *findConnector(const Diagram &diagram,
                                            const QString &id);
 
-} // namespace uuml
+} // namespace yauml
 
-Q_DECLARE_METATYPE(uuml::ElementType)
-Q_DECLARE_METATYPE(uuml::RelationshipType)
-Q_DECLARE_METATYPE(uuml::ConnectorSide)
-Q_DECLARE_METATYPE(uuml::ConnectorRouting)
+Q_DECLARE_METATYPE(yauml::ElementType)
+Q_DECLARE_METATYPE(yauml::RelationshipType)
+Q_DECLARE_METATYPE(yauml::ConnectorSide)
+Q_DECLARE_METATYPE(yauml::ConnectorRouting)

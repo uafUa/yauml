@@ -4,7 +4,7 @@
 
 #include <QUuid>
 
-namespace uuml {
+namespace yauml {
 
 QString toString(ElementType type) {
   switch (type) {
@@ -245,4 +245,4 @@ const ConnectorPresentation *findConnector(const Diagram &diagram,
   return findById(diagram.connectors, id);
 }
 
-} // namespace uuml
+} // namespace yauml

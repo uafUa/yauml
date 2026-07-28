@@ -12,25 +12,25 @@ QString deterministicId(quint64 value) {
       .arg(value, 12, 10, QLatin1Char('0'));
 }
 
-uuml::ProjectData createPerformanceProject(int elementCount) {
+yauml::ProjectData createPerformanceProject(int elementCount) {
   constexpr int columns = 30;
   constexpr qreal horizontalSpacing = 250.0;
   constexpr qreal verticalSpacing = 160.0;
 
-  uuml::ProjectData project;
+  yauml::ProjectData project;
   project.id = deterministicId(1);
   project.name =
       QStringLiteral("Performance Example — %1 classes").arg(elementCount);
 
-  uuml::Diagram diagram;
+  yauml::Diagram diagram;
   diagram.id = deterministicId(2);
   diagram.name =
       QStringLiteral("%1-node performance overview").arg(elementCount);
 
   for (int index = 0; index < elementCount; ++index) {
-    uuml::ModelElement element;
+    yauml::ModelElement element;
     element.id = deterministicId(1000 + index);
-    element.type = uuml::ElementType::Class;
+    element.type = yauml::ElementType::Class;
     element.name =
         QStringLiteral("Component%1").arg(index + 1, 3, 10, QLatin1Char('0'));
     element.attributes = {QStringLiteral("+ value%1: int").arg(index + 1),
@@ -38,7 +38,7 @@ uuml::ProjectData createPerformanceProject(int elementCount) {
     element.operations = {QStringLiteral("+ update(input: Data): Result")};
     project.elements.append(element);
 
-    uuml::NodePresentation node;
+    yauml::NodePresentation node;
     node.id = deterministicId(10000 + index);
     node.elementId = element.id;
     const int column = index % columns;
@@ -50,15 +50,15 @@ uuml::ProjectData createPerformanceProject(int elementCount) {
 
   quint64 relationshipNumber = 0;
   auto connect = [&](int sourceIndex, int targetIndex) {
-    uuml::Relationship relationship;
+    yauml::Relationship relationship;
     relationship.id = deterministicId(20000 + relationshipNumber);
-    relationship.type = uuml::RelationshipType::Dependency;
+    relationship.type = yauml::RelationshipType::Dependency;
     relationship.name = QStringLiteral("uses");
     relationship.sourceId = project.elements.at(sourceIndex).id;
     relationship.targetId = project.elements.at(targetIndex).id;
     project.relationships.append(relationship);
 
-    uuml::ConnectorPresentation connector;
+    yauml::ConnectorPresentation connector;
     connector.id = deterministicId(40000 + relationshipNumber);
     connector.relationshipId = relationship.id;
     diagram.connectors.append(connector);
@@ -85,7 +85,7 @@ int main(int argc, char *argv[]) {
   QTextStream err(stderr);
   const QStringList arguments = application.arguments();
   if (arguments.size() < 2) {
-    err << "Usage: uuml_generate_performance_example <project-directory> "
+    err << "Usage: yauml_generate_performance_example <project-directory> "
            "[element-count]\n";
     return 64;
   }
@@ -98,11 +98,11 @@ int main(int argc, char *argv[]) {
   }
 
   const auto project = createPerformanceProject(count);
-  const auto outcome = uuml::ProjectSerializer::save(arguments.at(1), project);
+  const auto outcome = yauml::ProjectSerializer::save(arguments.at(1), project);
   for (const auto &diagnostic : outcome.diagnostics) {
     QTextStream &stream =
-        diagnostic.severity == uuml::DiagnosticSeverity::Error ? err : out;
-    stream << uuml::toString(diagnostic.severity).toUpper() << " ["
+        diagnostic.severity == yauml::DiagnosticSeverity::Error ? err : out;
+    stream << yauml::toString(diagnostic.severity).toUpper() << " ["
            << diagnostic.category << "] " << diagnostic.message << '\n';
   }
   if (!outcome.ok)

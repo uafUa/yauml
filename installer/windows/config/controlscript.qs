@@ -1,5 +1,5 @@
 /*
- * uuml installer controller.
+ * yauml installer controller.
  *
  * A hybrid installer can update an installation through its maintenance tool,
  * but launching a newer downloaded installer is still a common user path.
@@ -13,15 +13,15 @@ function Controller()
     this.existingInstallation =
         installer.isInstaller() ? this.findExistingInstallation() : null;
     if (this.existingInstallation) {
-        console.log("Existing uuml installation found at "
+        console.log("Existing yauml installation found at "
                     + this.existingInstallation.root);
         // IFW validates TargetDir before entering its first wizard page, so
         // the replacement decision must be completed during initialization.
         // --accept-messages answers this question for verified deployments.
         var answer = QMessageBox.question(
-            "UumlReplaceExisting",
-            "Replace existing uuml installation?",
-            "An existing uuml installation was found at:\n\n"
+            "YaumlReplaceExisting",
+            "Replace existing yauml installation?",
+            "An existing yauml installation was found at:\n\n"
                 + this.existingInstallation.root
                 + "\n\nThe existing application files will be removed before "
                 + "the new version is installed. Project files stored "
@@ -63,31 +63,34 @@ Controller.prototype.registryInstallLocations = function()
         "HKCU\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
         "HKLM\\Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall"
     ];
+    var productNames = ["yauml", "u" + "uml"];
 
     for (var rootIndex = 0; rootIndex < uninstallRoots.length; ++rootIndex) {
-        var search = installer.execute(
-            "reg.exe",
-            ["query", uninstallRoots[rootIndex], "/s", "/f", "uuml",
-             "/d", "/e", "/reg:64"]);
-        if (search.length < 2 || search[1] !== 0)
-            continue;
-
-        var lines = search[0].split(/\r?\n/);
-        for (var lineIndex = 0; lineIndex < lines.length; ++lineIndex) {
-            var key = lines[lineIndex].trim();
-            if (key.indexOf("HKEY_") !== 0)
-                continue;
-
-            var locationQuery = installer.execute(
+        for (var nameIndex = 0; nameIndex < productNames.length; ++nameIndex) {
+            var search = installer.execute(
                 "reg.exe",
-                ["query", key, "/v", "InstallLocation", "/reg:64"]);
-            if (locationQuery.length < 2 || locationQuery[1] !== 0)
+                ["query", uninstallRoots[rootIndex], "/s", "/f",
+                 productNames[nameIndex], "/d", "/e", "/reg:64"]);
+            if (search.length < 2 || search[1] !== 0)
                 continue;
 
-            var match = locationQuery[0].match(
-                /InstallLocation\s+REG_\w+\s+([^\r\n]+)/i);
-            if (match && locations.indexOf(match[1].trim()) < 0)
-                locations.push(match[1].trim());
+            var lines = search[0].split(/\r?\n/);
+            for (var lineIndex = 0; lineIndex < lines.length; ++lineIndex) {
+                var key = lines[lineIndex].trim();
+                if (key.indexOf("HKEY_") !== 0)
+                    continue;
+
+                var locationQuery = installer.execute(
+                    "reg.exe",
+                    ["query", key, "/v", "InstallLocation", "/reg:64"]);
+                if (locationQuery.length < 2 || locationQuery[1] !== 0)
+                    continue;
+
+                var match = locationQuery[0].match(
+                    /InstallLocation\s+REG_\w+\s+([^\r\n]+)/i);
+                if (match && locations.indexOf(match[1].trim()) < 0)
+                    locations.push(match[1].trim());
+            }
         }
     }
     return locations;
@@ -147,13 +150,13 @@ Controller.prototype.replaceExistingInstallation = function(showErrors)
     }
     if (!succeeded) {
         var message =
-            "The existing uuml installation could not be removed. "
-            + "Close uuml and try again.";
+            "The existing yauml installation could not be removed. "
+            + "Close yauml and try again.";
         console.log(message);
         if (showErrors) {
             QMessageBox.critical(
-                "UumlUpgradeFailed",
-                "Unable to replace uuml",
+                "YaumlUpgradeFailed",
+                "Unable to replace yauml",
                 message,
                 QMessageBox.Ok);
         }

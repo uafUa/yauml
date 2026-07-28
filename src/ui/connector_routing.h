@@ -5,7 +5,7 @@
 #include <QPointF>
 #include <QVector>
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 // A route contains both the visible polyline and the positions of persisted
 // user bend points within that polyline. Orthogonal routing may introduce
@@ -20,4 +20,4 @@ buildConnectorRoute(const QPointF &source, const QVector<QPointF> &bendPoints,
                     const QPointF &target, ConnectorRouting routing,
                     ConnectorSide sourceSide, ConnectorSide targetSide);
 
-} // namespace uuml::ui
+} // namespace yauml::ui

@@ -7,7 +7,7 @@
 #include <QTimer>
 #include <QVariantList>
 
-namespace uuml {
+namespace yauml {
 
 class ProjectController;
 
@@ -120,4 +120,4 @@ private:
   int m_revision = 0;
 };
 
-} // namespace uuml
+} // namespace yauml

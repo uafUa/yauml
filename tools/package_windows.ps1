@@ -105,7 +105,7 @@ function Assert-PackageContents {
     param([string]$PackageDirectory)
 
     $requiredFiles = @(
-        "uuml.exe",
+        "yauml.exe",
         "libclang.dll",
         "Qt6Core.dll",
         "Qt6Gui.dll",
@@ -126,7 +126,7 @@ function Assert-PackageContents {
 
 $resolvedBuildDirectory = [System.IO.Path]::GetFullPath(
     (Join-Path $repositoryRoot $BuildDirectory))
-$projectVersion = Get-UumlProjectVersion -RepositoryRoot $repositoryRoot
+$projectVersion = Get-YaumlProjectVersion -RepositoryRoot $repositoryRoot
 if (-not $Version) {
     $Version = $projectVersion
 }
@@ -148,7 +148,7 @@ $resolvedOutputDirectory = [System.IO.Path]::GetFullPath(
 New-Item -ItemType Directory -Force -Path $resolvedOutputDirectory | Out-Null
 
 $binaryDirectory = Join-Path $resolvedBuildDirectory $Configuration
-$sourceExecutable = Join-Path $binaryDirectory "uuml.exe"
+$sourceExecutable = Join-Path $binaryDirectory "yauml.exe"
 $sourceLibClang = Join-Path $binaryDirectory "libclang.dll"
 if (-not (Test-Path -LiteralPath $sourceExecutable)) {
     throw "Application executable was not found at '$sourceExecutable'."
@@ -187,7 +187,7 @@ try {
         --no-translations `
         --no-compiler-runtime `
         --dir $stagingDirectory `
-        (Join-Path $stagingDirectory "uuml.exe")
+        (Join-Path $stagingDirectory "yauml.exe")
     if ($LASTEXITCODE -ne 0) {
         throw "windeployqt failed with exit code $LASTEXITCODE."
     }
@@ -195,7 +195,7 @@ try {
     Assert-PackageContents -PackageDirectory $stagingDirectory
 
     if ($Verify) {
-        $stagedExecutable = Join-Path $stagingDirectory "uuml.exe"
+        $stagedExecutable = Join-Path $stagingDirectory "yauml.exe"
         $previousPath = $env:PATH
         $previousQpaPlatform = $env:QT_QPA_PLATFORM
         $previousQuickBackend = $env:QT_QUICK_BACKEND
@@ -211,7 +211,7 @@ try {
             ) -join [System.IO.Path]::PathSeparator
 
             & $stagedExecutable validate `
-                (Join-Path $repositoryRoot "examples\sample.uuml")
+                (Join-Path $repositoryRoot "examples\sample.yauml")
             if ($LASTEXITCODE -ne 0) {
                 throw "The packaged application's validation smoke test failed."
             }

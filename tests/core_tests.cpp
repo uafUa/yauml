@@ -28,7 +28,7 @@
 #include <QTemporaryDir>
 #include <QtTest>
 
-using namespace uuml;
+using namespace yauml;
 
 namespace {
 
@@ -58,8 +58,8 @@ public:
       : m_organization(QCoreApplication::organizationName()),
         m_application(QCoreApplication::applicationName()) {
     QCoreApplication::setOrganizationName(
-        QStringLiteral("uuml-preferences-test-%1").arg(newId()));
-    QCoreApplication::setApplicationName(QStringLiteral("uuml-core-tests"));
+        QStringLiteral("yauml-preferences-test-%1").arg(newId()));
+    QCoreApplication::setApplicationName(QStringLiteral("yauml-core-tests"));
   }
 
   ~IsolatedSettingsScope() {
@@ -143,11 +143,13 @@ private slots:
   void closingAllDetachedWindowsReturnsTheirDiagrams();
   void persistedWorkspaceRestoresTabGroups();
   void applicationPreferencesPersist();
+  void applicationPreferencesMigratePreviousProductScope();
   void updateManifestValidationAndVersionComparison();
   void applicationPreferencesMigrateLegacyCppPointerTypes();
   void recentProjectHistoryPersists();
   void themePreferencesPersistAndReset();
   void interruptedSaveRecovery();
+  void previousProductInterruptedSaveRecovery();
   void invalidSaveRecoveryIsNonDestructive();
   void saveFaultBoundariesRemainRecoverable();
   void fullyCoveredTextHasNoVisibleFragments();
@@ -618,7 +620,7 @@ void CoreTests::invalidProjectSchemaVersionsAreRejected() {
       [](const Diagnostic &diagnostic) {
         return diagnostic.category == QStringLiteral("schema") &&
                diagnostic.message.contains(QStringLiteral("newer")) &&
-               diagnostic.message.contains(QStringLiteral("update uuml"));
+               diagnostic.message.contains(QStringLiteral("update yauml"));
       }));
 }
 
@@ -4285,8 +4287,8 @@ void CoreTests::persistedWorkspaceRestoresTabGroups() {
     QString application = QCoreApplication::applicationName();
     SettingsScope() {
       QCoreApplication::setOrganizationName(
-          QStringLiteral("uuml-workspace-test-%1").arg(newId()));
-      QCoreApplication::setApplicationName(QStringLiteral("uuml-core-tests"));
+          QStringLiteral("yauml-workspace-test-%1").arg(newId()));
+      QCoreApplication::setApplicationName(QStringLiteral("yauml-core-tests"));
     }
     ~SettingsScope() {
       QSettings().clear();
@@ -4567,6 +4569,45 @@ void CoreTests::updateManifestValidationAndVersionComparison() {
                .manifest);
 }
 
+void CoreTests::applicationPreferencesMigratePreviousProductScope() {
+  IsolatedSettingsScope settingsScope;
+  const QString previousOrganization =
+      QCoreApplication::organizationName() + QStringLiteral("-previous");
+  const QString previousApplication =
+      QCoreApplication::applicationName() + QStringLiteral("-previous");
+
+  QSettings previous(QSettings::NativeFormat, QSettings::UserScope,
+                     previousOrganization, previousApplication);
+  previous.clear();
+  previous.setValue(QStringLiteral("preferences/diagram/defaultDistributionGap"),
+                    37);
+  previous.setValue(QStringLiteral("preferences/diagram/gridSpacing"), 99);
+  previous.sync();
+
+  QSettings current;
+  current.setValue(QStringLiteral("preferences/diagram/gridSpacing"), 44);
+  ApplicationSettings::migrateLegacyScope(previousOrganization,
+                                          previousApplication);
+
+  ApplicationSettings migrated;
+  QCOMPARE(migrated.defaultDistributionGap(), 37);
+  QCOMPARE(migrated.gridSpacing(), 44);
+
+  // The migration marker prevents later edits in the abandoned scope from
+  // repopulating values that the user deliberately reset in the new product.
+  current.remove(QStringLiteral("preferences/diagram/defaultDistributionGap"));
+  previous.setValue(QStringLiteral("preferences/diagram/defaultDistributionGap"),
+                    55);
+  previous.sync();
+  ApplicationSettings::migrateLegacyScope(previousOrganization,
+                                          previousApplication);
+  ApplicationSettings afterSecondAttempt;
+  QCOMPARE(afterSecondAttempt.defaultDistributionGap(),
+           ApplicationSettings::kDefaultDistributionGap);
+
+  previous.clear();
+}
+
 void CoreTests::applicationPreferencesMigrateLegacyCppPointerTypes() {
   IsolatedSettingsScope settingsScope;
   {
@@ -4637,13 +4678,13 @@ void CoreTests::recentProjectHistoryPersists() {
        ++index) {
     settings.addRecentProject(
         QDir(projectDirectory.path())
-            .filePath(QStringLiteral("project-%1.uuml").arg(index)));
+            .filePath(QStringLiteral("project-%1.yauml").arg(index)));
   }
   const QVariantList capped = settings.recentProjects();
   QCOMPARE(capped.size(), ApplicationSettings::kMaximumRecentProjects);
   const QString newestPath =
       QDir(projectDirectory.path())
-          .filePath(QStringLiteral("project-%1.uuml")
+          .filePath(QStringLiteral("project-%1.yauml")
                         .arg(ApplicationSettings::kMaximumRecentProjects));
   QCOMPARE(capped.first().toMap().value("path").toString(),
            QDir::cleanPath(newestPath));
@@ -4722,7 +4763,7 @@ void CoreTests::interruptedSaveRecovery() {
   QVERIFY(ProjectSerializer::save(temporary.path(), project).ok);
 
   const QString recovery =
-      QDir(temporary.path()).filePath(QStringLiteral(".uuml-recovery"));
+      QDir(temporary.path()).filePath(QStringLiteral(".yauml-recovery"));
   QVERIFY(QDir().mkpath(recovery));
   struct FilePair {
     QString source;
@@ -4761,6 +4802,38 @@ void CoreTests::interruptedSaveRecovery() {
                   }));
 }
 
+void CoreTests::previousProductInterruptedSaveRecovery() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  const ProjectData project =
+      createStarterProject(QStringLiteral("Previous recovery"));
+  QVERIFY(ProjectSerializer::save(temporary.path(), project).ok);
+
+  const QString previousRecoveryName =
+      QStringLiteral(".") + QStringLiteral("u") + QStringLiteral("uml-recovery");
+  const QDir root(temporary.path());
+  const QString recovery = root.filePath(previousRecoveryName);
+  QVERIFY(QDir().mkpath(recovery));
+  const QList<QPair<QString, QString>> files = {
+      {root.filePath(QStringLiteral("manifest.json5")),
+       QDir(recovery).filePath(QStringLiteral("manifest.json5"))},
+      {root.filePath(QStringLiteral("model/model.json5")),
+       QDir(recovery).filePath(QStringLiteral("model.json5"))},
+      {root.filePath(QStringLiteral("diagrams/diagrams.json5")),
+       QDir(recovery).filePath(QStringLiteral("diagrams.json5"))}};
+  for (const auto &[source, backup] : files)
+    QVERIFY(QFile::copy(source, backup));
+  writeTestFile(QDir(recovery).filePath(QStringLiteral("pending")),
+                QByteArrayLiteral("pending\n"));
+  writeTestFile(files.at(1).first, QByteArrayLiteral("{ damaged"));
+
+  const LoadOutcome outcome = ProjectSerializer::load(temporary.path());
+  QVERIFY(outcome.ok);
+  QVERIFY(outcome.recovered);
+  QCOMPARE(outcome.project.name, QStringLiteral("Previous recovery"));
+  QVERIFY(!QDir(recovery).exists());
+}
+
 void CoreTests::invalidSaveRecoveryIsNonDestructive() {
   const auto exerciseInvalidRecovery = [](bool removeBackup,
                                           const QString &caseName) {
@@ -4773,7 +4846,7 @@ void CoreTests::invalidSaveRecoveryIsNonDestructive() {
       return false;
 
     const QDir root(temporary.path());
-    const QString recovery = root.filePath(QStringLiteral(".uuml-recovery"));
+    const QString recovery = root.filePath(QStringLiteral(".yauml-recovery"));
     if (!QDir().mkpath(recovery))
       return false;
     struct RecoveryPair {
@@ -4862,7 +4935,7 @@ void CoreTests::saveFaultBoundariesRemainRecoverable() {
   };
   const auto pendingMarker = [](const QString &root) {
     return QDir(root).filePath(
-        QStringLiteral(".uuml-recovery/pending"));
+        QStringLiteral(".yauml-recovery/pending"));
   };
   const auto caseLabel = [](ProjectWritePurpose purpose,
                             ProjectWriteStage stage, int ordinal) {
@@ -4992,7 +5065,7 @@ void CoreTests::saveFaultBoundariesRemainRecoverable() {
 void CoreTests::fullyCoveredTextHasNoVisibleFragments() {
   const QRectF textBounds(10, 10, 100, 20);
   QVERIFY(
-      uuml::ui::visibleRectangleFragments(textBounds, {QRectF(0, 0, 200, 200)})
+      yauml::ui::visibleRectangleFragments(textBounds, {QRectF(0, 0, 200, 200)})
           .isEmpty());
 }
 
@@ -5000,7 +5073,7 @@ void CoreTests::partialTextCoveragePreservesOnlyExposedArea() {
   const QRectF textBounds(0, 0, 100, 100);
   const QRectF occluder(20, 20, 60, 60);
   const auto fragments =
-      uuml::ui::visibleRectangleFragments(textBounds, {occluder});
+      yauml::ui::visibleRectangleFragments(textBounds, {occluder});
 
   qreal visibleArea = 0.0;
   for (const QRectF &fragment : fragments) {
@@ -5012,7 +5085,7 @@ void CoreTests::partialTextCoveragePreservesOnlyExposedArea() {
 }
 
 void CoreTests::triangleGeometryIsSplitOnPrimitiveBoundaries() {
-  const auto batches = uuml::ui::triangleBatches(150'006, 60'000);
+  const auto batches = yauml::ui::triangleBatches(150'006, 60'000);
   QCOMPARE(batches.size(), 3);
   QCOMPARE(batches.at(0).firstVertex, 0);
   QCOMPARE(batches.at(0).vertexCount, 60'000);

@@ -10,7 +10,7 @@
 #include <algorithm>
 #include <cmath>
 
-namespace uuml::presentation_layout {
+namespace yauml::presentation_layout {
 namespace {
 
 QStringList bodyLines(const ModelElement &element, bool showAttributes,
@@ -294,4 +294,4 @@ QRectF containerContentGeometry(const ProjectData &project,
   return fitted;
 }
 
-} // namespace uuml::presentation_layout
+} // namespace yauml::presentation_layout

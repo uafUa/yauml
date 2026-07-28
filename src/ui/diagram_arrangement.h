@@ -5,7 +5,7 @@
 #include <QString>
 #include <optional>
 
-namespace uuml::ui {
+namespace yauml::ui {
 
 // Pure geometry operations used by the interactive canvas and its tests.
 // Keeping these rules independent of QML and ProjectController makes their
@@ -45,4 +45,4 @@ arrangeDiagramNodes(const QList<DiagramNodeGeometry> &nodes,
                     ArrangementOperation operation,
                     qreal fallbackDistributionGap);
 
-} // namespace uuml::ui
+} // namespace yauml::ui

@@ -90,10 +90,12 @@ installer, application validation, and removal.
 
 The interactive installer installs to the 64-bit Windows applications
 directory by default. The application component creates a Start-menu shortcut
-and associates `.uuml` projects with uuml. A separately selectable component
-controls the desktop shortcut.
+and registers `.yauml` as the conventional suffix for project directories. A
+separately selectable component controls the desktop shortcut. The project
+itself remains a directory containing JSON5 files; the suffix is not a separate
+serialization format.
 
-Running a newer uuml installer over an existing registered installation asks
+Running a newer yauml installer over an existing registered installation asks
 for confirmation, removes the old application files, and installs into the
 same directory. Projects stored outside that directory and user preferences
 are preserved. The Windows **Installed apps** entry opens the uninstaller
@@ -101,7 +103,7 @@ directly.
 
 An installed build checks the small stable manifest at most once every 24
 hours. The preference can be disabled, and **Help > Check for Updates…** always
-performs an explicit check. When a newer version is available, uuml follows the
+performs an explicit check. When a newer version is available, yauml follows the
 normal save-on-close flow and starts the maintenance tool in updater mode. No
 update is downloaded or installed without user confirmation. Portable builds
 offer the release page because they have no maintenance tool.

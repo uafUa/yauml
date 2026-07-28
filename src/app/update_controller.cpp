@@ -18,7 +18,7 @@
 
 #include <utility>
 
-namespace uuml::ui {
+namespace yauml::ui {
 namespace {
 
 constexpr int kNetworkTimeoutMilliseconds = 15000;
@@ -72,7 +72,7 @@ void UpdateController::checkForUpdates(bool userInitiated) {
 
   QNetworkRequest request(m_manifestUrl);
   request.setHeader(QNetworkRequest::UserAgentHeader,
-                    QStringLiteral("uuml/%1").arg(m_currentVersion));
+                    QStringLiteral("yauml/%1").arg(m_currentVersion));
   request.setAttribute(QNetworkRequest::RedirectPolicyAttribute,
                        QNetworkRequest::NoLessSafeRedirectPolicy);
   QNetworkReply *reply = m_network->get(request);
@@ -183,4 +183,4 @@ void UpdateController::launchScheduledUpdater() {
   }
 }
 
-} // namespace uuml::ui
+} // namespace yauml::ui

@@ -15,12 +15,12 @@
 #include <algorithm>
 #include <limits>
 
-namespace uuml {
+namespace yauml {
 
 namespace {
-constexpr auto kElementsMimeType = "application/x-uuml-element-ids";
-constexpr auto kBrowserItemsMimeType = "application/x-uuml-browser-items";
-constexpr auto kDiagramSubjectsMimeType = "application/x-uuml-diagram-subjects";
+constexpr auto kElementsMimeType = "application/x-yauml-element-ids";
+constexpr auto kBrowserItemsMimeType = "application/x-yauml-browser-items";
+constexpr auto kDiagramSubjectsMimeType = "application/x-yauml-diagram-subjects";
 } // namespace
 
 struct ProjectTreeModel::TreeNode {
@@ -635,4 +635,4 @@ void DiagramListModel::reset() {
   endResetModel();
 }
 
-} // namespace uuml
+} // namespace yauml

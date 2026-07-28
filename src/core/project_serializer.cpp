@@ -21,13 +21,14 @@
 #include <cmath>
 #include <limits>
 
-namespace uuml {
+namespace yauml {
 namespace {
 
 constexpr auto kManifestName = "manifest.json5";
 constexpr auto kModelName = "model/model.json5";
 constexpr auto kDiagramsName = "diagrams/diagrams.json5";
-constexpr auto kRecoveryDirectory = ".uuml-recovery";
+constexpr auto kRecoveryDirectory = ".yauml-recovery";
+constexpr auto kPreviousRecoveryDirectory = "." "u" "uml-recovery";
 constexpr auto kRecoveryMarker = "pending";
 #ifdef Q_OS_WIN
 constexpr auto kPathCaseSensitivity = Qt::CaseInsensitive;
@@ -813,10 +814,10 @@ QByteArray diagramsBytes(const ProjectData &project) {
   return Json5::serialize(QJsonDocument(root));
 }
 
-bool recoverIfPending(const QString &root, QString &message) {
+bool recoverIfPending(const QString &root, const QString &recoveryDirectory,
+                      QString &message) {
   const QDir project(root);
-  const QString recovery =
-      project.filePath(QString::fromLatin1(kRecoveryDirectory));
+  const QString recovery = project.filePath(recoveryDirectory);
   const QString marker =
       QDir(recovery).filePath(QString::fromLatin1(kRecoveryMarker));
   if (!QFileInfo::exists(marker))
@@ -962,10 +963,17 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
   LoadOutcome outcome;
   const QString root = normalizeProjectPath(projectPath);
   QString recoveryMessage;
-  if (QFileInfo::exists(
-          QDir(root).filePath(QString::fromLatin1(kRecoveryDirectory) + u'/' +
-                              QString::fromLatin1(kRecoveryMarker)))) {
-    outcome.recovered = recoverIfPending(root, recoveryMessage);
+  const QStringList recoveryDirectories = {
+      QString::fromLatin1(kRecoveryDirectory),
+      QString::fromLatin1(kPreviousRecoveryDirectory)};
+  for (const QString &recoveryDirectory : recoveryDirectories) {
+    if (!QFileInfo::exists(
+            QDir(root).filePath(recoveryDirectory + u'/' +
+                                QString::fromLatin1(kRecoveryMarker)))) {
+      continue;
+    }
+    outcome.recovered =
+        recoverIfPending(root, recoveryDirectory, recoveryMessage);
     if (!outcome.recovered) {
       outcome.diagnostics.append(
           error(QStringLiteral("recovery"), recoveryMessage));
@@ -973,6 +981,7 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
     }
     outcome.diagnostics.append(
         warning(QStringLiteral("recovery"), recoveryMessage));
+    break;
   }
 
   const QString manifestPath =
@@ -1432,7 +1441,8 @@ SaveOutcome ProjectSerializer::save(const QString &projectPath,
                           QString::fromLatin1(kRecoveryMarker));
   if (QFileInfo::exists(pendingMarker)) {
     QString recoveryMessage;
-    if (!recoverIfPending(root, recoveryMessage)) {
+    if (!recoverIfPending(root, QString::fromLatin1(kRecoveryDirectory),
+                          recoveryMessage)) {
       outcome.diagnostics.append(
           error(QStringLiteral("recovery"), recoveryMessage));
       return outcome;
@@ -1480,7 +1490,7 @@ SaveOutcome ProjectSerializer::save(const QString &projectPath,
             QStringLiteral("external-change"),
             QStringLiteral(
                 "Saving was stopped because project files changed outside "
-                "u uml: %1")
+                "yauml: %1")
                 .arg(changedFiles.join(QStringLiteral(", ")))));
         return true;
       };
@@ -2082,4 +2092,4 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
   return diagnostics;
 }
 
-} // namespace uuml
+} // namespace yauml

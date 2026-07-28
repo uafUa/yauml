@@ -5,7 +5,7 @@
 #include <QRectF>
 #include <QSizeF>
 
-namespace uuml::presentation_layout {
+namespace yauml::presentation_layout {
 
 // These measurements describe persisted scene geometry, not device pixels.
 // Keep the renderer and all geometry-producing commands on this shared set so
@@ -73,4 +73,4 @@ QRectF containerContentGeometry(const ProjectData &project,
                                 const Diagram &diagram,
                                 const ContainerPresentation &container);
 
-} // namespace uuml::presentation_layout
+} // namespace yauml::presentation_layout

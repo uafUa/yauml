@@ -24,7 +24,7 @@
 #include <memory>
 #include <optional>
 
-namespace uuml {
+namespace yauml {
 
 namespace {
 
@@ -1158,7 +1158,7 @@ bool ProjectController::saveProject(const QUrl &url, bool overwriteExisting) {
   if (!overwriteExisting && saveDestinationContainsProject(url)) {
     m_diagnostics.addWarning(
         QStringLiteral("persistence"),
-        QStringLiteral("The selected folder already contains a u uml project; "
+        QStringLiteral("The selected folder already contains a yauml project; "
                        "confirm replacement before saving"));
     return false;
   }
@@ -3729,4 +3729,4 @@ void ProjectController::setExternallyChangedProjectFiles(
     emit externalProjectChangeDetected();
 }
 
-} // namespace uuml
+} // namespace yauml

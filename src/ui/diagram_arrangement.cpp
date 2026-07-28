@@ -5,7 +5,7 @@
 #include <limits>
 #include <numeric>
 
-namespace uuml::ui {
+namespace yauml::ui {
 namespace {
 
 struct OperationEntry {
@@ -166,4 +166,4 @@ arrangeDiagramNodes(const QList<DiagramNodeGeometry> &nodes,
   return result;
 }
 
-} // namespace uuml::ui
+} // namespace yauml::ui

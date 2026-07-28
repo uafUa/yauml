@@ -2,7 +2,7 @@
 
 #include "core/project_controller.h"
 
-namespace uuml {
+namespace yauml {
 
 ProjectCommand::ProjectCommand(ProjectController *controller,
                                const QString &description)
@@ -14,4 +14,4 @@ void ProjectCommand::undo() { m_controller->applyCommand(*this, false); }
 
 void ProjectCommand::redo() { m_controller->applyCommand(*this, true); }
 
-} // namespace uuml
+} // namespace yauml

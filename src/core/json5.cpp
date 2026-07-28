@@ -3,7 +3,7 @@
 #include <QJsonParseError>
 #include <algorithm>
 
-namespace uuml {
+namespace yauml {
 namespace {
 
 bool isIdentifierStart(QChar c) {
@@ -253,4 +253,4 @@ QByteArray Json5::serialize(const QJsonDocument &document,
   return json5.toUtf8();
 }
 
-} // namespace uuml
+} // namespace yauml

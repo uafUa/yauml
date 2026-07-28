@@ -2,7 +2,7 @@
 
 #include "core/project_data.h"
 
-namespace uuml::project_style {
+namespace yauml::project_style {
 
 // Returns an explicitly assigned style ID for a project-browser subject.
 // Supported kinds are "element"/"package", "folder", and "namespace".
@@ -23,4 +23,4 @@ const DiagramStyle *
 effectiveStyleForContainer(const ProjectData &project,
                            const ContainerPresentation &container);
 
-} // namespace uuml::project_style
+} // namespace yauml::project_style

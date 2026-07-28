@@ -6,7 +6,7 @@
 #include <QSet>
 #include <optional>
 
-namespace uuml {
+namespace yauml {
 
 struct ContainerChildrenChange {
   QString containerId;
@@ -839,4 +839,4 @@ private:
   QList<StereotypeAssignmentSnapshot> m_assignments;
 };
 
-} // namespace uuml
+} // namespace yauml

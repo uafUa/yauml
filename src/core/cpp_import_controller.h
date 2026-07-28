@@ -8,7 +8,7 @@
 #include <QUrl>
 #include <QVariantList>
 
-namespace uuml {
+namespace yauml {
 
 class ApplicationSettings;
 class ProjectController;
@@ -113,4 +113,4 @@ private:
   bool m_busy = false;
 };
 
-} // namespace uuml
+} // namespace yauml

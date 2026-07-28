@@ -1,4 +1,4 @@
-# uuml MVP Scope
+# yauml MVP Scope
 
 Status: accepted baseline
 
@@ -144,21 +144,21 @@ Logs are diagnostics and must not become a second source-control or merge system
 
 ## 8. Headless architecture
 
-A headless `uuml` executable is part of the architecture from day one. It uses
+A headless `yauml` executable is part of the architecture from day one. It uses
 the same domain, validation, persistence, transaction, and diagnostic services as
 the desktop application.
 
 The MVP must provide a functional command equivalent to:
 
 ```text
-uuml validate <project>
+yauml validate <project>
 ```
 
 The CLI and core also define the import/change-set boundary needed by a future
 command equivalent to:
 
 ```text
-uuml import <project> <input>
+yauml import <project> <input>
 ```
 
 Concrete C++ AST importing and repeated source synchronization are not MVP exit
@@ -196,7 +196,7 @@ The MVP is complete when all of the following are demonstrable:
    committed as one undoable action, or cancelled without a model change.
 5. Saving the same state twice produces byte-for-byte identical project data.
 6. Invalid files and broken references produce actionable diagnostics in the GUI
-   log and through `uuml validate`.
+   log and through `yauml validate`.
 7. An interrupted save can recover the last valid project state.
 8. The GUI and CLI use the same domain and persistence implementation.
 9. The main window provides the specified central tabbed diagram area and

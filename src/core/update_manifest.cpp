@@ -7,7 +7,7 @@
 
 #include <utility>
 
-namespace uuml {
+namespace yauml {
 namespace {
 
 std::optional<QVersionNumber> strictVersion(const QString &text) {
@@ -68,4 +68,4 @@ bool isNewerApplicationVersion(const QString &candidate,
          QVersionNumber::compare(*candidateVersion, *currentVersion) > 0;
 }
 
-} // namespace uuml
+} // namespace yauml
