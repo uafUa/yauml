@@ -1,312 +1,114 @@
 # uuml
 
-`uuml` is a local-first UML and software-architecture modeling tool built with
-Qt 6, QML, and C++20.
+**Understand an existing C++ codebase through UML diagrams.**
 
-The MVP includes:
+Large C++ projects are difficult to overview from files and declarations alone.
+`uuml` is for developers who find it easier to understand architecture
+visually: import the source tree, choose the parts that matter, and arrange
+them into UML views that explain the system.
 
-- a semantic model shared by multiple class diagrams;
-- a retained C++ Qt Quick scene-graph canvas with batched geometry, deduplicated
-  text atlases, zoom-based detail levels, selection, move, resize, pan, zoom,
-  connector reconnection, and in-place text editing;
-- horizontal diagram tabs that can be detached into standalone tabbed windows
-  and arranged across multiple monitors;
-- resizable and collapsible project-tree and property panels;
-- an error-triggered structured log pop-up;
-- undo and redo for model and presentation mutations;
-- automatic connector presentation when both relationship endpoints are placed,
-  with edge attachment, draggable perimeter ports, and persisted editable bend
-  points;
-- deterministic, directory-based JSON5 persistence with validation,
-  unknown-field retention, interrupted-save recovery, and external-change
-  protection;
-- headless `validate`, `cpp-preview`, and `cpp-import` commands using the same
-  core services as the GUI.
+![Example UML architecture overview](tests/fixtures/rendering/canonical-diagram-windows.png)
 
-The accepted boundary and acceptance criteria are in
-[`docs/mvp-scope.md`](docs/mvp-scope.md). The broader product direction is in
-[`docs/product-architecture-brainstorm.md`](docs/product-architecture-brainstorm.md).
-For a step-by-step release audit, use
-[`docs/mvp-acceptance-checklist.md`](docs/mvp-acceptance-checklist.md).
+## What uuml is for
 
-## Build on Windows
+- Exploring the architecture of an unfamiliar or long-lived C++ project.
+- Building focused views of subsystems instead of one overwhelming diagram.
+- Following dependencies, ownership, inheritance, and implementation
+  relationships.
+- Preparing for refactoring or discussing architecture with a team.
+- Keeping explanatory UML diagrams synchronized with evolving source code.
 
-The primary Windows build uses MSVC 2022 and the matching Qt 6.11 kit. Adjust
-the Qt path if your kit is elsewhere.
+The source model and its diagrams are separate. A type can appear on several
+diagrams, each with a different layout, level of detail, filter, or visual
+style.
 
-```powershell
-cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
-  -DCMAKE_PREFIX_PATH=C:/Qt/6.11.1/msvc2022_64
-cmake --build build --config Debug --parallel
-ctest --test-dir build -C Debug --output-on-failure
-```
+## From source code to an architecture overview
 
-The Windows build automatically copies the required Qt runtime, QML modules,
-and plugins beside `build/Debug/uuml.exe`. The executable can therefore be
-started later from a fresh terminal without setting `PATH` again.
+1. Create a project and choose **File > Import C++…**.
+2. Select one or more source folders. A configured build is not required.
+3. Review the import preview and apply the discovered types and relationships.
+4. Search or browse namespaces and nested types in the project tree.
+5. Drag individual types, a multi-selection, or a complete namespace onto a
+   diagram.
+6. Create more diagrams for different subsystems, layers, or questions.
+7. Use **Synchronize C++** later to review changes without losing manual work.
 
-C++ import uses libclang when an LLVM installation is detected. CMake searches
-`LLVM_ROOT`, `LLVM_HOME`, and the standard `C:\Program Files\LLVM` location. It
-copies `libclang.dll` beside the executable. Builds without an LLVM SDK remain
-usable, but C++ import reports that the feature is unavailable.
+If a compilation database is available, uuml uses it automatically. Otherwise,
+it discovers common C++ source and header layouts directly from the selected
+folders.
 
-### Release build
+## Highlights
 
-Configure a fresh `build-release` directory, then build and test it:
+### C++-aware model
+
+- Classes, structs, enums, namespaces, nested types, fields, and operations.
+- Inheritance, implementation, dependency, association, aggregation,
+  composition, and containment relationships.
+- Configurable recognition of interfaces and ownership/container types.
+- Source-derived `local` and `private` stereotypes, plus project-specific
+  stereotypes.
+- Repeatable synchronization with an explicit preview and conflict reporting.
+- Manual edits remain authoritative unless the user explicitly chooses the
+  imported value.
+
+### Productive diagram workspace
+
+- Multiple diagrams over one shared model.
+- Detachable tabbed diagram windows for multi-monitor work.
+- Namespace and custom-folder containers.
+- Straight and automatically maintained orthogonal connectors.
+- Draggable connector ends, snap points, bend points, roles, cardinalities,
+  names, and stereotypes.
+- Lasso and multi-selection, alignment, distribution, matching sizes, guides,
+  grid snapping, and fit-to-content.
+- In-place text editing, undo/redo, contextual toolboxes, and named styles.
+- Diagram filters by type, stereotype, name, field, or operation.
+- One-click expansion of incoming or outgoing type dependencies.
+
+### Local and safe
+
+- Projects are ordinary local, readable JSON5 directories.
+- Source import never rewrites C++ files.
+- Unsaved, externally changed, and interrupted saves are handled explicitly.
+- Validation and import are also available for headless workflows.
+- Installed builds can check for stable updates and hand approved updates to
+  the maintenance tool.
+
+## Get uuml
+
+Windows is the primary supported platform.
+
+Download the installer or portable archive from
+[GitHub Releases](https://github.com/uafUa/yauml/releases). The installer
+contains the required Qt runtime and C++ import support.
+
+Development builds are also available from successful
+[Windows CI runs](https://github.com/uafUa/yauml/actions/workflows/windows.yml).
+
+## Current focus
+
+`uuml` currently concentrates on class and architecture diagrams for existing
+C++ systems. It is not intended to be a complete implementation of every UML
+diagram type or a code generator.
+
+The product direction and completed feature slices are tracked in
+[the productization plan](docs/productization-plan.md). Release and packaging
+instructions are in [the release guide](docs/releasing.md).
+
+<details>
+<summary>Build from source on Windows</summary>
+
+The development build uses MSVC 2022, Qt 6, CMake, and LLVM/libclang for C++
+import:
 
 ```powershell
 cmake -S . -B build-release -G "Visual Studio 17 2022" -A x64 `
-  -DCMAKE_PREFIX_PATH=C:/Qt/6.11.1/msvc2022_64
+  -DCMAKE_PREFIX_PATH=C:/Qt/6.11.1/msvc2022_64 `
+  -DUUML_REQUIRE_LIBCLANG=ON
 cmake --build build-release --config Release
-ctest --test-dir build-release -C Release --output-on-failure --timeout 30
+ctest --test-dir build-release -C Release --output-on-failure
 ```
 
-This Release configuration uses MSVC and the matching Qt 6.11.1 MSVC kit. The
-Visual Studio generator locates the MSVC toolchain without requiring a Developer
-PowerShell window.
+The executable is created at `build-release/Release/uuml.exe`.
 
-### GitHub builds and releases
-
-GitHub Actions performs the same clean MSVC Release build and complete test
-suite for pull requests and changes to `main`. Successful runs provide a
-portable Windows ZIP and a conventional Windows installer in the run's
-**Artifacts** section. Pushing a version tag such as `v0.1.0` publishes both
-tested distributions and their SHA-256 checksums as a GitHub Release.
-
-The suite includes a production-renderer image regression test with a
-canonical diagram covering grid, package and type shapes, text, stereotypes,
-relationship annotations, routing, and UML decorations. A mismatch preserves
-expected, actual, and amplified difference PNGs under
-`build-release/visual-regression-artifacts`; GitHub uploads the same diagnostics
-on a failed run. Baselines are deliberately platform-specific so another
-operating system cannot silently replace the reviewed Windows reference.
-
-The package includes the Qt/QML runtime and `libclang.dll`, and is smoke-tested
-after deployment. The installer supports replacing an existing uuml
-installation in place and provides clean removal through Windows **Installed
-apps**, Start-menu integration, `.uuml` file association, and an optional
-desktop shortcut. See
-[`docs/releasing.md`](docs/releasing.md) for downloading development artifacts,
-creating releases, version rules, and local packaging.
-
-## Run
-
-Open a new unsaved project:
-
-```powershell
-.\build\Debug\uuml.exe
-```
-
-Open the included two-diagram example:
-
-```powershell
-.\build\Debug\uuml.exe .\examples\sample.uuml
-```
-
-Open the generated performance example containing 600 nodes and 1,150
-connectors on one diagram:
-
-```powershell
-.\build\Debug\uuml.exe .\examples\performance.uuml
-```
-
-Regenerate it with the default 600 nodes:
-
-```powershell
-cmake --build build --config Debug --target generate_performance_example
-```
-
-Validate a project without opening the GUI:
-
-```powershell
-.\build\Debug\uuml.exe validate .\examples\sample.uuml
-```
-
-Preview or apply C++ imports without opening the GUI:
-
-```powershell
-.\build-release\Release\uuml.exe cpp-preview `
-  .\examples\sample.uuml C:\path\to\public-api C:\path\to\shared-types
-.\build-release\Release\uuml.exe cpp-import `
-  .\examples\sample.uuml C:\path\to\public-api C:\path\to\shared-types
-```
-
-Select one or more C++ source folders; no configure or build step is required.
-On Windows the source picker supports Ctrl-click and Shift-click selection, so
-unrelated subfolders can be included without importing their parent tree. uuml
-deduplicates overlapping selections, scans common C++ source and header
-extensions recursively, and infers shared include paths. When a
-`compile_commands.json` is available in or above a selected folder, uuml uses
-it automatically for more accurate compiler flags. `cpp-import` accepts the
-same list of folders, saves non-conflicting changes, and returns exit code `3`
-when conflicts need attention; user-edited model content is never overwritten
-by default. For unattended workflows, the explicit
-`--conflicts=keep-model` or `--conflicts=use-source` option resolves every
-unambiguous conflict with that policy. Unsafe conflicts remain unresolved and
-still produce exit code `3`. If project files change on disk while an import is
-running, saving stops with exit code `4`. An unattended caller may explicitly
-accept replacement with `--overwrite-external-changes`.
-
-## Persistence safety
-
-- Opening a project records byte-level revisions of its manifest, semantic
-  model, and diagram files. The revision belongs to the open session rather
-  than the domain model, so it never dirties the project or enters undo history.
-- Before replacing changed project files, u uml verifies that their revisions
-  still match what was loaded. If Git, another application, or another u uml
-  instance changed them, saving stops and lists the affected relative paths.
-  The GUI then offers **Save As…**, **Reload**, **Cancel**, or an explicit
-  **Overwrite**. Reload and overwrite state their data-loss direction.
-- Multi-file saves retain the existing recovery snapshot and pending marker.
-  Opening after an interrupted save restores the last complete project rather
-  than mixing files from different revisions. Recovery validates the complete
-  backup set before replacing anything, so a missing or malformed backup leaves
-  every live project file untouched and reports a recovery error.
-
-## C++ import
-
-- Choose **File > Import C++…**, then select the project's source folders. Use
-  Ctrl-click or Shift-click when only particular sibling folders should be
-  imported. That is the complete normal workflow: CMake files, a configured
-  build, and a compilation database are optional. The selected folder list is
-  stored in the project and reused by **Synchronize C++**. Discovery runs
-  outside the UI thread. The preview reports its current phase, the source file
-  being parsed, and determinate file progress before presenting every create,
-  update, conflict, unchanged, user-owned, or missing-source result.
-- Folder-only discovery parses implementation files first and then standalone
-  headers not already reached through them. Build outputs, version-control
-  metadata, vendored dependencies, and directory symlink loops are skipped.
-  Missing external includes are reported as warnings while usable declarations
-  are still imported. If a compilation database is found automatically, the
-  preview identifies that higher-accuracy mode instead.
-- Import currently covers class and struct names, fields, methods, and direct
-  base relationships. Imported types, generalizations, and realizations enter
-  the semantic project model without being placed automatically on a diagram;
-  double-click types in the tree to add presentations where needed. A connector
-  appears automatically once both endpoints of an imported relationship are
-  present on a diagram.
-- **Preferences > General > C++ import > Interface pattern** controls whether a
-  base relationship is realization/implementation or generalization. The
-  regular expression is matched against the unqualified base name. Its default,
-  `^I[A-Z].*$`, recognizes conventional names such as `IService`; other base
-  names remain generalizations. The preview states the classification reason.
-- Each imported element and inheritance stores a Clang-derived source binding,
-  provenance, and the last imported source snapshot in extensible JSON5
-  metadata.
-- New projects pre-populate `local`, `private`, and `api` in their editable
-  stereotype catalog. Import assigns `local` to classes and structs whose
-  definition originates in a C++ implementation file (`.cpp`, `.cc`, `.cxx`,
-  `.c++`, `.ixx`, or `.cppm`). That derived assignment is source-owned and is
-  removed if the declaration later moves to a header; every other manual
-  stereotype assignment remains untouched.
-- If only source changed, the next import updates the element. If only the model
-  changed, the model stays authoritative. If both changed differently, the
-  model is retained and a structured conflict is shown in the log panel. Each
-  safely resolvable conflict can remain unresolved, explicitly **Keep model**,
-  or **Use C++ source**. Keeping the model advances only the source baseline so
-  the acknowledged override does not reappear as the same conflict; using the
-  source replaces source-synchronized fields while retaining unrelated model
-  metadata. Bulk choices are available, while malformed duplicate bindings and
-  unresolved endpoints continue to require manual repair.
-- Applying a GUI preview is one undoable command. The preview is re-planned
-  against current model state immediately before application. Source files are
-  read-only and are never rewritten by this workflow.
-- Unique, high-confidence source renames and namespace/file moves preserve the
-  existing model, package, relationship, and connector IDs. Matching uses the
-  previous import baseline and requires corroborating location, name, or member
-  structure evidence; simultaneous manual edits still produce the normal
-  explicit conflict. Ambiguous candidates are never guessed: unmatched
-  declarations and relationships are reported as separate new/missing records,
-  and missing model content is retained rather than deleted.
-
-## Diagram interaction
-
-- Type in the search field above the project tree to filter it incrementally.
-  Matching is case-insensitive and checks both visible labels and qualified
-  names. Use `*` for any sequence and `?` for one character; `Ctrl+F` focuses
-  the field and `Escape` clears it. Matching descendants retain their visible
-  hierarchy, and dragging a matched container still includes all its contents.
-- Use Ctrl-click or Shift-click in the project tree to select multiple model
-  types, then drag any selected row onto a diagram. The types are placed as a
-  grid at the drop point in one undoable action; relationships appear when both
-  of their endpoint types have become present. Types already on that diagram
-  are skipped.
-- Drag empty diagram space to select every intersecting element. Hold `Shift`
-  to add to the current selection or `Ctrl` to toggle intersecting elements.
-- Right-click empty space, an element, a connector, or a diagram tab for the
-  commands that apply to that exact target.
-- Use **Compartment visibility** on empty diagram space to choose whether type
-  presentations show attributes and operations by default. An individual
-  type's **Attributes** and **Operations** menus can inherit that default or
-  explicitly show/hide the compartment. These choices are project data and
-  participate in normal undo, save, and reload behavior.
-- Use the **Filter…** badge at the upper-right of a diagram to include or
-  exclude presentations by classifier kind, stereotype, name wildcard, or
-  operation/field wildcard. An emphasized badge with a visible/total count
-  indicates an active filter. Filtering never removes project data; connectors
-  whose endpoint is hidden are hidden with it.
-- On a type presentation, choose **Add types that depend on this** or
-  **Add types this depends on** to expand the incoming or outgoing semantic
-  relationship neighborhood. The hover toolbox exposes the same two actions.
-  Existing presentations are not duplicated, and newly completed relationships
-  gain their connector automatically in the same undoable command.
-- Drag any selected element to move the complete selection as one undoable
-  command. Press `Delete` to remove selected presentations from the diagram;
-  deleting a selected connector removes its relationship. Each selected
-  rectangle can be resized from any of its four corners.
-- Right-click a multi-selection and use **Arrange** to align elements, match
-  their size, or distribute three or more elements evenly. The displayed
-  shortcuts are local to that diagram window. Distribution uses the smallest
-  positive gap already present in the selection. If all elements overlap or
-  touch, change the fallback spacing under **Edit > Preferences** (10 px by
-  default).
-- Use an arrow key to nudge the selection by one diagram unit, or hold `Shift`
-  to nudge by ten. Every nudge and arrangement action is independently
-  undoable.
-- Dragged elements snap to the configured grid and to the edges and centers of
-  other elements. Alignment matches display as live guide lines, and a
-  multi-selection keeps its internal layout while snapping as one unit. Hold
-  `Alt` during a drag to temporarily suppress all snapping. Grid spacing and
-  both snapping modes are configured under **Edit > Preferences > General**.
-- Open **Edit > Preferences** to change general settings or edit the semantic
-  color palette. The Colors page groups roles in a scrollable grid and supports
-  both a color picker and hexadecimal values. Changes are applied on **OK**,
-  persisted for the application, and refreshed across all diagram windows.
-- Use **File > Open Recent…** to reopen one of the ten most recently opened
-  projects. Successful opens move a project to the top; failed opens are not
-  added. The submenu also provides an action to clear the history.
-- Right-click a connector segment and choose `Add bend point here`, or
-  double-click a segment. Drag a selected bend handle to shape the route;
-  `Delete` removes the selected bend before it removes the relationship.
-- Select a connector and drag either square endpoint handle. The end follows
-  the pointer while detached and snaps to the exact perimeter position of any
-  element under it, including the other endpoint for a self-connection. Release
-  to commit one undoable change; press `Escape` or release over empty space to
-  retain the original connection. Dragging along the current element edge only
-  moves its persisted port.
-- Right-click a connector and choose **Routing > Straight** or **Orthogonal**.
-  Orthogonal routes automatically maintain 90-degree bends as their elements
-  move or resize; manual bend handles remain editable. New relationships use
-  the shape selected under **Edit > Preferences > Connectors** (Straight by
-  default), while existing relationships retain their own saved setting.
-- With two elements selected, use **Create relationship** to create a
-  dependency, realization, generalization, navigable association, aggregation,
-  or composition. Selection order defines source then target; aggregation and
-  composition place their hollow or filled diamond on the source (whole) end.
-- To draw directly, hold the left pointer button on an element edge, press
-  `D`, `I`, `H`, `A`, `G`, or `C`, drag, and release over the target element.
-  The original press and final drop positions become the connector ports. A
-  connection may return to its originating element. Press `Escape` or release
-  over empty space to discard the candidate. Edit the six unique keys under
-  **Edit > Preferences > Connectors**.
-- Use `Ctrl+0` to fit the active diagram. Element creation shortcuts are
-  `Ctrl+Shift+P/C/S/E`; relationship shortcuts are `Ctrl+Alt+D/I/G/A/C`, with
-  `Ctrl+Alt+Shift+G` for aggregation.
-
-Project directories contain `manifest.json5`, `model/model.json5`, and
-`diagrams/diagrams.json5`. Strict JSON is accepted because it is a valid JSON5
-subset; the loader additionally accepts comments, trailing commas, single-quoted
-strings, and unquoted keys. Newly written files omit quotes from identifier-safe
-keys while retaining them for unusual or forward-compatible keys that require
-quoting. To avoid silently destroying hand-written comments, the MVP reads and
-validates commented files but refuses to rewrite them.
+</details>
