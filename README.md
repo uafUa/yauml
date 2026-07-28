@@ -9,6 +9,24 @@ them into UML views that explain the system.
 
 ![Example UML architecture overview](tests/fixtures/rendering/canonical-diagram-windows.png)
 
+## Why uuml
+
+The project was inspired by experience with many UML tools. The most recent
+influence was the [Gaphor UML editor](https://github.com/gaphor/gaphor), while
+uuml follows its own source-first direction for understanding existing C++
+systems.
+
+Its main advantages are:
+
+- **Maximum practical rendering performance.** The diagram canvas is built on
+  the GPU-accelerated Qt Quick/QML scene graph and is designed to remain
+  responsive with large architecture views.
+- **An open model format.** Projects are stored as readable JSON5 directories
+  that can be inspected, version-controlled, and processed without uuml.
+- **Robust synchronization with source files.** Repeated imports distinguish
+  source changes from manual model edits, preserve user-owned information, and
+  report real conflicts instead of silently overwriting work.
+
 ## What uuml is for
 
 - Exploring the architecture of an unfamiliar or long-lived C++ project.
