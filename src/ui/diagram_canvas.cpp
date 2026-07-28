@@ -2772,6 +2772,9 @@ void DiagramCanvas::updateConnectorToolboxCandidate(const QPointF &viewPoint) {
   const QPointF previousAnchor = m_connectorToolboxViewAnchor;
   m_connectorToolboxCandidate = true;
   m_connectorToolboxConnectorId = m_selectedConnector;
+  // Anchor at the point that attracted the user's attention. In particular,
+  // a long relationship should not make the user travel back to its midpoint.
+  m_connectorToolboxSceneAnchor = scenePoint;
   refreshConnectorToolboxAnchor();
   if ((becameCandidate || targetChanged) && m_connectorToolboxCandidate &&
       previousAnchor == m_connectorToolboxViewAnchor)
@@ -2787,16 +2790,12 @@ void DiagramCanvas::refreshConnectorToolboxAnchor() {
   }
 
   const auto *connector = findConnector(*d, m_connectorToolboxConnectorId);
-  const ui::ConnectorRoute route =
-      connector ? connectorRoute(*connector) : ui::ConnectorRoute{};
-  const qreal length = polylineLength(route.points);
-  const auto midpoint = samplePolyline(route.points, length / 2.0);
-  if (!connector || !midpoint) {
+  if (!connector) {
     clearConnectorToolboxCandidate(true);
     return;
   }
 
-  const QPointF nextAnchor = toView(midpoint->position);
+  const QPointF nextAnchor = toView(m_connectorToolboxSceneAnchor);
   if (m_connectorToolboxViewAnchor == nextAnchor)
     return;
   m_connectorToolboxViewAnchor = nextAnchor;
@@ -2814,6 +2813,7 @@ void DiagramCanvas::clearConnectorToolboxCandidate(bool clearAnchor) {
   if (clearAnchor) {
     m_connectorToolboxConnectorId.clear();
     m_connectorToolboxViewAnchor = {};
+    m_connectorToolboxSceneAnchor = {};
   }
   emit connectorToolboxCandidateChanged();
 }

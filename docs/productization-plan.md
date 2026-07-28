@@ -56,6 +56,11 @@ history memory grow with total project size rather than the size of each edit.
 
 - Canvas, element, connector, and tab context menus own their applicable
   diagram commands.
+- Canvas and tab diagram menus now share one component, so filtering, element
+  creation, diagram compartment defaults, and fit-to-diagram remain identical.
+  Tab-originated element creation uses the visible viewport center because a
+  tab has no scene pointer position. Double-clicking a tab selects the diagram
+  in the property inspector and expands that panel when necessary.
 - Element creation, relationship creation, reconnection, presentation removal,
   fit, and diagram deletion moved out of global diagram controls.
 - Window-local shortcuts invoke the active visible `DiagramView`, independently
@@ -283,9 +288,10 @@ history memory grow with total project size rather than the size of each edit.
   editors for the name, both roles, both cardinalities, and stereotypes, plus
   reset of all manually positioned annotations. Empty optional annotations can
   be created from the toolbox because the canvas derives their ordinary
-  automatic placement before opening the editor. The toolbox remains stable
-  while crossing its hover bridge and follows the connector midpoint after a
-  route change.
+  automatic placement before opening the editor. During its show delay the
+  toolbox follows the hovered route point, then latches there while the user
+  crosses its hover bridge; long relationships therefore do not require a trip
+  back to their midpoint.
 - The selected-node/container expansion is implemented. Hovering a selected
   node body or selected container header exposes direct name editing, fit to
   content, a lightweight named-style menu with access to style management, and
@@ -294,6 +300,10 @@ history memory grow with total project size rather than the size of each edit.
   container bodies do not claim hover from their children. Destructive and
   modal commands remain in context menus until usage proves that placing them
   in a hover surface is beneficial.
+- A selected type additionally exposes connector snap-point editing and compact
+  `A`/`O` compartment controls. Each control cycles inherited, explicitly
+  shown, and explicitly hidden state; faded, pressed, and released visuals make
+  the current state visible without expanding the toolbox into six buttons.
 - A selected type also exposes directional model expansion: add every missing
   type that depends on it, or every missing type on which it depends. Both
   actions reuse semantic relationship direction, skip packages and existing

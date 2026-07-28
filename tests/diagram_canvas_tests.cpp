@@ -1268,6 +1268,8 @@ void DiagramCanvasTests::connectorToolboxEditsRoutingAndAnnotations() {
   useStandardInteractionGeometry(controller);
   const QString diagramId = controller.data().diagrams.first().id;
   const auto nodes = controller.data().diagrams.first().nodes;
+  controller.updateNodeGeometry(
+      diagramId, nodes.at(1).id, 500.0, 50.0, 220.0, 120.0);
   const QString connectorId = controller.createRelationship(
       diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("association"));
   QVERIFY(!connectorId.isEmpty());
@@ -1278,17 +1280,23 @@ void DiagramCanvasTests::connectorToolboxEditsRoutingAndAnnotations() {
   // A connector toolbox is contextual: merely having a connector in the
   // diagram is insufficient. The pointer must be over the selected route or
   // one of its annotations.
-  canvas.hover({315.0, 140.0});
+  canvas.hover({415.0, 140.0});
   QVERIFY(!canvas.connectorToolboxCandidate());
-  canvas.press({315.0, 140.0});
-  canvas.release({315.0, 140.0});
+  canvas.press({415.0, 140.0});
+  canvas.release({415.0, 140.0});
   QVERIFY(canvas.connectorSelected());
-  canvas.hover({700.0, 400.0}, {315.0, 140.0});
+  canvas.hover({700.0, 400.0}, {415.0, 140.0});
   QVERIFY(!canvas.connectorToolboxCandidate());
-  canvas.hover({315.0, 140.0}, {700.0, 400.0});
+  canvas.hover({415.0, 140.0}, {700.0, 400.0});
   QVERIFY(canvas.connectorToolboxCandidate());
   QCOMPARE(canvas.connectorToolboxConnectorId(), connectorId);
-  QCOMPARE(canvas.connectorToolboxViewAnchor(), QPointF(315.0, 140.0));
+  QCOMPARE(canvas.connectorToolboxViewAnchor(), QPointF(415.0, 140.0));
+
+  // The toolbox follows the hovered part of a long connector while it is
+  // waiting to appear; it is not anchored permanently at the route midpoint.
+  canvas.hover({490.0, 140.0}, {415.0, 140.0});
+  QVERIFY(canvas.connectorToolboxCandidate());
+  QCOMPARE(canvas.connectorToolboxViewAnchor(), QPointF(490.0, 140.0));
 
   canvas.setSelectedConnectorRouting(QStringLiteral("orthogonal"));
   QCOMPARE(canvas.selectedConnectorRouting(), QStringLiteral("orthogonal"));

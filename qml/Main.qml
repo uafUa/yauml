@@ -1406,6 +1406,9 @@ ApplicationWindow {
             "connector.editStereotypes": qsTr("Choose relationship stereotypes"),
             "connector.resetAnnotationPositions": qsTr("Reset annotation positions"),
             "presentation.editName": qsTr("Edit name"),
+            "presentation.attributesVisibility": qsTr("Cycle attributes visibility"),
+            "presentation.operationsVisibility": qsTr("Cycle operations visibility"),
+            "presentation.connectorSnapPoints": qsTr("Connector snap points"),
             "presentation.addIncomingRelatedTypes": qsTr("Add types that depend on this"),
             "presentation.addOutgoingRelatedTypes": qsTr("Add types this depends on"),
             "presentation.wrapInNamespace": qsTr("Wrap in parent namespace")
@@ -2364,7 +2367,7 @@ ApplicationWindow {
         }
 
         Shortcut {
-            sequence: StandardKey.Cancel
+            sequences: [StandardKey.Cancel]
             onActivated: {
                 externalProjectChangesDialog.close()
                 root.cancelPendingDocumentAction()

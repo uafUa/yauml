@@ -326,8 +326,18 @@
       },
       connectorSnapPoints: {
         label: "Edit connector snap points",
-        contexts: ["element context menu"],
+        contexts: ["element context menu", "presentation toolbox"],
         svg: "connector-snap-points.svg",
+      },
+      attributesVisibility: {
+        label: "Cycle attributes visibility",
+        contexts: ["presentation toolbox"],
+        svg: "",
+      },
+      operationsVisibility: {
+        label: "Cycle operations visibility",
+        contexts: ["presentation toolbox"],
+        svg: "",
       },
       removeElement: {
         label: "Remove element presentation from diagram",

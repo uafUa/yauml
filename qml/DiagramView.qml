@@ -6,6 +6,7 @@ import Uuml.Native
 Item {
     id: root
     required property string diagramId
+    readonly property alias diagramCanvas: canvas
     property bool relationshipToolboxGestureActive: false
     property string relationshipToolboxNodeId
     property string relationshipToolboxEdge
@@ -189,6 +190,24 @@ Item {
             label: qsTr("Edit name")
         },
         {
+            actionId: "presentation.attributesVisibility",
+            kind: "attributesVisibility",
+            fallback: qsTr("A"),
+            label: qsTr("Cycle attributes visibility")
+        },
+        {
+            actionId: "presentation.operationsVisibility",
+            kind: "operationsVisibility",
+            fallback: qsTr("O"),
+            label: qsTr("Cycle operations visibility")
+        },
+        {
+            actionId: "presentation.connectorSnapPoints",
+            kind: "snapPoints",
+            fallback: qsTr("Snap"),
+            label: qsTr("Connector snap points")
+        },
+        {
             actionId: "arrange.fitToContent",
             kind: "fit",
             fallback: qsTr("Fit"),
@@ -253,7 +272,10 @@ Item {
             const kind = activePresentationToolboxActions[index].kind
             if (canvas.presentationToolboxKind === "node")
                 return true
-            if (kind !== "incoming" && kind !== "outgoing" && kind !== "wrap")
+            if (kind !== "incoming" && kind !== "outgoing" && kind !== "wrap"
+                    && kind !== "snapPoints"
+                    && kind !== "attributesVisibility"
+                    && kind !== "operationsVisibility")
                 return true
         }
         return false
@@ -280,6 +302,12 @@ Item {
 
     function openDiagramFilterDialog() {
         diagramFilterDialog.openForCanvas(canvas)
+    }
+
+    function openSelectedPortSnapPointsDialog() {
+        horizontalSnapPoints.value = canvas.selectedHorizontalPortSnapPoints
+        verticalSnapPoints.value = canvas.selectedVerticalPortSnapPoints
+        portSnapPointsDialog.open()
     }
 
     DiagramCanvas {
@@ -500,65 +528,10 @@ Item {
         onClicked: root.openDiagramFilterDialog()
     }
 
-    Menu {
+    DiagramCanvasMenu {
         id: canvasMenu
-        title: qsTr("Diagram")
-        MenuItem {
-            text: canvas.filterActive
-                  ? qsTr("Edit active filter…") : qsTr("Filter items…")
-            onTriggered: root.openDiagramFilterDialog()
-        }
-        MenuItem {
-            text: qsTr("Clear filter")
-            visible: canvas.filterActive
-            onTriggered: canvas.clearDiagramFilter()
-        }
-        MenuSeparator {}
-        Menu {
-            title: qsTr("New element")
-            CatalogMenuItem {
-                catalogId: "createElement.package"
-                text: qsTr("Package")
-                onTriggered: canvas.createElementAtContextPosition("package")
-            }
-            CatalogMenuItem {
-                catalogId: "createElement.class"
-                text: qsTr("Class")
-                onTriggered: canvas.createElementAtContextPosition("class")
-            }
-            CatalogMenuItem {
-                catalogId: "createElement.struct"
-                text: qsTr("Struct")
-                onTriggered: canvas.createElementAtContextPosition("struct")
-            }
-            CatalogMenuItem {
-                catalogId: "createElement.enumeration"
-                text: qsTr("Enumeration")
-                onTriggered: canvas.createElementAtContextPosition("enumeration")
-            }
-        }
-        MenuSeparator {}
-        Menu {
-            title: qsTr("Compartment visibility")
-            MenuItem {
-                text: qsTr("Show attributes")
-                checkable: true
-                checked: canvas.diagramAttributesVisible
-                onTriggered: canvas.setDiagramCompartmentVisible(
-                                 "attributes",
-                                 !canvas.diagramAttributesVisible)
-            }
-            MenuItem {
-                text: qsTr("Show operations")
-                checkable: true
-                checked: canvas.diagramOperationsVisible
-                onTriggered: canvas.setDiagramCompartmentVisible(
-                                 "operations",
-                                 !canvas.diagramOperationsVisible)
-            }
-        }
-        MenuSeparator {}
-        MenuItem { action: fitDiagramAction }
+        canvas: root.diagramCanvas
+        onFilterRequested: root.openDiagramFilterDialog()
     }
 
     Menu {
@@ -713,13 +686,7 @@ Item {
             catalogId: "presentation.connectorSnapPoints"
             text: qsTr("Connector snap points…")
             enabled: canvas.selectedNodeCount === 1
-            onTriggered: {
-                horizontalSnapPoints.value =
-                    canvas.selectedHorizontalPortSnapPoints
-                verticalSnapPoints.value =
-                    canvas.selectedVerticalPortSnapPoints
-                portSnapPointsDialog.open()
-            }
+            onTriggered: root.openSelectedPortSnapPointsDialog()
         }
         StyleAssignmentMenu {
             assignedStyleId: canvas.selectedStyleId
@@ -1136,7 +1103,9 @@ Item {
         candidateKey: canvas.connectorToolboxConnectorId
         anchor: canvas.connectorToolboxViewAnchor
         placement: "top"
-        trackAnchorWhileShown: true
+        // Follow the pointer during the show delay, then stay put while the
+        // user crosses the hover bridge to the controls.
+        trackAnchorWhileShown: false
 
         Row {
             spacing: 2
@@ -1197,51 +1166,84 @@ Item {
             Repeater {
                 model: root.activePresentationToolboxActions
 
-                CatalogToolButton {
+                Item {
                     required property var modelData
                     readonly property bool nodeOnly:
                         modelData.kind === "incoming"
                         || modelData.kind === "outgoing"
                         || modelData.kind === "wrap"
-                    catalogId: modelData.actionId
+                        || modelData.kind === "snapPoints"
+                        || modelData.kind === "attributesVisibility"
+                        || modelData.kind === "operationsVisibility"
                     visible: !nodeOnly
                              || (canvas.presentationToolboxKind === "node"
                                  && (modelData.kind !== "wrap"
                                      || canvas.canWrapSelectionInPackage))
                     width: visible ? 38 : 0
                     height: 32
-                    text: modelData.fallback
-                    enabled: modelData.kind === "incoming"
-                             ? canvas.incomingRelatedTypeCount > 0
-                             : modelData.kind === "outgoing"
-                               ? canvas.outgoingRelatedTypeCount > 0 : true
-                    display: icon.source.toString().length > 0
-                             ? AbstractButton.IconOnly
-                             : AbstractButton.TextOnly
-                    Accessible.name: modelData.label
-                    ToolTip.visible: hovered
-                    ToolTip.text: Accessible.name
-                    onClicked: {
-                        if (modelData.kind === "editName") {
-                            canvas.editSelectedPresentationName()
-                            presentationToolbox.dismiss()
-                        } else if (modelData.kind === "fit") {
-                            fitSelectionAction.trigger()
-                            canvas.forceActiveFocus()
-                        } else if (modelData.kind === "style") {
-                            const menuPoint = mapToItem(root, 0, height)
-                            presentationStyleQuickMenu.x = menuPoint.x
-                            presentationStyleQuickMenu.y = menuPoint.y
-                            presentationToolbox.dismiss()
-                            presentationStyleQuickMenu.open()
-                        } else if (modelData.kind === "incoming") {
-                            canvas.addRelatedTypes("incoming")
-                            canvas.forceActiveFocus()
-                        } else if (modelData.kind === "outgoing") {
-                            canvas.addRelatedTypes("outgoing")
-                            canvas.forceActiveFocus()
-                        } else {
-                            canvas.wrapSelectionInPackage()
+
+                    CatalogToolButton {
+                        anchors.fill: parent
+                        visible: parent.modelData.kind
+                                 !== "attributesVisibility"
+                                 && parent.modelData.kind
+                                    !== "operationsVisibility"
+                        catalogId: parent.modelData.actionId
+                        text: parent.modelData.fallback
+                        enabled: parent.modelData.kind === "incoming"
+                                 ? canvas.incomingRelatedTypeCount > 0
+                                 : parent.modelData.kind === "outgoing"
+                                   ? canvas.outgoingRelatedTypeCount > 0 : true
+                        display: icon.source.toString().length > 0
+                                 ? AbstractButton.IconOnly
+                                 : AbstractButton.TextOnly
+                        Accessible.name: parent.modelData.label
+                        ToolTip.visible: hovered
+                        ToolTip.text: Accessible.name
+                        onClicked: {
+                            const kind = parent.modelData.kind
+                            if (kind === "editName") {
+                                canvas.editSelectedPresentationName()
+                                presentationToolbox.dismiss()
+                            } else if (kind === "fit") {
+                                fitSelectionAction.trigger()
+                                canvas.forceActiveFocus()
+                            } else if (kind === "style") {
+                                const menuPoint = mapToItem(root, 0, height)
+                                presentationStyleQuickMenu.x = menuPoint.x
+                                presentationStyleQuickMenu.y = menuPoint.y
+                                presentationToolbox.dismiss()
+                                presentationStyleQuickMenu.open()
+                            } else if (kind === "incoming") {
+                                canvas.addRelatedTypes("incoming")
+                                canvas.forceActiveFocus()
+                            } else if (kind === "outgoing") {
+                                canvas.addRelatedTypes("outgoing")
+                                canvas.forceActiveFocus()
+                            } else if (kind === "snapPoints") {
+                                presentationToolbox.dismiss()
+                                root.openSelectedPortSnapPointsDialog()
+                            } else {
+                                canvas.wrapSelectionInPackage()
+                                canvas.forceActiveFocus()
+                            }
+                        }
+                    }
+
+                    CompartmentVisibilityToolButton {
+                        anchors.fill: parent
+                        visible: parent.modelData.kind === "attributesVisibility"
+                                 || parent.modelData.kind
+                                    === "operationsVisibility"
+                        compartment: parent.modelData.kind
+                                     === "attributesVisibility"
+                                     ? "attributes" : "operations"
+                        visibilityState: compartment === "attributes"
+                                         ? canvas.selectedAttributesVisibility
+                                         : canvas.selectedOperationsVisibility
+                        onVisibilityChangeRequested: function(state) {
+                            canvas.setSelectedCompartmentVisibility(
+                                        compartment, state)
                             canvas.forceActiveFocus()
                         }
                     }

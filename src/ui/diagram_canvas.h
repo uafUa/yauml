@@ -482,6 +482,7 @@ private:
   bool m_connectorToolboxCandidate = false;
   QString m_connectorToolboxConnectorId;
   QPointF m_connectorToolboxViewAnchor;
+  QPointF m_connectorToolboxSceneAnchor;
   bool m_presentationToolboxCandidate = false;
   QString m_presentationToolboxPresentationId;
   QString m_presentationToolboxKind;

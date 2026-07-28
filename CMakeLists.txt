@@ -207,8 +207,10 @@ qt_add_qml_module(uuml
         qml/CatalogDialog.qml
         qml/CatalogMenuItem.qml
         qml/CatalogToolButton.qml
+        qml/CompartmentVisibilityToolButton.qml
         qml/ContextToolboxFrame.qml
         qml/DiagramArea.qml
+        qml/DiagramCanvasMenu.qml
         qml/DiagramFilterDialog.qml
         qml/DiagramView.qml
         qml/DiagramWindow.qml

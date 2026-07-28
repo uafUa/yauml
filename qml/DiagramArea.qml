@@ -68,6 +68,18 @@ Rectangle {
         drop.acceptProposedAction()
     }
 
+    function viewForDiagram(diagramId) {
+        const diagramIndex = root.diagramIds.indexOf(diagramId)
+        return diagramIndex >= 0 ? diagramViews.itemAt(diagramIndex) : null
+    }
+
+    function showDiagramProperties(diagramId) {
+        root.currentDiagramId = diagramId
+        workspaceController.activeDiagramId = diagramId
+        projectController.selectObject(diagramId, "diagram")
+        workspaceController.propertiesVisible = true
+    }
+
     onDiagramIdsChanged: {
         if (diagramIds.indexOf(currentDiagramId) < 0)
             currentDiagramId = diagramIds.length > 0 ? diagramIds[0] : ""
@@ -179,6 +191,8 @@ Rectangle {
                                     root.currentDiagramId = tab.diagramId
                                     workspaceController.activeDiagramId = tab.diagramId
                                 }
+                                onDoubleTapped: root.showDiagramProperties(
+                                                    tab.diagramId)
                             }
 
                             DragHandler {
@@ -206,8 +220,25 @@ Rectangle {
                                 }
                             }
 
-                            Menu {
+                            DiagramCanvasMenu {
                                 id: tabMenu
+                                readonly property var targetView:
+                                    root.viewForDiagram(tab.diagramId)
+                                canvas: targetView
+                                        ? targetView.diagramCanvas : null
+                                createAtViewportCenter: true
+                                onFilterRequested: {
+                                    if (targetView)
+                                        targetView.openDiagramFilterDialog()
+                                }
+
+                                MenuSeparator {}
+                                MenuItem {
+                                    text: qsTr("Properties")
+                                    onTriggered: root.showDiagramProperties(
+                                                     tab.diagramId)
+                                }
+                                MenuSeparator {}
                                 CatalogMenuItem {
                                     catalogId: "workspace.detachDiagram"
                                     text: qsTr("Detach to new window")
