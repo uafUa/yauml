@@ -68,7 +68,8 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
     err << "Usage: uuml " << (apply ? "cpp-import" : "cpp-preview")
         << " <project-directory> "
            "[--conflicts=unresolved|keep-model|use-source] "
-           "[source-directory ...]\n";
+        << (apply ? "[--overwrite-external-changes] " : "")
+        << "[source-directory ...]\n";
     return 64;
   }
 
@@ -80,6 +81,7 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
 
   uuml::CppImportConflictResolution conflictResolution =
       uuml::CppImportConflictResolution::Unresolved;
+  bool overwriteExternalChanges = false;
   QStringList requestedSourcePaths;
   const QString conflictOption = QStringLiteral("--conflicts=");
   for (qsizetype index = 3; index < arguments.size(); ++index) {
@@ -92,6 +94,9 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
         err << "Unknown C++ conflict resolution: " << argument << '\n';
         return 64;
       }
+    } else if (apply &&
+               argument == QStringLiteral("--overwrite-external-changes")) {
+      overwriteExternalChanges = true;
     } else if (argument.startsWith(QStringLiteral("--"))) {
       err << "Unknown option: " << argument << '\n';
       return 64;
@@ -170,10 +175,11 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   const int appliedCount = uuml::CppImportService::apply(imported, preview);
   if (appliedCount > 0 ||
       imported.cppImport.sourceRoots != previousSourceRoots) {
-    const auto save = uuml::ProjectSerializer::save(projectPath, imported);
+    const auto save = uuml::ProjectSerializer::save(
+        projectPath, imported, load.revision, overwriteExternalChanges);
     writeDiagnostics(save.diagnostics, out, err);
     if (!save.ok)
-      return 2;
+      return save.externalChangesDetected ? 4 : 2;
   }
   out << "Imported " << appliedCount << " C++ model change(s)";
   if (preview.resolvedConflictCount() > 0)

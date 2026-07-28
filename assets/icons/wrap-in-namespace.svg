@@ -1,0 +1,16 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="24px" height="24px" viewBox="0 -960 960 960"
+     fill="#1f1f1f">
+  <path fill-rule="evenodd"
+        d="M300-840h220l80 100h280v620H300v-720
+           Z
+           M380-660v460h420v-460H380
+           Z
+           M300-510h80v120h-80v-120
+           Z
+           M550-550h180v200H550v-200
+           Z
+           M600-500v100h80v-100h-80
+           Z"/>
+  <path d="M80-490h320v-90l130 130-130 130v-90H80v-80Z"/>
+</svg>

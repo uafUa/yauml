@@ -89,6 +89,25 @@ ApplicationWindow {
             root.performDocumentAction(root.pendingDocumentAction)
     }
 
+    function overwriteExternallyChangedProject() {
+        const saved = projectController.overwriteExternallyChangedProject()
+        externalProjectChangesDialog.close()
+        if (saved && root.pendingDocumentAction.length > 0)
+            root.performDocumentAction(root.pendingDocumentAction)
+    }
+
+    function reloadExternallyChangedProject() {
+        projectController.reloadProjectFromDisk()
+        externalProjectChangesDialog.close()
+        root.cancelPendingDocumentAction()
+    }
+
+    function saveExternallyChangedProjectAs() {
+        externalProjectChangesDialog.close()
+        pendingSaveUrl = ""
+        Qt.callLater(saveDialog.open)
+    }
+
     function createFolderAt(parentKind, parentId) {
         folderNameDialog.mode = "create"
         folderNameDialog.folderId = ""
@@ -2275,6 +2294,85 @@ ApplicationWindow {
     }
 
     CatalogDialog {
+        id: externalProjectChangesDialog
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(620, parent.width - 40)
+        implicitHeight: 310
+        modal: true
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        title: qsTr("Project files changed outside u uml")
+
+        contentItem: ColumnLayout {
+            spacing: 12
+
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Saving was stopped to avoid overwriting files "
+                           + "changed by another application, Git operation, "
+                           + "or u uml instance.")
+            }
+
+            Label {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                wrapMode: Text.Wrap
+                font.family: "monospace"
+                text: projectController.externallyChangedProjectFiles.length > 0
+                      ? "• " + projectController.externallyChangedProjectFiles.join("\n• ")
+                      : qsTr("The changed file list is unavailable.")
+            }
+
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("Reload discards the unsaved in-memory changes. "
+                           + "Overwrite replaces the external changes.")
+            }
+
+            RowLayout {
+                Layout.fillWidth: true
+                spacing: 8
+
+                CatalogButton {
+                    catalogId: "project.saveProject"
+                    text: qsTr("Save As…")
+                    onClicked: root.saveExternallyChangedProjectAs()
+                }
+                CatalogButton {
+                    catalogId: "project.openProject"
+                    text: qsTr("Reload")
+                    onClicked: root.reloadExternallyChangedProject()
+                }
+                Item { Layout.fillWidth: true }
+                CatalogButton {
+                    catalogId: "dialog.cancel"
+                    text: qsTr("Cancel")
+                    onClicked: {
+                        externalProjectChangesDialog.close()
+                        root.cancelPendingDocumentAction()
+                    }
+                }
+                CatalogButton {
+                    catalogId: "project.replaceProject"
+                    text: qsTr("Overwrite")
+                    onClicked: root.overwriteExternallyChangedProject()
+                }
+            }
+        }
+
+        Shortcut {
+            sequence: StandardKey.Cancel
+            onActivated: {
+                externalProjectChangesDialog.close()
+                root.cancelPendingDocumentAction()
+            }
+        }
+    }
+
+    CatalogDialog {
         id: cppImportDialog
         applyCatalogId: "project.applyCppSynchronization"
         parent: Overlay.overlay
@@ -2549,6 +2647,13 @@ ApplicationWindow {
     Connections {
         target: projectController.diagnostics
         function onErrorAdded() { logPopup.open() }
+    }
+
+    Connections {
+        target: projectController
+        function onExternalProjectChangeDetected() {
+            externalProjectChangesDialog.open()
+        }
     }
 
     Connections {

@@ -8,6 +8,7 @@
 #include "core/stereotype_catalog.h"
 
 #include <QColor>
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFile>
 #include <QHash>
@@ -27,6 +28,11 @@ constexpr auto kModelName = "model/model.json5";
 constexpr auto kDiagramsName = "diagrams/diagrams.json5";
 constexpr auto kRecoveryDirectory = ".uuml-recovery";
 constexpr auto kRecoveryMarker = "pending";
+#ifdef Q_OS_WIN
+constexpr auto kPathCaseSensitivity = Qt::CaseInsensitive;
+#else
+constexpr auto kPathCaseSensitivity = Qt::CaseSensitive;
+#endif
 
 Diagnostic error(const QString &category, const QString &message,
                  const QString &elementId = {}) {
@@ -45,6 +51,72 @@ QByteArray readFile(const QString &path, QString &readError) {
     return {};
   }
   return file.readAll();
+}
+
+QByteArray contentDigest(const QByteArray &bytes) {
+  return QByteArrayLiteral("sha256:") +
+         QCryptographicHash::hash(bytes, QCryptographicHash::Sha256).toHex();
+}
+
+QByteArray currentFileDigest(const QString &path) {
+  if (!QFileInfo::exists(path))
+    return QByteArrayLiteral("missing");
+  QString readError;
+  const QByteArray bytes = readFile(path, readError);
+  return readError.isEmpty() ? contentDigest(bytes)
+                             : QByteArrayLiteral("unreadable");
+}
+
+QString revisionKey(const QString &root, const QString &path) {
+  return QDir::fromNativeSeparators(
+      QDir::cleanPath(QDir(root).relativeFilePath(path)));
+}
+
+bool sameProjectRoot(const QString &left, const QString &right) {
+  return QDir::cleanPath(left).compare(QDir::cleanPath(right),
+                                       kPathCaseSensitivity) == 0;
+}
+
+void addCurrentRevisionEntry(ProjectFileRevision &revision,
+                             const QString &relativePath) {
+  const QString normalized =
+      QDir::fromNativeSeparators(QDir::cleanPath(relativePath));
+  if (!revision.fileDigests.contains(normalized)) {
+    revision.fileDigests.insert(
+        normalized,
+        currentFileDigest(QDir(revision.rootPath).filePath(normalized)));
+  }
+}
+
+ProjectFileRevision savedRevision(
+    const QString &root,
+    const QList<QPair<QString, QByteArray>> &files) {
+  ProjectFileRevision revision;
+  revision.rootPath = QDir::cleanPath(root);
+  for (const auto &[path, bytes] : files)
+    revision.fileDigests.insert(revisionKey(root, path), contentDigest(bytes));
+  return revision;
+}
+
+QStringList externallyChangedFiles(
+    const QString &root, const ProjectFileRevision &expectedRevision,
+    const QMap<QString, QByteArray> &knownCurrentDigests = {}) {
+  if (!expectedRevision.isValid() ||
+      !sameProjectRoot(root, expectedRevision.rootPath))
+    return {};
+
+  QStringList changed;
+  for (auto file = expectedRevision.fileDigests.cbegin();
+       file != expectedRevision.fileDigests.cend(); ++file) {
+    const auto known = knownCurrentDigests.constFind(file.key());
+    const QByteArray current =
+        known != knownCurrentDigests.cend()
+            ? known.value()
+            : currentFileDigest(QDir(root).filePath(file.key()));
+    if (current != file.value())
+      changed.append(file.key());
+  }
+  return changed;
 }
 
 bool writeFile(const QString &path, const QByteArray &bytes,
@@ -794,7 +866,8 @@ void finishRecovery(const QString &root) {
       .removeRecursively();
 }
 
-Json5Result readJson5(const QString &path, QList<Diagnostic> &diagnostics) {
+Json5Result readJson5(const QString &path, QList<Diagnostic> &diagnostics,
+                      QByteArray *digest = nullptr) {
   QString ioError;
   const QByteArray bytes = readFile(path, ioError);
   if (!ioError.isEmpty()) {
@@ -803,6 +876,8 @@ Json5Result readJson5(const QString &path, QList<Diagnostic> &diagnostics) {
               QStringLiteral("Cannot read %1: %2").arg(path, ioError)));
     return {};
   }
+  if (digest)
+    *digest = contentDigest(bytes);
   auto result = Json5::parse(bytes);
   if (!result) {
     diagnostics.append(
@@ -813,6 +888,10 @@ Json5Result readJson5(const QString &path, QList<Diagnostic> &diagnostics) {
 }
 
 } // namespace
+
+bool ProjectFileRevision::isValid() const {
+  return !rootPath.isEmpty() && !fileDigests.isEmpty();
+}
 
 QString ProjectSerializer::normalizeProjectPath(const QString &path) {
   QFileInfo info(path);
@@ -841,7 +920,9 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
 
   const QString manifestPath =
       QDir(root).filePath(QString::fromLatin1(kManifestName));
-  const auto manifestResult = readJson5(manifestPath, outcome.diagnostics);
+  QByteArray manifestDigest;
+  const auto manifestResult =
+      readJson5(manifestPath, outcome.diagnostics, &manifestDigest);
   if (!manifestResult || !manifestResult.document.isObject())
     return outcome;
   const QJsonObject sourceManifest = manifestResult.document.object();
@@ -851,13 +932,33 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
   const QString diagramsRelative =
       sourceManifest.value(QStringLiteral("diagrams"))
           .toString(QString::fromLatin1(kDiagramsName));
+  const QString modelPath = QDir(root).filePath(modelRelative);
+  const QString diagramsPath = QDir(root).filePath(diagramsRelative);
+  QByteArray modelDigest;
+  QByteArray diagramsDigest;
   const auto modelResult =
-      readJson5(QDir(root).filePath(modelRelative), outcome.diagnostics);
+      readJson5(modelPath, outcome.diagnostics, &modelDigest);
   const auto diagramsResult =
-      readJson5(QDir(root).filePath(diagramsRelative), outcome.diagnostics);
+      readJson5(diagramsPath, outcome.diagnostics, &diagramsDigest);
   if (!modelResult || !modelResult.document.isObject() || !diagramsResult ||
       !diagramsResult.document.isObject())
     return outcome;
+
+  outcome.revision.rootPath = root;
+  outcome.revision.fileDigests.insert(revisionKey(root, manifestPath),
+                                      manifestDigest);
+  outcome.revision.fileDigests.insert(revisionKey(root, modelPath),
+                                      modelDigest);
+  outcome.revision.fileDigests.insert(revisionKey(root, diagramsPath),
+                                      diagramsDigest);
+  // Saving always targets the canonical paths. Track them even when an older
+  // or hand-authored manifest points elsewhere, so a newly appeared target is
+  // not overwritten without detection.
+  addCurrentRevisionEntry(outcome.revision,
+                          QString::fromLatin1(kManifestName));
+  addCurrentRevisionEntry(outcome.revision, QString::fromLatin1(kModelName));
+  addCurrentRevisionEntry(outcome.revision,
+                          QString::fromLatin1(kDiagramsName));
 
   auto migration = ProjectSchemaMigrator::migrate(
       {sourceManifest, modelResult.document.object(),
@@ -877,9 +978,10 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
       manifest.value(QStringLiteral("cppImport")).toObject();
   for (const auto &value :
        cppImport.value(QStringLiteral("sourceRoots")).toArray()) {
-    const QString root = value.toString();
-    if (!root.isEmpty() && !project.cppImport.sourceRoots.contains(root))
-      project.cppImport.sourceRoots.append(root);
+    const QString sourceRoot = value.toString();
+    if (!sourceRoot.isEmpty() &&
+        !project.cppImport.sourceRoots.contains(sourceRoot))
+      project.cppImport.sourceRoots.append(sourceRoot);
   }
   // Projects written before multi-root import used one sourceRoot string.
   if (project.cppImport.sourceRoots.isEmpty()) {
@@ -1246,7 +1348,9 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
 }
 
 SaveOutcome ProjectSerializer::save(const QString &projectPath,
-                                    const ProjectData &project) {
+                                    const ProjectData &project,
+                                    const ProjectFileRevision &expectedRevision,
+                                    bool overwriteExternalChanges) {
   SaveOutcome outcome;
   outcome.diagnostics = validate(project);
   if (std::any_of(outcome.diagnostics.cbegin(), outcome.diagnostics.cend(),
@@ -1288,24 +1392,61 @@ SaveOutcome ProjectSerializer::save(const QString &projectPath,
        diagramsBytes(project)}};
 
   bool allSame = true;
+  QMap<QString, QByteArray> currentTargetDigests;
   for (const auto &[path, bytes] : files) {
     QString ioError;
     const QByteArray existing = readFile(path, ioError);
+    currentTargetDigests.insert(
+        revisionKey(root, path),
+        ioError.isEmpty()
+            ? contentDigest(existing)
+            : (QFileInfo::exists(path) ? QByteArrayLiteral("unreadable")
+                                       : QByteArrayLiteral("missing")));
     if (!ioError.isEmpty() || existing != bytes) {
       allSame = false;
-      break;
     }
   }
   if (allSame) {
     outcome.ok = true;
     outcome.unchanged = true;
+    outcome.revision = savedRevision(root, files);
     return outcome;
+  }
+
+  const auto refuseExternalChanges =
+      [&](const QStringList &changedFiles) {
+        if (changedFiles.isEmpty())
+          return false;
+        outcome.externallyChangedFiles = changedFiles;
+        outcome.externalChangesDetected = true;
+        outcome.diagnostics.append(warning(
+            QStringLiteral("external-change"),
+            QStringLiteral(
+                "Saving was stopped because project files changed outside "
+                "u uml: %1")
+                .arg(changedFiles.join(QStringLiteral(", ")))));
+        return true;
+      };
+  if (!overwriteExternalChanges) {
+    if (refuseExternalChanges(
+            externallyChangedFiles(root, expectedRevision,
+                                   currentTargetDigests)))
+      return outcome;
   }
 
   QString recoveryError;
   if (!prepareRecovery(root, recoveryError)) {
     outcome.diagnostics.append(
         error(QStringLiteral("recovery"), recoveryError));
+    return outcome;
+  }
+
+  // Recheck after preparing recovery data. This closes the most likely race
+  // window between the initial comparison and the first replacement while
+  // retaining the latest valid external files if another writer intervened.
+  if (!overwriteExternalChanges &&
+      refuseExternalChanges(externallyChangedFiles(root, expectedRevision))) {
+    finishRecovery(root);
     return outcome;
   }
 
@@ -1320,6 +1461,7 @@ SaveOutcome ProjectSerializer::save(const QString &projectPath,
   }
   finishRecovery(root);
   outcome.ok = true;
+  outcome.revision = savedRevision(root, files);
   return outcome;
 }
 

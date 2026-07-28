@@ -2,6 +2,7 @@
 
 #include "core/diagnostic_model.h"
 #include "core/project_data.h"
+#include "core/project_serializer.h"
 #include "core/project_tree_model.h"
 
 #include <QObject>
@@ -48,6 +49,9 @@ class ProjectController final : public QObject {
   Q_PROPERTY(QString undoText READ undoText NOTIFY undoStateChanged)
   Q_PROPERTY(QString redoText READ redoText NOTIFY undoStateChanged)
   Q_PROPERTY(bool dirty READ dirty NOTIFY dirtyChanged)
+  Q_PROPERTY(QStringList externallyChangedProjectFiles READ
+                 externallyChangedProjectFiles NOTIFY
+                 externallyChangedProjectFilesChanged)
   Q_PROPERTY(QVariantList diagramStyles READ diagramStyles NOTIFY stateChanged)
   Q_PROPERTY(
       QVariantList stereotypeCatalog READ stereotypeCatalog NOTIFY stateChanged)
@@ -80,6 +84,7 @@ public:
   QString undoText() const;
   QString redoText() const;
   bool dirty() const;
+  QStringList externallyChangedProjectFiles() const;
   QVariantList diagramStyles() const;
   QVariantList stereotypeCatalog() const;
 
@@ -89,6 +94,8 @@ public:
   Q_INVOKABLE bool saveDestinationContainsProject(const QUrl &url) const;
   Q_INVOKABLE bool saveProject(const QUrl &url = {},
                                bool overwriteExisting = false);
+  Q_INVOKABLE bool overwriteExternallyChangedProject();
+  Q_INVOKABLE bool reloadProjectFromDisk();
   Q_INVOKABLE void undo();
   Q_INVOKABLE void redo();
   Q_INVOKABLE QVariantMap diagramStyle(const QString &styleId) const;
@@ -321,6 +328,8 @@ signals:
   void selectionChanged();
   void undoStateChanged();
   void dirtyChanged();
+  void externallyChangedProjectFilesChanged();
+  void externalProjectChangeDetected();
 
 private:
   bool moveBrowserItemsImpl(const QString &itemsJson, const QString &targetKind,
@@ -330,6 +339,8 @@ private:
   void applyCommand(ProjectCommand &command, bool execute);
   void setDataDirect(const ProjectData &state);
   void logDiagnostics(const QList<Diagnostic> &items);
+  void setExternallyChangedProjectFiles(const QStringList &files,
+                                        bool reportConflict);
   QString normalizedLocalPath(const QUrl &url) const;
   ModelElement *selectedElement(ProjectData &project) const;
   const ModelElement *selectedElement() const;
@@ -358,6 +369,8 @@ private:
 
   ProjectData m_data;
   QString m_projectPath;
+  ProjectFileRevision m_projectRevision;
+  QStringList m_externallyChangedProjectFiles;
   QString m_selectedId;
   QString m_selectedKind;
   QUndoStack m_undoStack;

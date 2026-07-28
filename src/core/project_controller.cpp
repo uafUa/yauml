@@ -1074,6 +1074,9 @@ bool ProjectController::canRedo() const { return m_undoStack.canRedo(); }
 QString ProjectController::undoText() const { return m_undoStack.undoText(); }
 QString ProjectController::redoText() const { return m_undoStack.redoText(); }
 bool ProjectController::dirty() const { return !m_undoStack.isClean(); }
+QStringList ProjectController::externallyChangedProjectFiles() const {
+  return m_externallyChangedProjectFiles;
+}
 QVariantList ProjectController::diagramStyles() const {
   QVariantList styles;
   styles.reserve(m_data.diagramStyles.size());
@@ -1093,6 +1096,8 @@ QVariantList ProjectController::stereotypeCatalog() const {
 void ProjectController::newProject(const QString &name) {
   m_diagnostics.clear();
   m_projectPath.clear();
+  m_projectRevision = {};
+  setExternallyChangedProjectFiles({}, false);
   m_selectedId.clear();
   m_selectedKind.clear();
   setDataDirect(createStarterProject(name.trimmed().isEmpty()
@@ -1117,6 +1122,8 @@ bool ProjectController::openProject(const QUrl &url) {
   if (!outcome.ok)
     return false;
   m_projectPath = ProjectSerializer::normalizeProjectPath(path);
+  m_projectRevision = outcome.revision;
+  setExternallyChangedProjectFiles({}, false);
   m_selectedId.clear();
   m_selectedKind.clear();
   setDataDirect(outcome.project);
@@ -1155,11 +1162,26 @@ bool ProjectController::saveProject(const QUrl &url, bool overwriteExisting) {
                        "confirm replacement before saving"));
     return false;
   }
-  const auto outcome = ProjectSerializer::save(path, m_data);
+  const QString destination = ProjectSerializer::normalizeProjectPath(path);
+  const bool savingCurrentProject =
+      !m_projectPath.isEmpty() &&
+      QDir::cleanPath(destination)
+              .compare(QDir::cleanPath(m_projectPath),
+                       Qt::CaseInsensitive) == 0;
+  const auto outcome = ProjectSerializer::save(
+      path, m_data,
+      savingCurrentProject ? m_projectRevision : ProjectFileRevision{},
+      overwriteExisting);
   logDiagnostics(outcome.diagnostics);
+  if (outcome.externalChangesDetected) {
+    setExternallyChangedProjectFiles(outcome.externallyChangedFiles, true);
+    return false;
+  }
   if (!outcome.ok)
     return false;
-  m_projectPath = ProjectSerializer::normalizeProjectPath(path);
+  m_projectPath = destination;
+  m_projectRevision = outcome.revision;
+  setExternallyChangedProjectFiles({}, false);
   m_undoStack.setClean();
   emit projectChanged();
   m_diagnostics.addInfo(
@@ -1168,6 +1190,15 @@ bool ProjectController::saveProject(const QUrl &url, bool overwriteExisting) {
           ? QStringLiteral("Project already matches the saved files")
           : QStringLiteral("Saved %1").arg(m_projectPath));
   return true;
+}
+
+bool ProjectController::overwriteExternallyChangedProject() {
+  return saveProject({}, true);
+}
+
+bool ProjectController::reloadProjectFromDisk() {
+  return !m_projectPath.isEmpty() &&
+         openProject(QUrl::fromLocalFile(m_projectPath));
 }
 
 void ProjectController::undo() { m_undoStack.undo(); }
@@ -3686,6 +3717,16 @@ void ProjectController::setDataDirect(const ProjectData &state) {
 void ProjectController::logDiagnostics(const QList<Diagnostic> &items) {
   for (const auto &item : items)
     m_diagnostics.add(item);
+}
+
+void ProjectController::setExternallyChangedProjectFiles(
+    const QStringList &files, bool reportConflict) {
+  if (m_externallyChangedProjectFiles != files) {
+    m_externallyChangedProjectFiles = files;
+    emit externallyChangedProjectFilesChanged();
+  }
+  if (reportConflict)
+    emit externalProjectChangeDetected();
 }
 
 } // namespace uuml

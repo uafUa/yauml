@@ -1,0 +1,14 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="24px" height="24px" viewBox="0 -960 960 960">
+  <polyline points="150,-220 480,-220 480,-760 810,-760"
+            fill="none"
+            stroke="#1f1f1f"
+            stroke-width="80"
+            stroke-linecap="butt"
+            stroke-linejoin="miter"/>
+  <circle cx="150" cy="-220" r="58" fill="#1f1f1f"/>
+  <circle cx="480" cy="-220" r="80" fill="#1f1f1f"/>
+  <circle cx="810" cy="-760" r="58" fill="#1f1f1f"/>
+  <path d="M700-380h80v100h100v80H780v100h-80v-100H600v-80h100v-100Z"
+        fill="#1f1f1f"/>
+</svg>

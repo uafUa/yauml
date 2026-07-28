@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg"
+     width="24px" height="24px" viewBox="0 -960 960 960"
+     fill="#1f1f1f">
+  <!-- Two differently sized objects -->
+  <path d="M120-800h360v260H120v-260Z
+           M360-470h300v210H360v-210Z"/>
+  <!-- Horizontal dimension: make equal width -->
+  <path d="M80-120 210-230v70h430v-70l130 110-130 110v-70H210v70L80-120Z"/>
+  <!-- Vertical dimension: make equal height -->
+  <path d="M810-820 920-690h-70v330h70L810-230 700-360h70v-330h-70l110-130Z"/>
+</svg>

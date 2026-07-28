@@ -456,9 +456,18 @@ history memory grow with total project size rather than the size of each edit.
   Unversioned POC projects migrate to version 1 in memory, an explicit save
   persists the upgrade, unknown fields survive, and malformed or future
   versions produce actionable diagnostics in both GUI and headless workflows.
-- Incremental loading/indexing, merge diagnostics, and expanded recovery
-  testing remain.
-- Performance benchmarks and rendered-image regression coverage.
+- Interrupted multi-file save recovery is implemented and covered by a
+  controlled corruption test. External modification protection is also
+  implemented: each open session retains byte-level file revisions, saving
+  refuses to overwrite changed files, and the GUI offers Save As, reload,
+  cancel, or explicit overwrite. Headless C++ import shares the same guard and
+  has a distinct conflict exit code plus an explicit overwrite option.
+- Rendered-image regression coverage and broader recovery fault injection
+  remain the next hardening work.
+- Incremental loading/indexing and synthetic performance benchmarks are
+  intentionally last in this phase. The current scene-graph implementation is
+  performing well on the product owner's large real project, so architectural
+  complexity will be introduced only when observed behavior justifies it.
 - Windows CI and packaging automation is implemented. Every main-branch update
   and pull request performs a clean MSVC Release build with Qt and libclang,
   runs the test suite, and publishes a verified portable ZIP and Qt Installer

@@ -17,8 +17,9 @@ The MVP includes:
 - automatic connector presentation when both relationship endpoints are placed,
   with edge attachment, draggable perimeter ports, and persisted editable bend
   points;
-- deterministic, directory-based JSON5 persistence with validation, unknown-field
-  retention, and interrupted-save recovery;
+- deterministic, directory-based JSON5 persistence with validation,
+  unknown-field retention, interrupted-save recovery, and external-change
+  protection;
 - headless `validate`, `cpp-preview`, and `cpp-import` commands using the same
   core services as the GUI.
 
@@ -134,7 +135,23 @@ when conflicts need attention; user-edited model content is never overwritten
 by default. For unattended workflows, the explicit
 `--conflicts=keep-model` or `--conflicts=use-source` option resolves every
 unambiguous conflict with that policy. Unsafe conflicts remain unresolved and
-still produce exit code `3`.
+still produce exit code `3`. If project files change on disk while an import is
+running, saving stops with exit code `4`. An unattended caller may explicitly
+accept replacement with `--overwrite-external-changes`.
+
+## Persistence safety
+
+- Opening a project records byte-level revisions of its manifest, semantic
+  model, and diagram files. The revision belongs to the open session rather
+  than the domain model, so it never dirties the project or enters undo history.
+- Before replacing changed project files, u uml verifies that their revisions
+  still match what was loaded. If Git, another application, or another u uml
+  instance changed them, saving stops and lists the affected relative paths.
+  The GUI then offers **Save As…**, **Reload**, **Cancel**, or an explicit
+  **Overwrite**. Reload and overwrite state their data-loss direction.
+- Multi-file saves retain the existing recovery snapshot and pending marker.
+  Opening after an interrupted save restores the last complete project rather
+  than mixing files from different revisions.
 
 ## C++ import
 

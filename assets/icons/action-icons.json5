@@ -284,17 +284,17 @@
       matchWidth: {
         label: "Make same width",
         contexts: ["diagram Arrange menu", "multi-selection toolbox"],
-        svg: "",
+        svg: "match-width.svg",
       },
       matchHeight: {
         label: "Make same height",
         contexts: ["diagram Arrange menu", "multi-selection toolbox"],
-        svg: "",
+        svg: "match-height.svg",
       },
       matchSize: {
         label: "Make same width and height",
         contexts: ["diagram Arrange menu", "multi-selection toolbox"],
-        svg: "",
+        svg: "match-size.svg",
       },
       distributeHorizontally: {
         label: "Distribute horizontally",
@@ -322,12 +322,12 @@
       wrapInNamespace: {
         label: "Wrap in parent namespace",
         contexts: ["element context menu"],
-        svg: "",
+        svg: "wrap-in-namespace.svg",
       },
       connectorSnapPoints: {
         label: "Edit connector snap points",
         contexts: ["element context menu"],
-        svg: "",
+        svg: "connector-snap-points.svg",
       },
       removeElement: {
         label: "Remove element presentation from diagram",
@@ -345,12 +345,12 @@
       addBendPoint: {
         label: "Add bend point",
         contexts: ["relationship context menu"],
-        svg: "",
+        svg: "add-bend-point.svg",
       },
       removeBendPoint: {
         label: "Remove bend point",
         contexts: ["relationship context menu", "Delete shortcut"],
-        svg: "",
+        svg: "remove-bend-point.svg",
       },
       clearBendPoints: {
         label: "Clear bend points",

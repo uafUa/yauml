@@ -93,6 +93,7 @@ private slots:
   void projectDiagramStylesPersistResolveAndUndo();
   void cppSynchronizationSourcePersistsAndIsUndoable();
   void saveAsRequiresExplicitProjectReplacement();
+  void externalProjectChangesRequireExplicitOverwrite();
   void validationFindsBrokenReferences();
   void commandUndoRedo();
   void cppRenameMatchingRequiresUniqueHighConfidence();
@@ -808,6 +809,105 @@ void CoreTests::saveAsRequiresExplicitProjectReplacement() {
   const LoadOutcome replaced = ProjectSerializer::load(temporary.path());
   QVERIFY(replaced.ok);
   QCOMPARE(replaced.project.name, QStringLiteral("Replacement"));
+}
+
+void CoreTests::externalProjectChangesRequireExplicitOverwrite() {
+  QTemporaryDir projectDirectory;
+  QTemporaryDir saveAsDirectory;
+  QVERIFY(projectDirectory.isValid());
+  QVERIFY(saveAsDirectory.isValid());
+
+  ProjectData original =
+      createStarterProject(QStringLiteral("External change guard"));
+  QVERIFY(ProjectSerializer::save(projectDirectory.path(), original).ok);
+  const LoadOutcome loaded = ProjectSerializer::load(projectDirectory.path());
+  QVERIFY(loaded.ok);
+  QVERIFY(loaded.revision.isValid());
+
+  const QString modelPath = QDir(projectDirectory.path())
+                                .filePath(QStringLiteral("model/model.json5"));
+  QFile externalModelEdit(modelPath);
+  QVERIFY(externalModelEdit.open(QIODevice::Append));
+  QCOMPARE(externalModelEdit.write("\n  \n"), 4);
+  externalModelEdit.close();
+  QFile preservedModel(modelPath);
+  QVERIFY(preservedModel.open(QIODevice::ReadOnly));
+  const QByteArray externallyEditedBytes = preservedModel.readAll();
+
+  ProjectData edited = loaded.project;
+  edited.name = QStringLiteral("Saved after explicit decision");
+  const SaveOutcome guarded = ProjectSerializer::save(
+      projectDirectory.path(), edited, loaded.revision);
+  QVERIFY(!guarded.ok);
+  QVERIFY(guarded.externalChangesDetected);
+  QCOMPARE(guarded.externallyChangedFiles,
+           QStringList{QStringLiteral("model/model.json5")});
+  preservedModel.close();
+  QVERIFY(preservedModel.open(QIODevice::ReadOnly));
+  QCOMPARE(preservedModel.readAll(), externallyEditedBytes);
+  preservedModel.close();
+
+  // An expected revision belongs only to its original directory. Save As is a
+  // new destination and must not inherit a false conflict from the old path.
+  const SaveOutcome savedAs = ProjectSerializer::save(
+      saveAsDirectory.path(), edited, loaded.revision);
+  QVERIFY(savedAs.ok);
+  QVERIFY(!savedAs.externalChangesDetected);
+
+  const SaveOutcome overwritten = ProjectSerializer::save(
+      projectDirectory.path(), edited, loaded.revision, true);
+  QVERIFY(overwritten.ok);
+  QVERIFY(overwritten.revision.isValid());
+  const LoadOutcome afterOverwrite =
+      ProjectSerializer::load(projectDirectory.path());
+  QVERIFY(afterOverwrite.ok);
+  QCOMPARE(afterOverwrite.project.name, edited.name);
+
+  ProjectController controller;
+  QVERIFY(controller.openProject(
+      QUrl::fromLocalFile(projectDirectory.path())));
+  controller.renameDiagram(controller.data().diagrams.first().id,
+                           QStringLiteral("Locally renamed diagram"));
+  QVERIFY(controller.dirty());
+
+  const QString diagramsPath =
+      QDir(projectDirectory.path())
+          .filePath(QStringLiteral("diagrams/diagrams.json5"));
+  QFile externalDiagramEdit(diagramsPath);
+  QVERIFY(externalDiagramEdit.open(QIODevice::Append));
+  QCOMPARE(externalDiagramEdit.write("\n"), 1);
+  externalDiagramEdit.close();
+
+  QSignalSpy conflictDetected(
+      &controller, &ProjectController::externalProjectChangeDetected);
+  QVERIFY(!controller.saveProject());
+  QCOMPARE(conflictDetected.count(), 1);
+  QCOMPARE(controller.externallyChangedProjectFiles(),
+           QStringList{QStringLiteral("diagrams/diagrams.json5")});
+  QVERIFY(controller.dirty());
+
+  QVERIFY(controller.overwriteExternallyChangedProject());
+  QVERIFY(!controller.dirty());
+  QVERIFY(controller.externallyChangedProjectFiles().isEmpty());
+  QCOMPARE(ProjectSerializer::load(projectDirectory.path())
+               .project.diagrams.first()
+               .name,
+           QStringLiteral("Locally renamed diagram"));
+
+  controller.renameDiagram(controller.data().diagrams.first().id,
+                           QStringLiteral("Unsaved local diagram"));
+  ProjectData externalVersion =
+      ProjectSerializer::load(projectDirectory.path()).project;
+  externalVersion.diagrams.first().name =
+      QStringLiteral("Externally renamed diagram");
+  QVERIFY(
+      ProjectSerializer::save(projectDirectory.path(), externalVersion).ok);
+  QVERIFY(!controller.saveProject());
+  QVERIFY(controller.dirty());
+  QVERIFY(controller.reloadProjectFromDisk());
+  QVERIFY(!controller.dirty());
+  QCOMPARE(controller.data().diagrams.first().name,
+           QStringLiteral("Externally renamed diagram"));
 }
 
 void CoreTests::validationFindsBrokenReferences() {
