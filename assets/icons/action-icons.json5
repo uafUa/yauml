@@ -141,6 +141,14 @@
       },
     },
 
+    help: {
+      checkUpdates: {
+        label: "Check for application updates",
+        contexts: ["Help menu"],
+        svg: "",
+      },
+    },
+
     browser: {
       createFolder: {
         label: "Create project-tree folder",

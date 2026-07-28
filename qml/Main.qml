@@ -23,6 +23,8 @@ ApplicationWindow {
     property string pendingDocumentAction: ""
     property url pendingRecentProjectUrl: ""
     property url pendingSaveUrl: ""
+    property string updateResultMessage: ""
+    property bool updateResultFailed: false
 
     Component.onCompleted: geometryReady = true
     onXChanged: if (geometryReady) workspaceController.updateMainWindowGeometry(x, y, width, height)
@@ -49,6 +51,15 @@ ApplicationWindow {
             openDialog.open()
         } else if (action === "openRecent") {
             projectController.openProject(recentProjectUrl)
+        } else if (action === "update") {
+            if (updateController.scheduleUpdaterOnExit()) {
+                finishClose()
+            } else {
+                updateResultFailed = true
+                updateResultMessage =
+                        qsTr("The maintenance tool is not available. Reinstall uuml using the latest installer to enable in-place updates.")
+                updateCheckResultDialog.open()
+            }
         }
     }
 
@@ -66,6 +77,13 @@ ApplicationWindow {
     function requestRecentProject(projectUrl) {
         pendingRecentProjectUrl = projectUrl
         requestDocumentAction("openRecent")
+    }
+
+    function requestUpdateInstall() {
+        if (updateController.maintenanceToolAvailable)
+            requestDocumentAction("update")
+        else
+            updateController.openReleasePage()
     }
 
     function cancelPendingDocumentAction() {
@@ -288,6 +306,17 @@ ApplicationWindow {
                 catalogId: "workspace.showLog"
                 text: qsTr("Log")
                 onTriggered: logPopup.open()
+            }
+        }
+        Menu {
+            title: qsTr("&Help")
+            CatalogAction {
+                catalogId: "help.checkUpdates"
+                text: updateController.checking
+                      ? qsTr("Checking for &Updates…")
+                      : qsTr("Check for &Updates…")
+                enabled: !updateController.checking
+                onTriggered: updateController.checkForUpdates(true)
             }
         }
     }
@@ -1322,6 +1351,94 @@ ApplicationWindow {
         }
     }
 
+    Connections {
+        target: updateController
+
+        function onCheckFinished(userInitiated, updateAvailable, failed,
+                                 message) {
+            if (updateAvailable) {
+                updateAvailableDialog.open()
+            } else if (userInitiated) {
+                root.updateResultFailed = failed
+                root.updateResultMessage = message
+                updateCheckResultDialog.open()
+            }
+        }
+    }
+
+    CatalogDialog {
+        id: updateAvailableDialog
+        objectName: "updateAvailableDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(500, parent.width - 40)
+        modal: true
+        focus: true
+        title: qsTr("Update available")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        onOpened: {
+            const updateButton = standardButton(Dialog.Ok)
+            if (updateButton)
+                updateButton.text = updateController.maintenanceToolAvailable
+                                  ? qsTr("Update now")
+                                  : qsTr("Open download page")
+            const laterButton = standardButton(Dialog.Cancel)
+            if (laterButton)
+                laterButton.text = qsTr("Later")
+        }
+        onAccepted: root.requestUpdateInstall()
+
+        contentItem: ColumnLayout {
+            spacing: 12
+
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: qsTr("uuml %1 is available. You are currently using %2.")
+                      .arg(updateController.availableVersion)
+                      .arg(updateController.currentVersion)
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: uiTheme.mutedText
+                text: updateController.maintenanceToolAvailable
+                      ? qsTr("Your project will follow the normal save prompt before uuml closes and starts the maintenance tool.")
+                      : qsTr("This portable copy has no maintenance tool. The release page will open so you can download the latest installer.")
+            }
+            Label {
+                Layout.fillWidth: true
+                textFormat: Text.RichText
+                text: "<a href=\"" + updateController.releaseNotesUrl
+                      + "\">" + qsTr("View release notes") + "</a>"
+                onLinkActivated: function(link) {
+                    Qt.openUrlExternally(link)
+                }
+            }
+        }
+    }
+
+    CatalogDialog {
+        id: updateCheckResultDialog
+        objectName: "updateCheckResultDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(460, parent.width - 40)
+        modal: true
+        focus: true
+        title: root.updateResultFailed
+               ? qsTr("Update check failed")
+               : qsTr("No updates available")
+        standardButtons: Dialog.Ok
+
+        contentItem: Label {
+            padding: 16
+            wrapMode: Text.Wrap
+            text: root.updateResultMessage
+        }
+    }
+
     CatalogDialog {
         id: preferencesDialog
         objectName: "preferencesDialog"
@@ -1512,6 +1629,8 @@ ApplicationWindow {
                     ? 0
                     : applicationSettings.packageReassignmentPolicy === "allow"
                       ? 2 : 1
+            automaticUpdateChecks.checked =
+                    applicationSettings.automaticUpdateChecksEnabled
             defaultConnectorRouting.currentIndex =
                     applicationSettings.defaultConnectorRouting === "orthogonal" ? 1 : 0
             const gestureKeys = applicationSettings.relationshipGestureKeys
@@ -1559,6 +1678,8 @@ ApplicationWindow {
                     packageReassignment.currentIndex === 0
                     ? "disallow"
                     : packageReassignment.currentIndex === 2 ? "allow" : "ask"
+            applicationSettings.automaticUpdateChecksEnabled =
+                    automaticUpdateChecks.checked
             applicationSettings.defaultConnectorRouting =
                     defaultConnectorRouting.currentIndex === 1
                     ? "orthogonal" : "straight"
@@ -1702,6 +1823,20 @@ ApplicationWindow {
                             wrapMode: Text.Wrap
                             color: uiTheme.mutedText
                             text: qsTr("Controls whether dragging in the project tree changes a type's UML package or enclosing type. Diagram dragging is always presentation-only.")
+                        }
+                        Label {
+                            text: qsTr("Software updates")
+                            font.bold: true
+                        }
+                        CheckBox {
+                            id: automaticUpdateChecks
+                            text: qsTr("Automatically check for stable updates")
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            color: uiTheme.mutedText
+                            text: qsTr("Installed builds check at most once per day. Updates are never installed without confirmation.")
                         }
                         Item { Layout.preferredHeight: 8 }
                     }

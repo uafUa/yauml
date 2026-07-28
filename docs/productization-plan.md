@@ -494,12 +494,15 @@ history memory grow with total project size rather than the size of each edit.
   intentionally last in this phase. The current scene-graph implementation is
   performing well on the product owner's large real project, so architectural
   complexity will be introduced only when observed behavior justifies it.
-- Windows CI and packaging automation is implemented. Every main-branch update
-  and pull request performs a clean MSVC Release build with Qt and libclang,
-  runs the test suite, and publishes a verified portable ZIP and Qt Installer
-  Framework offline installer plus SHA-256 checksums. A matching `v*` tag
-  promotes those same artifacts to a GitHub Release. Cross-platform packaging
-  remains future work.
+- Windows CI, packaging, and stable updates are implemented. Every main-branch
+  update and pull request performs a clean MSVC Release build with Qt and
+  libclang, runs the test suite, and publishes a verified portable ZIP and Qt
+  Installer Framework hybrid installer plus SHA-256 checksums. A matching `v*`
+  tag promotes those same artifacts to a GitHub Release and publishes the
+  corresponding IFW repository through GitHub Pages. Installed builds check
+  for stable updates at a configurable daily interval and hand user-approved
+  updates to the maintenance tool after the normal save-and-close flow.
+  Cross-platform packaging remains future work.
 
 ## Phase 6: diagram export — lower priority
 

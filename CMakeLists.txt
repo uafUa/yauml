@@ -11,7 +11,7 @@ set(CMAKE_AUTOUIC ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 find_package(Qt6 6.8 REQUIRED COMPONENTS
-    Concurrent Core Gui Qml Quick QuickControls2 Test)
+    Concurrent Core Gui Network Qml Quick QuickControls2 Test)
 qt_standard_project_setup(REQUIRES 6.8)
 
 # C++ import is built around Clang's stable C API. Keep the dependency optional
@@ -85,6 +85,8 @@ add_library(uuml_core STATIC
     src/core/project_style.h
     src/core/stereotype_catalog.cpp
     src/core/stereotype_catalog.h
+    src/core/update_manifest.cpp
+    src/core/update_manifest.h
     src/core/project_tree_model.cpp
     src/core/project_tree_model.h
     src/core/workspace_controller.cpp
@@ -178,6 +180,8 @@ qt_add_executable(uuml
     src/app/main.cpp
     src/app/source_folder_picker.cpp
     src/app/source_folder_picker.h
+    src/app/update_controller.cpp
+    src/app/update_controller.h
 )
 
 file(GLOB_RECURSE UUML_ICON_SVG_FILES CONFIGURE_DEPENDS
@@ -229,9 +233,14 @@ target_link_libraries(uuml PRIVATE
     uuml_ui_support
     Qt6::Core
     Qt6::Gui
+    Qt6::Network
     Qt6::Qml
     Qt6::Quick
     Qt6::QuickControls2
+)
+target_compile_definitions(uuml PRIVATE
+    UUML_VERSION="${PROJECT_VERSION}"
+    UUML_UPDATE_MANIFEST_URL="https://uafua.github.io/yauml/updates/windows/x64/stable/latest.json"
 )
 if(WIN32)
     target_link_libraries(uuml PRIVATE ole32 shell32)

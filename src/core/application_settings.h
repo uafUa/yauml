@@ -2,6 +2,7 @@
 
 #include "core/cpp_import.h"
 
+#include <QDateTime>
 #include <QObject>
 #include <QStringList>
 #include <QVariantList>
@@ -39,6 +40,10 @@ class ApplicationSettings final : public QObject {
   Q_PROPERTY(
       QString packageReassignmentPolicy READ packageReassignmentPolicy WRITE
           setPackageReassignmentPolicy NOTIFY packageReassignmentPolicyChanged)
+  Q_PROPERTY(bool automaticUpdateChecksEnabled READ
+                 automaticUpdateChecksEnabled WRITE
+                     setAutomaticUpdateChecksEnabled NOTIFY
+                         automaticUpdateChecksEnabledChanged)
   Q_PROPERTY(QVariantList recentProjects READ recentProjects NOTIFY
                  recentProjectsChanged)
 
@@ -54,6 +59,7 @@ public:
   static constexpr auto kDefaultDiagramItemSizingMode = "content";
   static constexpr ConnectorRouting kDefaultConnectorRouting =
       ConnectorRouting::Straight;
+  static constexpr bool kDefaultAutomaticUpdateChecksEnabled = true;
   static constexpr int kMaximumRecentProjects = 10;
 
   static QVariantMap defaultRelationshipGestureKeys();
@@ -91,6 +97,12 @@ public:
   setContextToolboxConfiguration(const QVariantMap &configuration);
   QString packageReassignmentPolicy() const;
   void setPackageReassignmentPolicy(const QString &policy);
+  bool automaticUpdateChecksEnabled() const;
+  void setAutomaticUpdateChecksEnabled(bool enabled);
+  bool automaticUpdateCheckDue(
+      const QDateTime &now = QDateTime::currentDateTimeUtc()) const;
+  void recordUpdateCheck(
+      const QDateTime &timestamp = QDateTime::currentDateTimeUtc());
   QVariantList recentProjects() const;
   Q_INVOKABLE void addRecentProject(const QString &projectPath);
   Q_INVOKABLE void clearRecentProjects();
@@ -108,6 +120,7 @@ signals:
   void cppMemberTypeRulesChanged();
   void contextToolboxConfigurationChanged();
   void packageReassignmentPolicyChanged();
+  void automaticUpdateChecksEnabledChanged();
   void recentProjectsChanged();
 
 private:
@@ -116,6 +129,7 @@ private:
   void persistCppImportPreferences() const;
   void persistContextToolboxPreferences() const;
   void persistModelingPreferences() const;
+  void persistUpdatePreferences() const;
   void persistRecentProjects() const;
 
   int m_defaultDistributionGap = kDefaultDistributionGap;
@@ -129,6 +143,9 @@ private:
   QList<CppMemberTypeRule> m_cppMemberTypeRules;
   QVariantMap m_contextToolboxConfiguration;
   QString m_packageReassignmentPolicy = QStringLiteral("ask");
+  bool m_automaticUpdateChecksEnabled =
+      kDefaultAutomaticUpdateChecksEnabled;
+  QDateTime m_lastUpdateCheckUtc;
   QStringList m_recentProjectPaths;
 };
 

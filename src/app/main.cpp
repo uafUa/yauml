@@ -1,5 +1,6 @@
 #include "app/icon_registry.h"
 #include "app/source_folder_picker.h"
+#include "app/update_controller.h"
 #include "core/application_settings.h"
 #include "core/cpp_import.h"
 #include "core/cpp_import_controller.h"
@@ -214,6 +215,7 @@ int main(int argc, char *argv[]) {
   QGuiApplication application(argc, argv);
   application.setApplicationName(QStringLiteral("uuml"));
   application.setApplicationDisplayName(QStringLiteral("u uml"));
+  application.setApplicationVersion(QStringLiteral(UUML_VERSION));
   application.setOrganizationName(QStringLiteral("uuml"));
 
   qmlRegisterType<uuml::DiagramCanvas>("Uuml.Native", 1, 0, "DiagramCanvas");
@@ -225,6 +227,10 @@ int main(int argc, char *argv[]) {
   uuml::ui::SourceFolderPicker sourceFolderPicker;
   uuml::ui::IconRegistry iconRegistry;
   uuml::ui::UiTheme uiTheme;
+  uuml::ui::UpdateController updateController(
+      application.applicationVersion(),
+      QUrl(QStringLiteral(UUML_UPDATE_MANIFEST_URL)), &applicationSettings,
+      project.diagnostics());
   for (const QString &error : iconRegistry.errors())
     project.diagnostics()->addWarning(QStringLiteral("icons"), error);
   QObject::connect(&project, &uuml::ProjectController::projectOpened,
@@ -256,10 +262,16 @@ int main(int argc, char *argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("uiTheme"), &uiTheme);
   engine.rootContext()->setContextProperty(QStringLiteral("iconRegistry"),
                                            &iconRegistry);
+  engine.rootContext()->setContextProperty(
+      QStringLiteral("updateController"), &updateController);
   QObject::connect(
       &engine, &QQmlApplicationEngine::objectCreationFailed, &application,
       [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);
   engine.loadFromModule(QStringLiteral("Uuml"), QStringLiteral("Main"));
+  if (!application.arguments().contains(QStringLiteral("--smoke-test"))) {
+    QTimer::singleShot(1500, &updateController,
+                       &uuml::ui::UpdateController::checkAutomaticallyIfDue);
+  }
   if (application.arguments().contains(QStringLiteral("--smoke-test"))) {
     if (!iconRegistry.isValid()) {
       qWarning().noquote() << QStringLiteral("Icon registry errors:\n%1")

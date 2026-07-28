@@ -1,5 +1,9 @@
 function Component()
 {
+    // Let IFW close a running copy before replacing or removing executable
+    // files. The in-app updater normally starts after uuml exits, while this
+    // also protects updates started directly from maintenancetool.exe.
+    component.addStopProcessForUpdateRequest("uuml.exe");
 }
 
 Component.prototype.createOperations = function()

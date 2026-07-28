@@ -10,6 +10,7 @@
 #include "core/project_serializer_test_support.h"
 #include "core/project_style.h"
 #include "core/stereotype_catalog.h"
+#include "core/update_manifest.h"
 #include "core/workspace_controller.h"
 #include "ui/text_occlusion.h"
 #include "ui/triangle_batch.h"
@@ -142,6 +143,7 @@ private slots:
   void closingAllDetachedWindowsReturnsTheirDiagrams();
   void persistedWorkspaceRestoresTabGroups();
   void applicationPreferencesPersist();
+  void updateManifestValidationAndVersionComparison();
   void applicationPreferencesMigrateLegacyCppPointerTypes();
   void recentProjectHistoryPersists();
   void themePreferencesPersistAndReset();
@@ -4355,6 +4357,7 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(settings.contextToolboxConfiguration(),
              ApplicationSettings::defaultContextToolboxConfiguration());
     QCOMPARE(settings.packageReassignmentPolicy(), QStringLiteral("ask"));
+    QVERIFY(settings.automaticUpdateChecksEnabled());
     QCOMPARE(settings.relationshipGestureKeys(),
              ApplicationSettings::defaultRelationshipGestureKeys());
     QSignalSpy changes(&settings,
@@ -4366,6 +4369,7 @@ void CoreTests::applicationPreferencesPersist() {
     settings.setDiagramItemSizingMode(QStringLiteral("fixed"));
     settings.setDefaultConnectorRouting(QStringLiteral("orthogonal"));
     settings.setPackageReassignmentPolicy(QStringLiteral("allow"));
+    settings.setAutomaticUpdateChecksEnabled(false);
     QVERIFY(settings.setCppInterfacePattern(QStringLiteral("^Abstract.*$")));
     QVERIFY(!settings.setCppInterfacePattern(QStringLiteral("[")));
     QCOMPARE(settings.cppInterfacePattern(), QStringLiteral("^Abstract.*$"));
@@ -4468,6 +4472,16 @@ void CoreTests::applicationPreferencesPersist() {
                  .value(QStringLiteral("enabled"))
                  .toBool());
     QCOMPARE(restored.packageReassignmentPolicy(), QStringLiteral("allow"));
+    QVERIFY(!restored.automaticUpdateChecksEnabled());
+    const QDateTime initialCheck =
+        QDateTime(QDate(2026, 7, 1), QTime(12, 0), Qt::UTC);
+    restored.setAutomaticUpdateChecksEnabled(true);
+    QVERIFY(restored.automaticUpdateCheckDue(initialCheck));
+    restored.recordUpdateCheck(initialCheck);
+    QVERIFY(!restored.automaticUpdateCheckDue(initialCheck.addSecs(23 * 3600)));
+    QVERIFY(restored.automaticUpdateCheckDue(initialCheck.addSecs(24 * 3600)));
+    restored.setAutomaticUpdateChecksEnabled(false);
+    QVERIFY(!restored.automaticUpdateCheckDue(initialCheck.addDays(2)));
     QVariantMap expectedGestureKeys =
         ApplicationSettings::defaultRelationshipGestureKeys();
     expectedGestureKeys.insert(QStringLiteral("dependency"),
@@ -4505,7 +4519,52 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(restored.packageReassignmentPolicy(), QStringLiteral("ask"));
     QCOMPARE(restored.relationshipGestureKeys(),
              ApplicationSettings::defaultRelationshipGestureKeys());
+    QVERIFY(restored.automaticUpdateChecksEnabled());
   }
+}
+
+void CoreTests::updateManifestValidationAndVersionComparison() {
+  const QByteArray valid = R"json(
+    {
+      "schemaVersion": 1,
+      "channel": "stable",
+      "version": "1.2.3",
+      "repositoryUrl":
+        "https://uafua.github.io/yauml/updates/windows/x64/stable/",
+      "releaseNotesUrl":
+        "https://github.com/uafUa/yauml/releases/tag/v1.2.3"
+    }
+  )json";
+
+  const UpdateManifestOutcome parsed = parseUpdateManifest(valid);
+  QVERIFY2(parsed, qPrintable(parsed.error));
+  QCOMPARE(parsed.manifest->version, QStringLiteral("1.2.3"));
+  QCOMPARE(parsed.manifest->channel, QStringLiteral("stable"));
+
+  QVERIFY(isNewerApplicationVersion(QStringLiteral("1.2.3"),
+                                    QStringLiteral("1.2.2")));
+  QVERIFY(!isNewerApplicationVersion(QStringLiteral("1.2.3"),
+                                     QStringLiteral("1.2.3")));
+  QVERIFY(!isNewerApplicationVersion(QStringLiteral("1.2"),
+                                     QStringLiteral("1.1.9")));
+
+  QVERIFY(!parseUpdateManifest(QByteArrayLiteral("{")).manifest);
+  QVERIFY(!parseUpdateManifest(
+               QByteArray(valid).replace("\"schemaVersion\": 1",
+                                         "\"schemaVersion\": 2"))
+               .manifest);
+  QVERIFY(!parseUpdateManifest(
+               QByteArray(valid).replace("\"channel\": \"stable\"",
+                                         "\"channel\": \"preview\""))
+               .manifest);
+  QVERIFY(!parseUpdateManifest(
+               QByteArray(valid).replace("\"version\": \"1.2.3\"",
+                                         "\"version\": \"1.2\""))
+               .manifest);
+  QVERIFY(!parseUpdateManifest(
+               QByteArray(valid).replace("https://uafua.github.io",
+                                         "http://uafua.github.io"))
+               .manifest);
 }
 
 void CoreTests::applicationPreferencesMigrateLegacyCppPointerTypes() {

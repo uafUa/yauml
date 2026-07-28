@@ -34,8 +34,12 @@ constexpr auto kContextToolboxSettingsGroup = "preferences/contextToolboxes";
 constexpr auto kContextToolboxConfigurationKey = "configuration";
 constexpr auto kModelingSettingsGroup = "preferences/modeling";
 constexpr auto kPackageReassignmentPolicyKey = "packageReassignmentPolicy";
+constexpr auto kUpdateSettingsGroup = "preferences/updates";
+constexpr auto kAutomaticUpdateChecksEnabledKey = "automaticChecksEnabled";
+constexpr auto kLastUpdateCheckUtcKey = "lastCheckUtc";
 constexpr auto kHistorySettingsGroup = "history";
 constexpr auto kRecentProjectsKey = "recentProjects";
+constexpr qint64 kAutomaticUpdateCheckIntervalSeconds = 24 * 60 * 60;
 
 int validDistributionGap(int gap) {
   return std::clamp(gap, ApplicationSettings::kMinimumDistributionGap,
@@ -380,6 +384,16 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
           .toString());
   settings.endGroup();
 
+  settings.beginGroup(QLatin1String(kUpdateSettingsGroup));
+  m_automaticUpdateChecksEnabled =
+      settings
+          .value(QLatin1String(kAutomaticUpdateChecksEnabledKey),
+                 kDefaultAutomaticUpdateChecksEnabled)
+          .toBool();
+  m_lastUpdateCheckUtc =
+      settings.value(QLatin1String(kLastUpdateCheckUtcKey)).toDateTime().toUTC();
+  settings.endGroup();
+
   settings.beginGroup(QLatin1String(kHistorySettingsGroup));
   const QStringList storedPaths =
       settings.value(QLatin1String(kRecentProjectsKey)).toStringList();
@@ -588,6 +602,32 @@ void ApplicationSettings::setPackageReassignmentPolicy(const QString &policy) {
   emit packageReassignmentPolicyChanged();
 }
 
+bool ApplicationSettings::automaticUpdateChecksEnabled() const {
+  return m_automaticUpdateChecksEnabled;
+}
+
+void ApplicationSettings::setAutomaticUpdateChecksEnabled(bool enabled) {
+  if (m_automaticUpdateChecksEnabled == enabled)
+    return;
+  m_automaticUpdateChecksEnabled = enabled;
+  persistUpdatePreferences();
+  emit automaticUpdateChecksEnabledChanged();
+}
+
+bool ApplicationSettings::automaticUpdateCheckDue(const QDateTime &now) const {
+  if (!m_automaticUpdateChecksEnabled)
+    return false;
+  const QDateTime utcNow = now.toUTC();
+  return !m_lastUpdateCheckUtc.isValid() || m_lastUpdateCheckUtc > utcNow ||
+         m_lastUpdateCheckUtc.secsTo(utcNow) >=
+             kAutomaticUpdateCheckIntervalSeconds;
+}
+
+void ApplicationSettings::recordUpdateCheck(const QDateTime &timestamp) {
+  m_lastUpdateCheckUtc = timestamp.toUTC();
+  persistUpdatePreferences();
+}
+
 QVariantList ApplicationSettings::recentProjects() const {
   QVariantList entries;
   entries.reserve(m_recentProjectPaths.size());
@@ -644,6 +684,7 @@ void ApplicationSettings::resetDefaults() {
   setCppMemberTypeRules(defaultCppMemberTypeRules());
   setContextToolboxConfiguration(defaultContextToolboxConfiguration());
   setPackageReassignmentPolicy(defaultPackageReassignmentPolicy());
+  setAutomaticUpdateChecksEnabled(kDefaultAutomaticUpdateChecksEnabled);
 }
 
 void ApplicationSettings::persistDiagramPreferences() const {
@@ -700,6 +741,20 @@ void ApplicationSettings::persistModelingPreferences() const {
   settings.beginGroup(QLatin1String(kModelingSettingsGroup));
   settings.setValue(QLatin1String(kPackageReassignmentPolicyKey),
                     m_packageReassignmentPolicy);
+  settings.endGroup();
+  settings.sync();
+}
+
+void ApplicationSettings::persistUpdatePreferences() const {
+  QSettings settings;
+  settings.beginGroup(QLatin1String(kUpdateSettingsGroup));
+  settings.setValue(QLatin1String(kAutomaticUpdateChecksEnabledKey),
+                    m_automaticUpdateChecksEnabled);
+  if (m_lastUpdateCheckUtc.isValid())
+    settings.setValue(QLatin1String(kLastUpdateCheckUtcKey),
+                      m_lastUpdateCheckUtc);
+  else
+    settings.remove(QLatin1String(kLastUpdateCheckUtcKey));
   settings.endGroup();
   settings.sync();
 }
