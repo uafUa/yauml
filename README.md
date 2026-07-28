@@ -1,19 +1,19 @@
-# uuml
+# yauml
 
-**Understand an existing C++ codebase through UML diagrams.**
+**Yet Another UML — understand an existing C++ codebase through UML diagrams.**
 
 Large C++ projects are difficult to overview from files and declarations alone.
-`uuml` is for developers who find it easier to understand architecture
+`yauml` is for developers who find it easier to understand architecture
 visually: import the source tree, choose the parts that matter, and arrange
 them into UML views that explain the system.
 
 ![Example UML architecture overview](tests/fixtures/rendering/canonical-diagram-windows.png)
 
-## Why uuml
+## Why yauml
 
 The project was inspired by experience with many UML tools. The most recent
 influence was the [Gaphor UML editor](https://github.com/gaphor/gaphor), while
-uuml follows its own source-first direction for understanding existing C++
+yauml follows its own source-first direction for understanding existing C++
 systems.
 
 Its main advantages are:
@@ -22,12 +22,12 @@ Its main advantages are:
   the GPU-accelerated Qt Quick/QML scene graph and is designed to remain
   responsive with large architecture views.
 - **An open model format.** Projects are stored as readable JSON5 directories
-  that can be inspected, version-controlled, and processed without uuml.
+  that can be inspected, version-controlled, and processed without yauml.
 - **Robust synchronization with source files.** Repeated imports distinguish
   source changes from manual model edits, preserve user-owned information, and
   report real conflicts instead of silently overwriting work.
 
-## What uuml is for
+## What yauml is for
 
 - Exploring the architecture of an unfamiliar or long-lived C++ project.
 - Building focused views of subsystems instead of one overwhelming diagram.
@@ -51,7 +51,7 @@ style.
 6. Create more diagrams for different subsystems, layers, or questions.
 7. Use **Synchronize C++** later to review changes without losing manual work.
 
-If a compilation database is available, uuml uses it automatically. Otherwise,
+If a compilation database is available, yauml uses it automatically. Otherwise,
 it discovers common C++ source and header layouts directly from the selected
 folders.
 
@@ -92,7 +92,7 @@ folders.
 - Installed builds can check for stable updates and hand approved updates to
   the maintenance tool.
 
-## Get uuml
+## Get yauml
 
 Windows is the primary supported platform.
 
@@ -105,7 +105,7 @@ Development builds are also available from successful
 
 ## Current focus
 
-`uuml` currently concentrates on class and architecture diagrams for existing
+`yauml` currently concentrates on class and architecture diagrams for existing
 C++ systems. It is not intended to be a complete implementation of every UML
 diagram type or a code generator.
 
