@@ -467,7 +467,9 @@ history memory grow with total project size rather than the size of each edit.
   platform-specific baseline. The fixture covers packages, type compartments,
   stereotypes, relationship annotations, routing, decorations, and the grid;
   local and CI failures retain expected, actual, and amplified difference
-  images.
+  images. Comparison allows bounded per-pixel glyph antialiasing differences
+  between Windows/Qt releases while a stricter whole-image mean still rejects
+  geometry, routing, or palette movement.
 - Recovery fault coverage now includes missing and malformed backup files.
   The complete recovery set is read and parsed before any live project file is
   replaced, and failed recovery remains retryable. Deeper filesystem fault

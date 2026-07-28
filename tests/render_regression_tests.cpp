@@ -22,7 +22,10 @@ namespace {
 
 constexpr QSize kViewportSize(760, 500);
 constexpr int kSignificantChannelDelta = 18;
-constexpr double kMaximumChangedPixelRatio = 0.0125;
+// DirectWrite and Qt can rasterize the same glyph outlines differently across
+// Windows/Qt releases. The changed-pixel allowance absorbs that edge noise;
+// the stricter mean-channel limit still rejects geometry or palette movement.
+constexpr double kMaximumChangedPixelRatio = 0.0225;
 constexpr double kMaximumMeanChannelDelta = 0.85;
 
 QString baselineFileName() {
