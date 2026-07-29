@@ -282,6 +282,7 @@ $installerWorkspace = Join-Path $temporaryRoot "ifw"
 $verificationRoot = Join-Path $temporaryRoot "installed"
 $temporaryUpdateRepository = Join-Path $temporaryRoot "update-repository"
 $temporaryUpdateSite = Join-Path $temporaryRoot "update-site"
+$verificationUninstalled = $false
 
 try {
     New-Item -ItemType Directory -Force -Path $extractedDirectory |
@@ -453,6 +454,7 @@ try {
                 -InstallationRoot $verificationRoot).Count -ne 0) {
             throw "The uninstaller left its Windows registration behind."
         }
+        $verificationUninstalled = $true
     }
 
     $hash = (Get-FileHash -LiteralPath $installerPath -Algorithm SHA256).Hash
@@ -461,7 +463,12 @@ try {
 } finally {
     $verificationMaintenanceTool =
         Join-Path $verificationRoot "maintenancetool.exe"
-    if (Test-Path -LiteralPath $verificationMaintenanceTool -PathType Leaf) {
+    # IFW may leave maintenancetool.exe visible briefly while it finishes
+    # deleting itself after a successful purge. Invoking that transient file
+    # again returns exit code 1 and masks an otherwise successful package
+    # build, so this fallback is only for an interrupted verification.
+    if (-not $verificationUninstalled -and
+        (Test-Path -LiteralPath $verificationMaintenanceTool -PathType Leaf)) {
         & $verificationMaintenanceTool `
             --accept-messages `
             --confirm-command `
