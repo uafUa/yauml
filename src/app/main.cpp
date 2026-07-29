@@ -6,6 +6,7 @@
 #include "core/project_controller.h"
 #include "core/workspace_controller.h"
 #include "ui/diagram_canvas.h"
+#include "ui/diagram_image_exporter.h"
 #include "ui/ui_theme.h"
 
 #include <QFileInfo>
@@ -52,6 +53,8 @@ int main(int argc, char *argv[]) {
   migratePreviousProductSettings();
 
   qmlRegisterType<yauml::DiagramCanvas>("Yauml.Native", 1, 0, "DiagramCanvas");
+  qmlRegisterType<yauml::DiagramImageExporter>("Yauml.Native", 1, 0,
+                                               "DiagramImageExporter");
 
   yauml::ProjectController project;
   yauml::ApplicationSettings applicationSettings;

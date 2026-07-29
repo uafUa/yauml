@@ -144,6 +144,8 @@ public:
   QString diagramId() const;
   void setDiagramId(const QString &diagramId);
   qreal zoom() const;
+  QRectF diagramContentBounds(qreal margin = 0.0) const;
+  void configureExportViewport(const QRectF &contentBounds, qreal zoom);
   bool filterActive() const;
   int visibleNodeCount() const;
   int totalNodeCount() const;
@@ -418,6 +420,7 @@ private:
   QString m_diagramId;
   qreal m_zoom = 1.0;
   QPointF m_pan = {30, 30};
+  bool m_exportMode = false;
   QSet<QString> m_selectedNodes;
   // QSet provides cheap membership checks for rendering; this list preserves
   // click order so relationship source and target are deterministic.

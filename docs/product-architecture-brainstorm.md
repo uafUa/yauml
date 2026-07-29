@@ -624,9 +624,10 @@ deferred because it is less important than a reliable source-to-model workflow.
 - Schema migrations, crash recovery, and merge diagnostics.
 - Cross-platform packaging and release automation.
 
-### Phase 6: lower-priority diagram export
+### Phase 6: diagram export
 
-- PNG and PDF export through the shared diagram renderer.
+- Full-diagram PNG export through the shared Qt Quick renderer is implemented.
+- PDF export should reuse the same diagram-bounds and export orchestration.
 - SVG export only if later product demand justifies it.
 
 ## 19. Early architectural decisions to record as ADRs

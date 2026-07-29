@@ -1,5 +1,7 @@
 #include "ui/relationship_style.h"
 
+#include <cmath>
+
 namespace yauml::ui {
 
 RelationshipVisualStyle relationshipVisualStyle(RelationshipType type) {
@@ -28,6 +30,29 @@ RelationshipVisualStyle relationshipVisualStyle(RelationshipType type) {
             RelationshipDecoration::None};
   }
   return {};
+}
+
+RelationshipDashPattern relationshipDashPattern(qreal zoom) {
+  if (zoom <= 0.0)
+    return {};
+
+  // Store the pattern in scene units so the transformed result remains an
+  // 8-pixel dash followed by a 5-pixel gap at every zoom level.
+  return {8.0 / zoom, 5.0 / zoom};
+}
+
+qsizetype relationshipDashSegmentCount(qreal lineLength, qreal zoom) {
+  if (lineLength <= 0.0)
+    return 0;
+
+  const RelationshipDashPattern pattern = relationshipDashPattern(zoom);
+  const qreal period = pattern.dashLength + pattern.gapLength;
+  if (period <= 0.0)
+    return 0;
+
+  // Do not cap the count by stretching the pattern: connector length must
+  // never affect the visible dash or gap length.
+  return static_cast<qsizetype>(std::ceil(lineLength / period));
 }
 
 } // namespace yauml::ui

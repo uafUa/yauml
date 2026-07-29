@@ -2,6 +2,8 @@
 
 #include "core/project_data.h"
 
+#include <QtGlobal>
+
 namespace yauml::ui {
 
 enum class RelationshipLineStyle { Solid, Dashed };
@@ -22,6 +24,13 @@ struct RelationshipVisualStyle {
   bool operator==(const RelationshipVisualStyle &) const = default;
 };
 
+struct RelationshipDashPattern {
+  qreal dashLength = 0.0;
+  qreal gapLength = 0.0;
+};
+
 RelationshipVisualStyle relationshipVisualStyle(RelationshipType type);
+RelationshipDashPattern relationshipDashPattern(qreal zoom);
+qsizetype relationshipDashSegmentCount(qreal lineLength, qreal zoom);
 
 } // namespace yauml::ui

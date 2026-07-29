@@ -14,6 +14,7 @@ Menu {
         canvas !== null && canvas !== undefined
 
     signal filterRequested()
+    signal exportPngRequested()
 
     function createElement(type) {
         if (!canvasAvailable)
@@ -83,6 +84,12 @@ Menu {
                              "operations",
                              !root.canvas.diagramOperationsVisible)
         }
+    }
+    MenuSeparator {}
+    CatalogMenuItem {
+        catalogId: "diagram.exportPng"
+        text: qsTr("Export diagram as PNG…")
+        onTriggered: root.exportPngRequested()
     }
     MenuSeparator {}
     CatalogMenuItem {

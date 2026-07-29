@@ -119,6 +119,7 @@ private slots:
   void nestedContainerClippingAndOverflowAreDeterministic();
   void connectorRoutingGeometryIsOrthogonalAndTracksBends();
   void relationshipStylesUseUmlDecorations();
+  void relationshipDashPatternIsIndependentOfConnectorLength();
   void lassoSelectsAndMovesMultipleNodesAsOneCommand();
   void lassoModifiersAddAndToggleSelection();
   void connectorMultiSelectionUsesRectangleFirstLassoAndBulkRouting();
@@ -271,6 +272,25 @@ void DiagramCanvasTests::relationshipStylesUseUmlDecorations() {
       ui::relationshipVisualStyle(RelationshipType::Containment);
   QVERIFY(containment.source == RelationshipDecoration::CirclePlus);
   QVERIFY(containment.target == RelationshipDecoration::None);
+}
+
+void DiagramCanvasTests::
+    relationshipDashPatternIsIndependentOfConnectorLength() {
+  const ui::RelationshipDashPattern normal = ui::relationshipDashPattern(1.0);
+  QCOMPARE(normal.dashLength, 8.0);
+  QCOMPARE(normal.gapLength, 5.0);
+
+  const ui::RelationshipDashPattern zoomedOut =
+      ui::relationshipDashPattern(0.25);
+  QCOMPARE(zoomedOut.dashLength, 32.0);
+  QCOMPARE(zoomedOut.gapLength, 20.0);
+
+  // A ten-times-longer connector receives ten times as many fixed-size
+  // segments. The previous renderer capped this at 64 and stretched every
+  // dash, which made neighboring connectors visibly inconsistent.
+  QCOMPARE(ui::relationshipDashSegmentCount(130.0, 1.0), qsizetype(10));
+  QCOMPARE(ui::relationshipDashSegmentCount(1300.0, 1.0), qsizetype(100));
+  QCOMPARE(ui::relationshipDashSegmentCount(1300.0, 0.25), qsizetype(25));
 }
 
 void DiagramCanvasTests::snappingGeometryRulesAreDeterministic() {

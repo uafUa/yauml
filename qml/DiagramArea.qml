@@ -231,6 +231,10 @@ Rectangle {
                                     if (targetView)
                                         targetView.openDiagramFilterDialog()
                                 }
+                                onExportPngRequested: {
+                                    if (targetView)
+                                        targetView.openPngExportDialog()
+                                }
 
                                 MenuSeparator {}
                                 MenuItem {

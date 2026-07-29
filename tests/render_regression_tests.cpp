@@ -1,6 +1,7 @@
 #include "core/project_controller.h"
 #include "core/stereotype_catalog.h"
 #include "ui/diagram_canvas.h"
+#include "ui/diagram_image_exporter.h"
 #include "ui/ui_theme.h"
 
 #include <QCoreApplication>
@@ -12,6 +13,7 @@
 #include <QQuickWindow>
 #include <QScreen>
 #include <QSettings>
+#include <QTemporaryDir>
 #include <QtTest>
 
 #include <algorithm>
@@ -239,6 +241,7 @@ class RenderRegressionTests final : public QObject {
 private slots:
   void initTestCase();
   void canonicalDiagramMatchesBaseline();
+  void pngExporterCapturesCompleteDiagram();
 };
 
 void RenderRegressionTests::initTestCase() {
@@ -302,8 +305,7 @@ void RenderRegressionTests::canonicalDiagramMatchesBaseline() {
   QVERIFY2(!captured.isNull(), "Qt Quick did not produce a captured frame");
   QVERIFY(captured.width() >= kViewportSize.width());
   QVERIFY(captured.height() >= kViewportSize.height());
-  const QImage actual =
-      captured.copy(QRect(QPoint(0, 0), kViewportSize));
+  const QImage actual = captured.copy(QRect(QPoint(0, 0), kViewportSize));
 
   if (updateBaseline) {
     QVERIFY(QDir().mkpath(QFileInfo(baselinePath).absolutePath()));
@@ -346,6 +348,42 @@ void RenderRegressionTests::canonicalDiagramMatchesBaseline() {
             .arg(artifacts.path());
     QVERIFY2(matches, qPrintable(message));
   }
+}
+
+void RenderRegressionTests::pngExporterCapturesCompleteDiagram() {
+  ProjectController controller;
+  QVERIFY(populateCanonicalDiagram(controller));
+  const QString diagramId = controller.data().diagrams.first().id;
+
+  // Put one presentation well outside the ordinary regression viewport. The
+  // exported bitmap must use diagram bounds, not the active window dimensions.
+  const NodePresentation &distantNode =
+      controller.data().diagrams.first().nodes.last();
+  controller.updateNodeGeometry(diagramId, distantNode.id, 1100, 640, 180, 98);
+
+  QTemporaryDir outputDirectory;
+  QVERIFY(outputDirectory.isValid());
+  const QString outputPath =
+      outputDirectory.filePath(QStringLiteral("complete-diagram.png"));
+
+  DiagramImageExporter exporter;
+  exporter.setProject(&controller);
+  exporter.setDiagramId(diagramId);
+  QSignalSpy succeeded(&exporter, &DiagramImageExporter::exportSucceeded);
+  QSignalSpy failed(&exporter, &DiagramImageExporter::exportFailed);
+  exporter.exportPng(QUrl::fromLocalFile(outputPath));
+
+  QTRY_VERIFY_WITH_TIMEOUT(!succeeded.isEmpty() || !failed.isEmpty(), 20000);
+  QVERIFY2(failed.isEmpty(),
+           qPrintable(failed.isEmpty() ? QString{}
+                                       : failed.first().first().toString()));
+  QCOMPARE(succeeded.size(), 1);
+
+  const QImage exported(outputPath);
+  QVERIFY2(!exported.isNull(), "The PNG exporter did not write a valid image");
+  QVERIFY(exported.width() > 1200);
+  QVERIFY(exported.height() > 700);
+  QCOMPARE(exported.pixelColor(2, 2), ui::uiPalette().surface);
 }
 
 QTEST_MAIN(RenderRegressionTests)

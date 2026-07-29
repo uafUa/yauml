@@ -667,12 +667,12 @@ void appendDashedLine(QVector<QSGGeometry::ColoredPoint2D> &vertices,
   if (length <= 0.001)
     return;
   const QPointF unit = delta / length;
-  constexpr qreal kMaximumDashCount = 64.0;
-  const qreal period = std::max(13.0 / zoom, length / kMaximumDashCount);
-  const qreal dash = period * (8.0 / 13.0);
-  const qreal gap = period - dash;
-  for (qreal offset = 0.0; offset < length; offset += dash + gap) {
-    const qreal segmentEnd = std::min(offset + dash, length);
+  const ui::RelationshipDashPattern pattern = ui::relationshipDashPattern(zoom);
+  const qreal period = pattern.dashLength + pattern.gapLength;
+  const qsizetype segmentCount = ui::relationshipDashSegmentCount(length, zoom);
+  for (qsizetype index = 0; index < segmentCount; ++index) {
+    const qreal offset = static_cast<qreal>(index) * period;
+    const qreal segmentEnd = std::min(offset + pattern.dashLength, length);
     appendAntialiasedLine(vertices, start + unit * offset,
                           start + unit * segmentEnd, width, featherWidth,
                           color);
@@ -1178,30 +1178,32 @@ public:
     appendChildNode(m_transform);
   }
 
-  void updateBackground(const QSizeF &size, quint64 themeRevision) {
-    if (size == m_backgroundSize && themeRevision == m_backgroundThemeRevision)
+  void updateBackground(const QSizeF &size, const QColor &color,
+                        quint64 themeRevision) {
+    if (size == m_backgroundSize && color == m_backgroundColor &&
+        themeRevision == m_backgroundThemeRevision)
       return;
     m_backgroundSize = size;
+    m_backgroundColor = color;
     m_backgroundThemeRevision = themeRevision;
     if (m_background) {
       removeChildNode(m_background);
       delete m_background;
     }
     QVector<QSGGeometry::ColoredPoint2D> vertices;
-    appendRect(vertices, QRectF(QPointF(), size),
-               ui::uiPalette().windowBackground);
+    appendRect(vertices, QRectF(QPointF(), size), color);
     m_background = createColoredNode(vertices);
     insertChildNodeBefore(m_background, m_grid ? static_cast<QSGNode *>(m_grid)
                                                : m_transform);
   }
 
   void updateGrid(const QSizeF &viewportSize, const QPointF &pan, qreal zoom,
-                  qreal devicePixelRatio, qreal baseStep,
+                  qreal devicePixelRatio, qreal baseStep, bool visible,
                   quint64 themeRevision) {
     if (viewportSize == m_gridViewportSize && pan == m_gridPan &&
         qFuzzyCompare(zoom, m_gridZoom) &&
         qFuzzyCompare(devicePixelRatio, m_gridDevicePixelRatio) &&
-        qFuzzyCompare(baseStep, m_gridBaseStep) &&
+        qFuzzyCompare(baseStep, m_gridBaseStep) && visible == m_gridVisible &&
         themeRevision == m_gridThemeRevision)
       return;
     m_gridViewportSize = viewportSize;
@@ -1209,13 +1211,19 @@ public:
     m_gridZoom = zoom;
     m_gridDevicePixelRatio = devicePixelRatio;
     m_gridBaseStep = baseStep;
+    m_gridVisible = visible;
     m_gridThemeRevision = themeRevision;
     if (m_grid) {
       removeChildNode(m_grid);
       delete m_grid;
     }
-    m_grid =
-        buildGridGeometry(viewportSize, pan, zoom, devicePixelRatio, baseStep);
+    if (visible) {
+      m_grid = buildGridGeometry(viewportSize, pan, zoom, devicePixelRatio,
+                                 baseStep);
+    } else {
+      const QVector<QSGGeometry::ColoredPoint2D> vertices;
+      m_grid = createColoredNode(vertices);
+    }
     insertChildNodeBefore(m_grid, m_transform);
   }
 
@@ -1260,6 +1268,7 @@ public:
 
 private:
   QSizeF m_backgroundSize;
+  QColor m_backgroundColor;
   quint64 m_backgroundThemeRevision = 0;
   QSGGeometryNode *m_background = nullptr;
   QSizeF m_gridViewportSize;
@@ -1267,6 +1276,7 @@ private:
   qreal m_gridZoom = 0.0;
   qreal m_gridDevicePixelRatio = 0.0;
   qreal m_gridBaseStep = 0.0;
+  bool m_gridVisible = true;
   quint64 m_gridThemeRevision = 0;
   QSGGeometryNode *m_grid = nullptr;
   QSGTransformNode *m_transform = nullptr;
@@ -1734,6 +1744,72 @@ void DiagramCanvas::setDiagramId(const QString &diagramId) {
 }
 
 qreal DiagramCanvas::zoom() const { return m_zoom; }
+
+QRectF DiagramCanvas::diagramContentBounds(qreal margin) const {
+  const auto *currentDiagram = diagram();
+  if (!currentDiagram || !m_project)
+    return {};
+
+  QRectF content;
+  bool hasContent = false;
+  const auto includeRect = [&](const QRectF &rect) {
+    if (!rect.isValid() || rect.isEmpty())
+      return;
+    content = hasContent ? content.united(rect) : rect;
+    hasContent = true;
+  };
+  const auto includePoint = [&](const QPointF &point) {
+    includeRect({point - QPointF(0.5, 0.5), QSizeF(1.0, 1.0)});
+  };
+
+  for (const auto &container : currentDiagram->containers)
+    includeRect(visibleContainerGeometry(container));
+  for (const auto &node : currentDiagram->nodes)
+    if (nodePassesFilter(node))
+      includeRect(visibleNodeGeometry(node));
+
+  const QFont annotationFont = QGuiApplication::font();
+  for (const auto &connector : currentDiagram->connectors) {
+    if (!connectorPassesFilter(connector))
+      continue;
+    const ui::ConnectorRoute route = connectorRoute(connector);
+    for (const QPointF &point : route.points)
+      includePoint(point);
+
+    const auto *relationship =
+        findRelationship(m_project->data(), connector.relationshipId);
+    if (!relationship)
+      continue;
+    const ConnectorAnnotationLayout layout = connectorAnnotationLayout(
+        route.points, relationship->name,
+        stereotype_catalog::displayText(m_project->data(),
+                                        relationship->stereotypeIds),
+        relationship->sourceEnd, relationship->targetEnd,
+        connector.annotationPlacements, annotationFont);
+    for (const QRectF &rect : {layout.name, layout.stereotype,
+                               layout.sourceRole, layout.sourceMultiplicity,
+                               layout.targetRole, layout.targetMultiplicity})
+      includeRect(rect);
+  }
+
+  if (!hasContent)
+    return {};
+  const qreal safeMargin = std::max(0.0, margin);
+  return content.adjusted(-safeMargin, -safeMargin, safeMargin, safeMargin);
+}
+
+void DiagramCanvas::configureExportViewport(const QRectF &contentBounds,
+                                            qreal zoom) {
+  if (!contentBounds.isValid() || contentBounds.isEmpty() || zoom <= 0.0)
+    return;
+  m_exportMode = true;
+  m_zoom = zoom;
+  m_pan = -contentBounds.topLeft() * zoom;
+  m_sceneDirty = true;
+  m_textDirty = true;
+  update();
+}
+
 bool DiagramCanvas::filterActive() const {
   const auto *currentDiagram = diagram();
   return currentDiagram && diagram_filter::isActive(currentDiagram->filter);
@@ -3069,15 +3145,19 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
   if (!root)
     root = new DiagramSceneRoot;
   const bool themeChanged = root->renderedThemeRevision != m_themeRevision;
-  root->updateBackground({width(), height()}, m_themeRevision);
+  const auto &palette = ui::uiPalette();
+  root->updateBackground({width(), height()},
+                         m_exportMode ? palette.surface
+                                      : palette.windowBackground,
+                         m_themeRevision);
   auto *quickWindow = window();
   const qreal devicePixelRatio =
       quickWindow ? quickWindow->devicePixelRatio() : 1.0;
   root->updateGrid({width(), height()}, m_pan, m_zoom, devicePixelRatio,
-                   m_gridSpacing, m_themeRevision);
+                   m_gridSpacing, !m_exportMode, m_themeRevision);
   root->updateTransform(m_pan, m_zoom);
 
-  const int detail = detailLevel(m_zoom);
+  const int detail = m_exportMode ? 2 : detailLevel(m_zoom);
   const qreal rasterScale = textRasterScale(m_zoom, devicePixelRatio);
   const QRectF visibleScene =
       QRectF(toScene({0, 0}), toScene({width(), height()})).normalized();
@@ -4493,28 +4573,9 @@ void DiagramCanvas::synchronizeProjectSelection() {
 }
 
 void DiagramCanvas::fitToContent() {
-  const auto *d = diagram();
-  if (!d || (d->nodes.isEmpty() && d->containers.isEmpty()) || width() <= 0 ||
-      height() <= 0)
+  const QRectF content = diagramContentBounds(40.0);
+  if (content.isEmpty() || width() <= 0 || height() <= 0)
     return;
-  QRectF content;
-  for (const auto &container : d->containers)
-    content = content.isNull() ? container.geometry
-                               : content.united(container.geometry);
-  for (const auto &node : d->nodes)
-    if (nodePassesFilter(node))
-      content =
-          content.isNull() ? node.geometry : content.united(node.geometry);
-  for (const auto &connector : d->connectors) {
-    if (!connectorPassesFilter(connector))
-      continue;
-    for (const auto &bendPoint : connector.bendPoints) {
-      const QRectF bendBounds(bendPoint.position - QPointF(1.0, 1.0),
-                              QSizeF(2.0, 2.0));
-      content = content.united(bendBounds);
-    }
-  }
-  content.adjust(-40, -40, 40, 40);
   m_zoom = std::clamp(
       qMin(width() / content.width(), height() / content.height()), 0.2, 2.0);
   m_pan = QPointF((width() - content.width() * m_zoom) / 2.0,

@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(yauml VERSION 0.3.1 LANGUAGES CXX)
+project(yauml VERSION 0.3.2 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -141,6 +141,8 @@ add_library(yauml_canvas STATIC
     src/ui/diagram_clipping.h
     src/ui/diagram_canvas.cpp
     src/ui/diagram_canvas.h
+    src/ui/diagram_image_exporter.cpp
+    src/ui/diagram_image_exporter.h
 )
 target_include_directories(yauml_canvas PUBLIC src)
 target_link_libraries(yauml_canvas PUBLIC

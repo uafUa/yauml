@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Dialogs
 import QtQuick.Layouts
 import Yauml.Native
 
@@ -304,6 +305,10 @@ Item {
         diagramFilterDialog.openForCanvas(canvas)
     }
 
+    function openPngExportDialog() {
+        pngExportDialog.open()
+    }
+
     function openSelectedPortSnapPointsDialog() {
         horizontalSnapPoints.value = canvas.selectedHorizontalPortSnapPoints
         verticalSnapPoints.value = canvas.selectedVerticalPortSnapPoints
@@ -549,6 +554,21 @@ Item {
         objectName: "diagramFilterDialog"
     }
 
+    DiagramImageExporter {
+        id: diagramImageExporter
+        project: projectController
+        diagramId: root.diagramId
+    }
+
+    FileDialog {
+        id: pngExportDialog
+        title: qsTr("Export diagram as PNG")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("PNG images (*.png)")]
+        defaultSuffix: "png"
+        onAccepted: diagramImageExporter.exportPng(selectedFile)
+    }
+
     StereotypeDropdown {
         id: diagramStereotypeDropdown
         showField: false
@@ -597,6 +617,7 @@ Item {
         id: canvasMenu
         canvas: root.diagramCanvas
         onFilterRequested: root.openDiagramFilterDialog()
+        onExportPngRequested: root.openPngExportDialog()
     }
 
     Menu {

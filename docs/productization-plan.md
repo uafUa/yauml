@@ -579,10 +579,16 @@ history memory grow with total project size rather than the size of each edit.
   a terminal window while preserving script-friendly validation and C++ import;
   packaging verifies both PE subsystem values to prevent regression.
 
-## Phase 6: diagram export — lower priority
+## Phase 6: diagram export — in progress
 
-- Add PNG and PDF export through the shared diagram renderer after
-  rendered-output regression tests exist.
+- Full-diagram PNG export is implemented through an off-screen instance of the
+  production Qt Quick canvas. It exports the complete filtered diagram rather
+  than the visible viewport, preserves styles, text, connector annotations, and
+  container clipping, and omits editor-only grid and interaction overlays.
+- Export dimensions are bounded to avoid accidental excessive allocations;
+  failures and successful destinations are reported through the application
+  diagnostics. A rendered-output regression covers content beyond the viewport.
+- Add PDF export through the same export orchestration and diagram renderer.
 - Add SVG export only when there is concrete product demand; it remains outside
   the critical productization path.
 

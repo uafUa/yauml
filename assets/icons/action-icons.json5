@@ -253,6 +253,14 @@
       },
     },
 
+    diagram: {
+      exportPng: {
+        label: "Export diagram as PNG",
+        contexts: ["diagram context menu", "diagram tab menu"],
+        svg: "",
+      },
+    },
+
     arrange: {
       fitDiagram: {
         label: "Fit diagram",
