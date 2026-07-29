@@ -39,6 +39,9 @@ constexpr auto kAutomaticUpdateChecksEnabledKey = "automaticChecksEnabled";
 constexpr auto kLastUpdateCheckUtcKey = "lastCheckUtc";
 constexpr auto kHistorySettingsGroup = "history";
 constexpr auto kRecentProjectsKey = "recentProjects";
+constexpr auto kProjectTreeSettingsGroup = "preferences/projectTree";
+constexpr auto kProjectTreeColumnsKey = "columns";
+constexpr auto kProjectTreeColumnWidthsKey = "columnWidths";
 constexpr auto kLegacyScopeMigratedKey =
     "migration/previousProductSettingsImported";
 constexpr qint64 kAutomaticUpdateCheckIntervalSeconds = 24 * 60 * 60;
@@ -112,6 +115,56 @@ QString normalizedDiagramItemSizingMode(const QString &candidate) {
   return candidate.trimmed().toLower() == QStringLiteral("fixed")
              ? QStringLiteral("fixed")
              : QStringLiteral("content");
+}
+
+QStringList normalizedProjectTreeColumns(const QStringList &candidate) {
+  static const QStringList allowed{
+      QStringLiteral("name"), QStringLiteral("sourceDirectory"),
+      QStringLiteral("sourceFile"),
+      QStringLiteral("stereotypes"), QStringLiteral("type"),
+      QStringLiteral("qualifiedName")};
+  QStringList normalized{QStringLiteral("name")};
+  for (const QString &column : candidate) {
+    // `sourcePath` was the combined directory/file column used by the first
+    // configurable-column build. Expand it once while reading or assigning
+    // that legacy preference.
+    if (column == QStringLiteral("sourcePath")) {
+      if (!normalized.contains(QStringLiteral("sourceDirectory")))
+        normalized.append(QStringLiteral("sourceDirectory"));
+      if (!normalized.contains(QStringLiteral("sourceFile")))
+        normalized.append(QStringLiteral("sourceFile"));
+    } else if (column != QStringLiteral("name") && allowed.contains(column) &&
+               !normalized.contains(column))
+      normalized.append(column);
+  }
+  return normalized;
+}
+
+QVariantMap makeDefaultProjectTreeColumnWidths() {
+  return {{QStringLiteral("name"), 210},
+          {QStringLiteral("sourceDirectory"), 200},
+          {QStringLiteral("sourceFile"), 160},
+          {QStringLiteral("stereotypes"), 160},
+          {QStringLiteral("type"), 120},
+          {QStringLiteral("qualifiedName"), 240}};
+}
+
+QVariantMap normalizedProjectTreeColumnWidths(const QVariantMap &candidate) {
+  constexpr int kMinimumColumnWidth = 48;
+  constexpr int kMaximumColumnWidth = 1600;
+  QVariantMap normalized = makeDefaultProjectTreeColumnWidths();
+  for (auto iterator = candidate.cbegin(); iterator != candidate.cend();
+       ++iterator) {
+    if (!normalized.contains(iterator.key()))
+      continue;
+    bool ok = false;
+    const int width = iterator.value().toInt(&ok);
+    if (ok)
+      normalized.insert(
+          iterator.key(),
+          std::clamp(width, kMinimumColumnWidth, kMaximumColumnWidth));
+  }
+  return normalized;
 }
 
 QStringList normalizedCppTypeNames(const QStringList &candidates) {
@@ -413,6 +466,16 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
     if (m_recentProjectPaths.size() == kMaximumRecentProjects)
       break;
   }
+
+  settings.beginGroup(QLatin1String(kProjectTreeSettingsGroup));
+  m_projectTreeColumns = normalizedProjectTreeColumns(
+      settings
+          .value(QLatin1String(kProjectTreeColumnsKey),
+                 defaultProjectTreeColumns())
+          .toStringList());
+  m_projectTreeColumnWidths = normalizedProjectTreeColumnWidths(
+      settings.value(QLatin1String(kProjectTreeColumnWidthsKey)).toMap());
+  settings.endGroup();
 }
 
 void ApplicationSettings::migrateLegacyScope(
@@ -453,6 +516,16 @@ QVariantMap ApplicationSettings::defaultContextToolboxConfiguration() {
 
 QString ApplicationSettings::defaultPackageReassignmentPolicy() {
   return QStringLiteral("ask");
+}
+
+QStringList ApplicationSettings::defaultProjectTreeColumns() {
+  return {QStringLiteral("name"), QStringLiteral("sourceDirectory"),
+          QStringLiteral("sourceFile"),
+          QStringLiteral("stereotypes")};
+}
+
+QVariantMap ApplicationSettings::defaultProjectTreeColumnWidths() {
+  return makeDefaultProjectTreeColumnWidths();
 }
 
 void ApplicationSettings::setDefaultDistributionGap(int gap) {
@@ -703,6 +776,35 @@ void ApplicationSettings::resetDefaults() {
   setContextToolboxConfiguration(defaultContextToolboxConfiguration());
   setPackageReassignmentPolicy(defaultPackageReassignmentPolicy());
   setAutomaticUpdateChecksEnabled(kDefaultAutomaticUpdateChecksEnabled);
+  setProjectTreeColumns(defaultProjectTreeColumns());
+  setProjectTreeColumnWidths(defaultProjectTreeColumnWidths());
+}
+
+QStringList ApplicationSettings::projectTreeColumns() const {
+  return m_projectTreeColumns;
+}
+
+void ApplicationSettings::setProjectTreeColumns(const QStringList &columns) {
+  const QStringList normalized = normalizedProjectTreeColumns(columns);
+  if (m_projectTreeColumns == normalized)
+    return;
+  m_projectTreeColumns = normalized;
+  persistProjectTreePreferences();
+  emit projectTreeColumnsChanged();
+}
+
+QVariantMap ApplicationSettings::projectTreeColumnWidths() const {
+  return m_projectTreeColumnWidths;
+}
+
+void ApplicationSettings::setProjectTreeColumnWidths(
+    const QVariantMap &widths) {
+  const QVariantMap normalized = normalizedProjectTreeColumnWidths(widths);
+  if (m_projectTreeColumnWidths == normalized)
+    return;
+  m_projectTreeColumnWidths = normalized;
+  persistProjectTreePreferences();
+  emit projectTreeColumnWidthsChanged();
 }
 
 void ApplicationSettings::persistDiagramPreferences() const {
@@ -784,6 +886,17 @@ void ApplicationSettings::persistRecentProjects() const {
     settings.remove(QLatin1String(kRecentProjectsKey));
   else
     settings.setValue(QLatin1String(kRecentProjectsKey), m_recentProjectPaths);
+  settings.endGroup();
+  settings.sync();
+}
+
+void ApplicationSettings::persistProjectTreePreferences() const {
+  QSettings settings;
+  settings.beginGroup(QLatin1String(kProjectTreeSettingsGroup));
+  settings.setValue(QLatin1String(kProjectTreeColumnsKey),
+                    m_projectTreeColumns);
+  settings.setValue(QLatin1String(kProjectTreeColumnWidthsKey),
+                    m_projectTreeColumnWidths);
   settings.endGroup();
   settings.sync();
 }

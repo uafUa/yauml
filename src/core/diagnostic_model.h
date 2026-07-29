@@ -46,6 +46,9 @@ public:
 
 signals:
   void countChanged();
+  // Warnings and errors require user attention and should surface the log.
+  // Information messages remain passive to avoid interrupting normal work.
+  void attentionAdded();
   void errorAdded();
 
 private:

@@ -40,12 +40,16 @@ class ApplicationSettings final : public QObject {
   Q_PROPERTY(
       QString packageReassignmentPolicy READ packageReassignmentPolicy WRITE
           setPackageReassignmentPolicy NOTIFY packageReassignmentPolicyChanged)
-  Q_PROPERTY(bool automaticUpdateChecksEnabled READ
-                 automaticUpdateChecksEnabled WRITE
-                     setAutomaticUpdateChecksEnabled NOTIFY
-                         automaticUpdateChecksEnabledChanged)
+  Q_PROPERTY(bool automaticUpdateChecksEnabled READ automaticUpdateChecksEnabled
+                 WRITE setAutomaticUpdateChecksEnabled NOTIFY
+                     automaticUpdateChecksEnabledChanged)
   Q_PROPERTY(QVariantList recentProjects READ recentProjects NOTIFY
                  recentProjectsChanged)
+  Q_PROPERTY(QStringList projectTreeColumns READ projectTreeColumns WRITE
+                 setProjectTreeColumns NOTIFY projectTreeColumnsChanged)
+  Q_PROPERTY(QVariantMap projectTreeColumnWidths READ projectTreeColumnWidths
+                 WRITE setProjectTreeColumnWidths NOTIFY
+                     projectTreeColumnWidthsChanged)
 
 public:
   static constexpr int kDefaultDistributionGap = 10;
@@ -67,6 +71,8 @@ public:
   static QVariantList defaultCppMemberTypeRules();
   static QVariantMap defaultContextToolboxConfiguration();
   static QString defaultPackageReassignmentPolicy();
+  static QStringList defaultProjectTreeColumns();
+  static QVariantMap defaultProjectTreeColumnWidths();
   // Copies settings from a previous product identity exactly once. Existing
   // values in the current scope always win, and the legacy scope is retained
   // so downgrading does not lose preferences.
@@ -109,6 +115,10 @@ public:
   void recordUpdateCheck(
       const QDateTime &timestamp = QDateTime::currentDateTimeUtc());
   QVariantList recentProjects() const;
+  QStringList projectTreeColumns() const;
+  void setProjectTreeColumns(const QStringList &columns);
+  QVariantMap projectTreeColumnWidths() const;
+  void setProjectTreeColumnWidths(const QVariantMap &widths);
   Q_INVOKABLE void addRecentProject(const QString &projectPath);
   Q_INVOKABLE void clearRecentProjects();
   Q_INVOKABLE void resetDefaults();
@@ -127,6 +137,8 @@ signals:
   void packageReassignmentPolicyChanged();
   void automaticUpdateChecksEnabledChanged();
   void recentProjectsChanged();
+  void projectTreeColumnsChanged();
+  void projectTreeColumnWidthsChanged();
 
 private:
   void persistDiagramPreferences() const;
@@ -136,6 +148,7 @@ private:
   void persistModelingPreferences() const;
   void persistUpdatePreferences() const;
   void persistRecentProjects() const;
+  void persistProjectTreePreferences() const;
 
   int m_defaultDistributionGap = kDefaultDistributionGap;
   bool m_snapToGridEnabled = kDefaultSnapToGridEnabled;
@@ -148,10 +161,11 @@ private:
   QList<CppMemberTypeRule> m_cppMemberTypeRules;
   QVariantMap m_contextToolboxConfiguration;
   QString m_packageReassignmentPolicy = QStringLiteral("ask");
-  bool m_automaticUpdateChecksEnabled =
-      kDefaultAutomaticUpdateChecksEnabled;
+  bool m_automaticUpdateChecksEnabled = kDefaultAutomaticUpdateChecksEnabled;
   QDateTime m_lastUpdateCheckUtc;
   QStringList m_recentProjectPaths;
+  QStringList m_projectTreeColumns;
+  QVariantMap m_projectTreeColumnWidths;
 };
 
 } // namespace yauml

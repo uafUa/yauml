@@ -206,6 +206,13 @@ struct ConnectorAnchorOffsetChange {
   qreal after = 0.5;
 };
 
+struct ConnectorEndpointAnchorChange {
+  QString connectorId;
+  bool source = false;
+  ConnectorAnchor before;
+  ConnectorAnchor after;
+};
+
 struct NodePortSnapPointChange {
   QString nodeId;
   int beforeHorizontal = 1;
@@ -601,6 +608,26 @@ private:
   bool m_source;
   ConnectorAnchor m_before;
   ConnectorAnchor m_after;
+};
+
+// Bulk connector-end operations can grow a node's snap-point grid and move
+// many endpoints. Keeping both deltas in one command makes each gesture atomic
+// while preserving unrelated connector geometry exactly.
+class UpdateConnectorEndsCommand final : public ProjectCommand {
+public:
+  UpdateConnectorEndsCommand(ProjectController *controller, QString diagramId,
+                             QList<NodePortSnapPointChange> portChanges,
+                             QList<ConnectorEndpointAnchorChange> anchorChanges,
+                             QString description);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void applyAnchorChanges(ProjectData &project, bool forward);
+
+  QString m_diagramId;
+  QList<NodePortSnapPointChange> m_portChanges;
+  QList<ConnectorEndpointAnchorChange> m_anchorChanges;
 };
 
 class SetConnectorsRoutingCommand final : public ProjectCommand {

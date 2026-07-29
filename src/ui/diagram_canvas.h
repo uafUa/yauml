@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/project_controller.h"
+#include "core/workspace_controller.h"
 #include "ui/connector_routing.h"
 
 #include <QHash>
@@ -23,6 +24,8 @@ class DiagramCanvas : public QQuickItem {
   Q_OBJECT
   Q_PROPERTY(ProjectController *project READ project WRITE setProject NOTIFY
                  projectChanged)
+  Q_PROPERTY(WorkspaceController *workspace READ workspace WRITE setWorkspace
+                 NOTIFY workspaceChanged)
   Q_PROPERTY(QString diagramId READ diagramId WRITE setDiagramId NOTIFY
                  diagramIdChanged)
   Q_PROPERTY(qreal zoom READ zoom NOTIFY viewportChanged)
@@ -36,6 +39,10 @@ class DiagramCanvas : public QQuickItem {
                  canvasSelectionChanged)
   Q_PROPERTY(int selectedConnectorCount READ selectedConnectorCount NOTIFY
                  canvasSelectionChanged)
+  Q_PROPERTY(bool canReattachSelectedConnectorEnds READ
+                 canReattachSelectedConnectorEnds NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(bool canShiftSelectedConnectorEnds READ
+                 canShiftSelectedConnectorEnds NOTIFY canvasSelectionChanged)
   Q_PROPERTY(bool connectorSelected READ connectorSelected NOTIFY
                  canvasSelectionChanged)
   Q_PROPERTY(bool containerSelected READ containerSelected NOTIFY
@@ -132,6 +139,8 @@ public:
 
   ProjectController *project() const;
   void setProject(ProjectController *project);
+  WorkspaceController *workspace() const;
+  void setWorkspace(WorkspaceController *workspace);
   QString diagramId() const;
   void setDiagramId(const QString &diagramId);
   qreal zoom() const;
@@ -141,6 +150,8 @@ public:
   int selectedNodeCount() const;
   int selectedContainerCount() const;
   int selectedConnectorCount() const;
+  bool canReattachSelectedConnectorEnds() const;
+  bool canShiftSelectedConnectorEnds() const;
   bool connectorSelected() const;
   bool containerSelected() const;
   bool bendPointSelected() const;
@@ -211,6 +222,8 @@ public:
   editSelectedConnectorAnnotation(const QString &annotationField);
   Q_INVOKABLE void editSelectedPresentationName();
   Q_INVOKABLE void setSelectedConnectorRouting(const QString &routing);
+  Q_INVOKABLE void reattachSelectedConnectorEnds(const QString &side);
+  Q_INVOKABLE void shiftSelectedConnectorEnds(const QString &direction);
   Q_INVOKABLE void setSelectedPortSnapPoints(int horizontalPointCount,
                                              int verticalPointCount);
   Q_INVOKABLE void setDiagramCompartmentVisible(const QString &compartment,
@@ -241,6 +254,7 @@ public:
 
 signals:
   void projectChanged();
+  void workspaceChanged();
   void diagramIdChanged();
   void viewportChanged();
   void diagramFilterChanged();
@@ -389,6 +403,7 @@ private:
   void resetLassoState();
   void selectAllInContext();
   void synchronizeProjectSelection();
+  QStringList selectedConnectorIdsInDiagramOrder() const;
   QString selectedCompartmentVisibility(bool attributes) const;
   void captureSelectedGeometry();
   void clearContainerSelection();
@@ -399,6 +414,7 @@ private:
   void selectConnector(const QString &connectorId, bool toggle);
 
   ProjectController *m_project = nullptr;
+  WorkspaceController *m_workspace = nullptr;
   QString m_diagramId;
   qreal m_zoom = 1.0;
   QPointF m_pan = {30, 30};

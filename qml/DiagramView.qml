@@ -324,6 +324,7 @@ Item {
         id: canvas
         anchors.fill: parent
         project: projectController
+        workspace: workspaceController
         diagramId: root.diagramId
         defaultDistributionGap: applicationSettings.defaultDistributionGap
         snapToGridEnabled: applicationSettings.snapToGridEnabled
@@ -848,6 +849,44 @@ Item {
                 checkable: true
                 checked: canvas.selectedConnectorRouting === "orthogonal"
                 onTriggered: canvas.setSelectedConnectorRouting("orthogonal")
+            }
+        }
+        Menu {
+            title: qsTr("Reattach common ends")
+            enabled: canvas.canReattachSelectedConnectorEnds
+            CatalogMenuItem {
+                catalogId: "connector.reattachLeft"
+                text: qsTr("Left")
+                onTriggered: canvas.reattachSelectedConnectorEnds("left")
+            }
+            CatalogMenuItem {
+                catalogId: "connector.reattachRight"
+                text: qsTr("Right")
+                onTriggered: canvas.reattachSelectedConnectorEnds("right")
+            }
+            CatalogMenuItem {
+                catalogId: "connector.reattachTop"
+                text: qsTr("Top")
+                onTriggered: canvas.reattachSelectedConnectorEnds("top")
+            }
+            CatalogMenuItem {
+                catalogId: "connector.reattachBottom"
+                text: qsTr("Bottom")
+                onTriggered: canvas.reattachSelectedConnectorEnds("bottom")
+            }
+        }
+        Menu {
+            title: qsTr("Shift common ends")
+            enabled: canvas.canShiftSelectedConnectorEnds
+            CatalogMenuItem {
+                catalogId: "connector.shiftLeft"
+                text: qsTr("Left / up")
+                onTriggered: canvas.shiftSelectedConnectorEnds("left")
+            }
+            CatalogMenuItem {
+                catalogId: "connector.shiftRight"
+                text: qsTr("Right / down")
+                onTriggered: canvas.shiftSelectedConnectorEnds("right")
             }
         }
         MenuItem {

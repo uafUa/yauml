@@ -3,7 +3,9 @@
 #include "core/project_controller.h"
 #include "ui/ui_theme.h"
 
+#include <QDir>
 #include <QDrag>
+#include <QFileInfo>
 #include <QGuiApplication>
 #include <QItemSelection>
 #include <QJsonArray>
@@ -20,7 +22,72 @@ namespace yauml {
 namespace {
 constexpr auto kElementsMimeType = "application/x-yauml-element-ids";
 constexpr auto kBrowserItemsMimeType = "application/x-yauml-browser-items";
-constexpr auto kDiagramSubjectsMimeType = "application/x-yauml-diagram-subjects";
+constexpr auto kDiagramSubjectsMimeType =
+    "application/x-yauml-diagram-subjects";
+
+QString comparablePath(const QString &path) {
+  QString result = QDir::fromNativeSeparators(
+      QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+#ifdef Q_OS_WIN
+  result = result.toLower();
+#endif
+  return result;
+}
+
+bool isWithin(const QString &path, const QString &directory) {
+  const QString candidate = comparablePath(path);
+  QString root = comparablePath(directory);
+  if (!root.endsWith(u'/'))
+    root += u'/';
+  return candidate == root.chopped(1) || candidate.startsWith(root);
+}
+
+QString projectRelativeSourcePath(const ProjectData &project,
+                                  const QString &sourcePath) {
+  if (sourcePath.isEmpty())
+    return {};
+  QString bestRoot;
+  for (const QString &root : project.cppImport.sourceRoots) {
+    if (isWithin(sourcePath, root) && root.size() > bestRoot.size())
+      bestRoot = root;
+  }
+  if (bestRoot.isEmpty())
+    return QDir::fromNativeSeparators(sourcePath);
+  return QDir::fromNativeSeparators(
+      QDir(bestRoot).relativeFilePath(sourcePath));
+}
+
+QString stereotypeDisplay(const QStringList &ids,
+                          const QHash<QString, QString> &stereotypeNamesById) {
+  QStringList names;
+  names.reserve(ids.size());
+  for (const QString &id : ids) {
+    const QString name = stereotypeNamesById.value(id, id);
+    if (!name.isEmpty())
+      names.append(QStringLiteral("«%1»").arg(name));
+  }
+  return names.join(QStringLiteral(", "));
+}
+
+QStringList normalizedTreeColumns(const QStringList &candidate) {
+  static const QStringList allowed{
+      QStringLiteral("name"), QStringLiteral("sourceDirectory"),
+      QStringLiteral("sourceFile"),
+      QStringLiteral("stereotypes"), QStringLiteral("type"),
+      QStringLiteral("qualifiedName")};
+  QStringList normalized{QStringLiteral("name")};
+  for (const QString &column : candidate) {
+    if (column == QStringLiteral("sourcePath")) {
+      if (!normalized.contains(QStringLiteral("sourceDirectory")))
+        normalized.append(QStringLiteral("sourceDirectory"));
+      if (!normalized.contains(QStringLiteral("sourceFile")))
+        normalized.append(QStringLiteral("sourceFile"));
+    } else if (column != QStringLiteral("name") && allowed.contains(column) &&
+               !normalized.contains(column))
+      normalized.append(column);
+  }
+  return normalized;
+}
 } // namespace
 
 struct ProjectTreeModel::TreeNode {
@@ -29,6 +96,10 @@ struct ProjectTreeModel::TreeNode {
   QString kind;
   QString objectType;
   QString qualifiedPath;
+  QString sourcePath;
+  QString sourceDirectory;
+  QString sourceFile;
+  QString stereotypes;
   bool nested = false;
   TreeNode *parent = nullptr;
   std::vector<TreeNode *> children;
@@ -96,6 +167,9 @@ void ProjectTreeModel::rebuildTree() {
   attach(m_invisibleRoot, m_diagramRoot);
 
   QHash<QString, TreeNode *> elementsByQualifiedName;
+  QHash<QString, QString> stereotypeNamesById;
+  for (const auto &definition : m_controller->data().stereotypeDefinitions)
+    stereotypeNamesById.insert(definition.id, definition.name);
   std::vector<TreeNode *> elementOrder;
   for (const auto &element : m_controller->data().elements) {
     TreeNode *node = createNode();
@@ -106,6 +180,20 @@ void ProjectTreeModel::rebuildTree() {
     node->kind = QStringLiteral("element");
     node->objectType = toString(element.type);
     node->qualifiedPath = element.name;
+    const QJsonObject sourceBinding =
+        element.extra.value(QStringLiteral("sourceBinding")).toObject();
+    node->sourcePath = projectRelativeSourcePath(
+        m_controller->data(),
+        sourceBinding.value(QStringLiteral("file")).toString());
+    if (!node->sourcePath.isEmpty()) {
+      const QFileInfo sourceInfo(node->sourcePath);
+      node->sourceDirectory = QDir::fromNativeSeparators(sourceInfo.path());
+      if (node->sourceDirectory == QStringLiteral("."))
+        node->sourceDirectory.clear();
+      node->sourceFile = sourceInfo.fileName();
+    }
+    node->stereotypes =
+        stereotypeDisplay(element.stereotypeIds, stereotypeNamesById);
     node->nested = !element.enclosingTypeId.isEmpty();
     m_elementNodes.insert(element.id, node);
     elementOrder.push_back(node);
@@ -336,7 +424,8 @@ bool ProjectTreeModel::updateVisibleChildren(
 
 QModelIndex ProjectTreeModel::index(int row, int column,
                                     const QModelIndex &parentIndex) const {
-  if (column != 0 || row < 0 || parentIndex.column() > 0)
+  if (column < 0 || column >= m_columns.size() || row < 0 ||
+      parentIndex.column() > 0)
     return {};
   TreeNode *parentNode =
       parentIndex.isValid() ? nodeForIndex(parentIndex) : m_invisibleRoot;
@@ -361,14 +450,28 @@ int ProjectTreeModel::rowCount(const QModelIndex &parentIndex) const {
   return parentNode ? static_cast<int>(parentNode->visibleChildren.size()) : 0;
 }
 
-int ProjectTreeModel::columnCount(const QModelIndex &) const { return 1; }
+int ProjectTreeModel::columnCount(const QModelIndex &parent) const {
+  return parent.isValid() && parent.column() > 0 ? 0 : m_columns.size();
+}
 
 QVariant ProjectTreeModel::data(const QModelIndex &item, int role) const {
   const TreeNode *node = nodeForIndex(item);
   if (!node)
     return {};
-  if (role == Qt::DisplayRole)
+  if (role == Qt::DisplayRole) {
+    const QString column = m_columns.value(item.column());
+    if (column == QStringLiteral("sourceDirectory"))
+      return node->sourceDirectory;
+    if (column == QStringLiteral("sourceFile"))
+      return node->sourceFile;
+    if (column == QStringLiteral("stereotypes"))
+      return node->stereotypes;
+    if (column == QStringLiteral("type"))
+      return node->objectType;
+    if (column == QStringLiteral("qualifiedName"))
+      return node->qualifiedPath;
     return node->label;
+  }
   if (role == IdRole)
     return node->objectId;
   if (role == KindRole)
@@ -377,7 +480,38 @@ QVariant ProjectTreeModel::data(const QModelIndex &item, int role) const {
     return node->objectType;
   if (role == NestedRole)
     return node->nested;
+  if (role == NameRole)
+    return node->label;
+  if (role == SourcePathRole)
+    return node->sourcePath;
+  if (role == SourceDirectoryRole)
+    return node->sourceDirectory;
+  if (role == SourceFileRole)
+    return node->sourceFile;
+  if (role == StereotypesRole)
+    return node->stereotypes;
+  if (role == QualifiedNameRole)
+    return node->qualifiedPath;
   return {};
+}
+
+QVariant ProjectTreeModel::headerData(int section, Qt::Orientation orientation,
+                                      int role) const {
+  if (orientation != Qt::Horizontal || role != Qt::DisplayRole || section < 0 ||
+      section >= m_columns.size())
+    return {};
+  const QString column = m_columns.at(section);
+  if (column == QStringLiteral("sourceDirectory"))
+    return QStringLiteral("Relative source path");
+  if (column == QStringLiteral("sourceFile"))
+    return QStringLiteral("File name");
+  if (column == QStringLiteral("stereotypes"))
+    return QStringLiteral("Stereotypes");
+  if (column == QStringLiteral("type"))
+    return QStringLiteral("Type");
+  if (column == QStringLiteral("qualifiedName"))
+    return QStringLiteral("Qualified name");
+  return QStringLiteral("Name");
 }
 
 QHash<int, QByteArray> ProjectTreeModel::roleNames() const {
@@ -386,6 +520,12 @@ QHash<int, QByteArray> ProjectTreeModel::roleNames() const {
   roles.insert(KindRole, "kind");
   roles.insert(TypeRole, "objectType");
   roles.insert(NestedRole, "nested");
+  roles.insert(NameRole, "name");
+  roles.insert(SourcePathRole, "sourcePath");
+  roles.insert(SourceDirectoryRole, "sourceDirectory");
+  roles.insert(SourceFileRole, "sourceFile");
+  roles.insert(StereotypesRole, "stereotypes");
+  roles.insert(QualifiedNameRole, "qualifiedName");
   return roles;
 }
 
@@ -595,6 +735,19 @@ void ProjectTreeModel::setSearchPattern(const QString &pattern) {
   rebuildVisibleTree();
   endResetModel();
   emit searchPatternChanged();
+}
+
+QStringList ProjectTreeModel::columns() const { return m_columns; }
+
+void ProjectTreeModel::setColumns(const QStringList &columns) {
+  const QStringList normalized = normalizedTreeColumns(columns);
+  if (m_columns == normalized)
+    return;
+  beginResetModel();
+  m_columns = normalized;
+  m_selectionAnchor = {};
+  endResetModel();
+  emit columnsChanged();
 }
 
 void ProjectTreeModel::reset() {

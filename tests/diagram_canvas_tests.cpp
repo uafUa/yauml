@@ -461,6 +461,28 @@ void DiagramCanvasTests::
   canvas.release({315.0, 140.0}, Qt::ControlModifier);
   QCOMPARE(canvas.selectedConnectorCount(), 2);
 
+  // The two connectors share the middle presentation. Reattachment changes
+  // only the two ends on that presentation and remains one undoable action.
+  QVERIFY(canvas.canReattachSelectedConnectorEnds());
+  const ProjectData beforeReattachment = controller.data();
+  canvas.reattachSelectedConnectorEnds(QStringLiteral("bottom"));
+  const auto *reattachedFirst =
+      findConnector(controller.data().diagrams.first(), firstConnectorId);
+  const auto *reattachedSecond =
+      findConnector(controller.data().diagrams.first(), secondConnectorId);
+  QVERIFY(reattachedFirst);
+  QVERIFY(reattachedSecond);
+  QVERIFY(reattachedFirst->targetAnchor.side == ConnectorSide::Bottom);
+  QVERIFY(reattachedSecond->sourceAnchor.side == ConnectorSide::Bottom);
+  QCOMPARE(reattachedFirst->sourceAnchor,
+           findConnector(beforeReattachment.diagrams.first(), firstConnectorId)
+               ->sourceAnchor);
+  QCOMPARE(reattachedSecond->targetAnchor,
+           findConnector(beforeReattachment.diagrams.first(), secondConnectorId)
+               ->targetAnchor);
+  controller.undo();
+  QCOMPARE(controller.data(), beforeReattachment);
+
   // Preserve distinct previous values and verify that bulk routing occupies
   // one compact undo step rather than one command per relationship.
   controller.setConnectorRouting(diagramId, secondConnectorId,

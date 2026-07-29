@@ -44,6 +44,8 @@ void DiagnosticModel::add(const Diagnostic &diagnostic) {
   m_items.append(diagnostic);
   endInsertRows();
   emit countChanged();
+  if (diagnostic.severity != DiagnosticSeverity::Info)
+    emit attentionAdded();
   if (diagnostic.severity == DiagnosticSeverity::Error)
     emit errorAdded();
 }

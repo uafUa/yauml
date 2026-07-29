@@ -301,6 +301,20 @@ try {
     Copy-Item -LiteralPath $sourceDefinition -Destination $installerWorkspace `
         -Recurse
 
+    # IFW embeds the ICO into the installer/maintenance executable and uses the
+    # PNG for its live window. Keep both sourced from the application branding
+    # assets so packaged and portable builds cannot drift visually.
+    $installerConfigDirectory =
+        Join-Path $installerWorkspace "config"
+    Copy-Item -LiteralPath (
+        Join-Path $repositoryRoot "assets\yaml-icon.ico") `
+        -Destination (
+            Join-Path $installerConfigDirectory "yaml-icon.ico")
+    Copy-Item -LiteralPath (
+        Join-Path $repositoryRoot "assets\yaml-icon.png") `
+        -Destination (
+            Join-Path $installerConfigDirectory "yaml-icon.png")
+
     $templateValues = @{
         PRODUCT_VERSION = $projectVersion
         RELEASE_DATE = (Get-Date).ToUniversalTime().ToString("yyyy-MM-dd")

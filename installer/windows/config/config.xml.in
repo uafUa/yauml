@@ -7,6 +7,8 @@
     <ProductUrl>https://github.com/uafUa/yauml</ProductUrl>
     <StartMenuDir>yauml</StartMenuDir>
     <TargetDir>@ApplicationsDirX64@/yauml</TargetDir>
+    <InstallerApplicationIcon>yaml-icon</InstallerApplicationIcon>
+    <InstallerWindowIcon>yaml-icon.png</InstallerWindowIcon>
     <MaintenanceToolName>maintenancetool</MaintenanceToolName>
     <ControlScript>controlscript.qs</ControlScript>
     <RunProgram>@TargetDir@/yauml.exe</RunProgram>

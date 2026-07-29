@@ -121,6 +121,7 @@ bool CppImportController::busy() const { return m_busy; }
 
 bool CppImportController::canApply() const {
   return !m_busy && m_preview.ok &&
+         m_preview.unresolvedOutOfScopeCount() == 0 &&
          (m_preview.applicableCount() > 0 ||
           (!m_preview.sourceRoots.isEmpty() &&
            m_preview.sourceRoots != configuredSourceRoots()));
@@ -187,6 +188,22 @@ int CppImportController::unresolvedConflictCount() const {
   return m_preview.unresolvedConflictCount();
 }
 
+int CppImportController::missingSourceCount() const {
+  return m_preview.missingSourceCount();
+}
+
+int CppImportController::selectedMissingSourceCount() const {
+  return m_preview.selectedMissingSourceCount();
+}
+
+int CppImportController::outOfScopeCount() const {
+  return m_preview.outOfScopeCount();
+}
+
+int CppImportController::unresolvedOutOfScopeCount() const {
+  return m_preview.unresolvedOutOfScopeCount();
+}
+
 void CppImportController::preview(const QUrl &sourceOrBuildDirectory) {
   const QString path = sourceOrBuildDirectory.isLocalFile()
                            ? sourceOrBuildDirectory.toLocalFile()
@@ -222,6 +239,8 @@ void CppImportController::previewPaths(const QStringList &sourceDirectories) {
 
   m_requestedSourcePaths = paths;
   m_conflictResolutions.clear();
+  m_missingSourceResolutions.clear();
+  m_outOfScopeResolutions.clear();
   m_preview = {};
   m_previewItems.clear();
   m_summary = QStringLiteral("Discovering C++ declarations…");
@@ -238,6 +257,7 @@ void CppImportController::previewPaths(const QStringList &sourceDirectories) {
   // model, and Apply re-plans against current data to avoid stale overwrites.
   const QList<ModelElement> elements = m_project->data().elements;
   const QList<Relationship> relationships = m_project->data().relationships;
+  const QStringList previousSourceRoots = configuredSourceRoots();
   CppImportOptions options;
   options.interfacePattern = m_settings->cppInterfacePattern();
   options.memberTypeRules = m_settings->cppMemberTypeRuleValues();
@@ -258,10 +278,12 @@ void CppImportController::previewPaths(const QStringList &sourceDirectories) {
             },
             Qt::QueuedConnection);
       };
-  m_watcher.setFuture(
-      QtConcurrent::run([paths, elements, relationships, options, progress] {
-        return CppImportService::preview(paths, elements, relationships,
-                                         options, progress);
+  m_watcher.setFuture(QtConcurrent::run(
+      [paths, elements, relationships, previousSourceRoots, options, progress] {
+        CppImportPreview preview = CppImportService::preview(
+            paths, elements, relationships, options, progress);
+        preview.previousSourceRoots = previousSourceRoots;
+        return CppImportService::replan(preview, elements, relationships);
       }));
 }
 
@@ -287,6 +309,14 @@ void CppImportController::applyPreview() {
   for (auto iterator = m_conflictResolutions.cbegin();
        iterator != m_conflictResolutions.cend(); ++iterator) {
     resolvedPlan.setConflictResolution(iterator.key(), iterator.value());
+  }
+  for (auto iterator = m_missingSourceResolutions.cbegin();
+       iterator != m_missingSourceResolutions.cend(); ++iterator) {
+    resolvedPlan.setMissingSourceResolution(iterator.key(), iterator.value());
+  }
+  for (auto iterator = m_outOfScopeResolutions.cbegin();
+       iterator != m_outOfScopeResolutions.cend(); ++iterator) {
+    resolvedPlan.setOutOfScopeResolution(iterator.key(), iterator.value());
   }
   const qsizetype discoveryCount = resolvedPlan.discoveryDiagnostics.size();
   if (resolvedPlan.diagnostics.size() > discoveryCount) {
@@ -339,6 +369,9 @@ void CppImportController::applyPreview() {
             .arg(resolvedConflicts));
   }
   m_conflictResolutions.clear();
+  m_missingSourceResolutions.clear();
+  m_outOfScopeResolutions.clear();
+  resolvedPlan.previousSourceRoots = configuredSourceRoots();
   m_preview = CppImportService::replan(resolvedPlan, m_project->data().elements,
                                        m_project->data().relationships);
   rebuildViewState();
@@ -383,6 +416,84 @@ void CppImportController::resolveAllConflicts(const QString &resolutionValue) {
   emit previewChanged();
 }
 
+void CppImportController::setMissingSourceResolution(
+    const QString &missingSourceKey, const QString &resolutionValue) {
+  bool ok = false;
+  const CppImportMissingSourceResolution resolution =
+      cppImportMissingSourceResolutionFromString(resolutionValue, &ok);
+  if (!ok ||
+      !m_preview.setMissingSourceResolution(missingSourceKey, resolution))
+    return;
+  if (resolution == CppImportMissingSourceResolution::Keep)
+    m_missingSourceResolutions.remove(missingSourceKey);
+  else
+    m_missingSourceResolutions.insert(missingSourceKey, resolution);
+  rebuildViewState();
+  emit previewChanged();
+}
+
+void CppImportController::resolveAllMissingSources(
+    const QString &resolutionValue) {
+  bool ok = false;
+  const CppImportMissingSourceResolution resolution =
+      cppImportMissingSourceResolutionFromString(resolutionValue, &ok);
+  if (!ok)
+    return;
+  m_preview.resolveAllMissingSources(resolution);
+  m_missingSourceResolutions.clear();
+  if (resolution != CppImportMissingSourceResolution::Keep) {
+    const auto remember = [&](const auto &items) {
+      for (const auto &item : items) {
+        if (item.isMissingSource()) {
+          m_missingSourceResolutions.insert(item.missingSourceKey(),
+                                            item.missingSourceResolution);
+        }
+      }
+    };
+    remember(m_preview.items);
+    remember(m_preview.relationshipItems);
+  }
+  rebuildViewState();
+  emit previewChanged();
+}
+
+void CppImportController::setOutOfScopeResolution(
+    const QString &outOfScopeKey, const QString &resolutionValue) {
+  bool ok = false;
+  const CppImportOutOfScopeResolution resolution =
+      cppImportOutOfScopeResolutionFromString(resolutionValue, &ok);
+  if (!ok || !m_preview.setOutOfScopeResolution(outOfScopeKey, resolution))
+    return;
+  if (resolution == CppImportOutOfScopeResolution::Unresolved)
+    m_outOfScopeResolutions.remove(outOfScopeKey);
+  else
+    m_outOfScopeResolutions.insert(outOfScopeKey, resolution);
+  rebuildViewState();
+  emit previewChanged();
+}
+
+void CppImportController::resolveAllOutOfScope(const QString &resolutionValue) {
+  bool ok = false;
+  const CppImportOutOfScopeResolution resolution =
+      cppImportOutOfScopeResolutionFromString(resolutionValue, &ok);
+  if (!ok)
+    return;
+  m_preview.resolveAllOutOfScope(resolution);
+  m_outOfScopeResolutions.clear();
+  const auto remember = [&](const auto &items) {
+    for (const auto &item : items) {
+      if (item.isOutOfScopeResolved()) {
+        m_outOfScopeResolutions.insert(item.outOfScopeKey(),
+                                       item.outOfScopeResolution);
+      }
+    }
+  };
+  remember(m_preview.items);
+  remember(m_preview.relationshipItems);
+  rebuildViewState();
+  emit previewChanged();
+}
+
 void CppImportController::clearPreview() {
   if (m_busy)
     return;
@@ -391,6 +502,8 @@ void CppImportController::clearPreview() {
   m_summary.clear();
   m_requestedSourcePaths.clear();
   m_conflictResolutions.clear();
+  m_missingSourceResolutions.clear();
+  m_outOfScopeResolutions.clear();
   resetProgress();
   emit progressChanged();
   emit previewChanged();
@@ -410,7 +523,8 @@ void CppImportController::finishPreview() {
                   [](const Diagnostic &diagnostic) {
                     return diagnostic.severity == DiagnosticSeverity::Error;
                   });
-  if (hasError || m_preview.conflictCount() > 0)
+  if (hasError || m_preview.conflictCount() > 0 ||
+      m_preview.outOfScopeCount() > 0)
     emit attentionRequired();
 }
 
@@ -446,6 +560,27 @@ void CppImportController::rebuildViewState() {
   m_previewItems.clear();
   m_previewItems.reserve(m_preview.items.size() +
                          m_preview.relationshipItems.size());
+  QHash<QString, int> relationshipCountByElement;
+  QHash<QString, int> presentationCountByElement;
+  QHash<QString, int> connectorCountByRelationship;
+  if (m_project &&
+      (m_preview.outOfScopeCount() > 0 || m_preview.missingSourceCount() > 0)) {
+    for (const auto &relationship : m_project->data().relationships) {
+      ++relationshipCountByElement[relationship.sourceId];
+      if (relationship.targetId != relationship.sourceId)
+        ++relationshipCountByElement[relationship.targetId];
+    }
+    for (const auto &diagram : m_project->data().diagrams) {
+      for (const auto &node : diagram.nodes)
+        ++presentationCountByElement[node.elementId];
+      for (const auto &container : diagram.containers) {
+        if (container.subjectKind == QStringLiteral("package"))
+          ++presentationCountByElement[container.subjectId];
+      }
+      for (const auto &connector : diagram.connectors)
+        ++connectorCountByRelationship[connector.relationshipId];
+    }
+  }
   QHash<CppImportAction, int> counts;
   for (const auto &item : m_preview.items) {
     ++counts[item.action];
@@ -459,6 +594,20 @@ void CppImportController::rebuildViewState() {
     value.insert(QStringLiteral("conflictKey"), item.conflictKey());
     value.insert(QStringLiteral("resolvable"), item.isResolvableConflict());
     value.insert(QStringLiteral("resolution"), toString(item.resolution));
+    value.insert(QStringLiteral("missingSourceKey"), item.missingSourceKey());
+    value.insert(QStringLiteral("missingSourceResolution"),
+                 toString(item.missingSourceResolution));
+    value.insert(QStringLiteral("outOfScopeKey"), item.outOfScopeKey());
+    value.insert(QStringLiteral("outOfScopeResolution"),
+                 toString(item.outOfScopeResolution));
+    if (item.isOutOfScope() || item.isMissingSource()) {
+      value.insert(
+          QStringLiteral("impact"),
+          QStringLiteral("Removing this item also removes %1 relationship(s) "
+                         "and %2 diagram presentation(s)")
+              .arg(relationshipCountByElement.value(item.existingElementId))
+              .arg(presentationCountByElement.value(item.existingElementId)));
+    }
     value.insert(QStringLiteral("resolutionDetail"),
                  elementConflictDetail(item));
     m_previewItems.append(value);
@@ -480,6 +629,19 @@ void CppImportController::rebuildViewState() {
     value.insert(QStringLiteral("conflictKey"), item.conflictKey());
     value.insert(QStringLiteral("resolvable"), item.isResolvableConflict());
     value.insert(QStringLiteral("resolution"), toString(item.resolution));
+    value.insert(QStringLiteral("missingSourceKey"), item.missingSourceKey());
+    value.insert(QStringLiteral("missingSourceResolution"),
+                 toString(item.missingSourceResolution));
+    value.insert(QStringLiteral("outOfScopeKey"), item.outOfScopeKey());
+    value.insert(QStringLiteral("outOfScopeResolution"),
+                 toString(item.outOfScopeResolution));
+    if (item.isOutOfScope() || item.isMissingSource()) {
+      value.insert(QStringLiteral("impact"),
+                   QStringLiteral("Removing this relationship also removes %1 "
+                                  "connector presentation(s)")
+                       .arg(connectorCountByRelationship.value(
+                           item.existingRelationshipId)));
+    }
     value.insert(QStringLiteral("resolutionDetail"),
                  relationshipConflictDetail(item));
     m_previewItems.append(value);
@@ -494,7 +656,8 @@ void CppImportController::rebuildViewState() {
                                     : QStringLiteral("Best-effort source scan");
   m_summary = QStringLiteral("%1 — %2 type(s), %3 relationship(s): %4 "
                              "new, %5 updated, %6 conflicts, %7 unchanged or "
-                             "user-owned")
+                             "user-owned, %8 not found in scan, %9 outside "
+                             "selected folders")
                   .arg(discoveryMode)
                   .arg(m_preview.symbols.size())
                   .arg(m_preview.relationships.size())
@@ -502,13 +665,26 @@ void CppImportController::rebuildViewState() {
                   .arg(counts.value(CppImportAction::Update))
                   .arg(counts.value(CppImportAction::Conflict))
                   .arg(counts.value(CppImportAction::Unchanged) +
-                       counts.value(CppImportAction::UserModified) +
-                       counts.value(CppImportAction::MissingSource));
+                       counts.value(CppImportAction::UserModified))
+                  .arg(counts.value(CppImportAction::MissingSource))
+                  .arg(counts.value(CppImportAction::OutOfScope));
   if (m_preview.conflictCount() > 0) {
     m_summary +=
         QStringLiteral(" — %1 of %2 conflict(s) selected for resolution")
             .arg(m_preview.resolvedConflictCount())
             .arg(m_preview.conflictCount());
+  }
+  if (m_preview.outOfScopeCount() > 0) {
+    m_summary +=
+        QStringLiteral(" — %1 of %2 out-of-scope item(s) selected for cleanup")
+            .arg(m_preview.resolvedOutOfScopeCount())
+            .arg(m_preview.outOfScopeCount());
+  }
+  if (m_preview.selectedMissingSourceCount() > 0) {
+    m_summary +=
+        QStringLiteral(" — %1 of %2 not-found item(s) selected for cleanup")
+            .arg(m_preview.selectedMissingSourceCount())
+            .arg(m_preview.missingSourceCount());
   }
 }
 

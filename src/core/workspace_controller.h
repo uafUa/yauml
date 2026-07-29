@@ -1,6 +1,7 @@
 #pragma once
 
 #include <QAbstractListModel>
+#include <QElapsedTimer>
 #include <QHash>
 #include <QRect>
 #include <QStringList>
@@ -83,6 +84,12 @@ public:
   Q_INVOKABLE void updatePanelWidths(int projectTreeWidth, int propertiesWidth);
   Q_INVOKABLE void updateMainWindowGeometry(int x, int y, int width,
                                             int height);
+  Q_INVOKABLE void noteProjectTreeWheelInput();
+
+  // Returns true while a wheel gesture that began over the project tree is
+  // still producing events. Suppressed diagram events extend the quiet period
+  // so an inertial wheel/touchpad tail cannot zoom after crossing the canvas.
+  bool consumeDiagramWheelSuppression();
 
 public slots:
   void reconcile();
@@ -116,6 +123,7 @@ private:
   bool m_propertiesVisible = true;
   int m_projectTreeWidth = 260;
   int m_propertiesWidth = 310;
+  QElapsedTimer m_projectTreeWheelInput;
   QRect m_mainWindowGeometry = {80, 80, 1440, 900};
   int m_revision = 0;
 };

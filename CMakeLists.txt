@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(yauml VERSION 0.2.0 LANGUAGES CXX)
+project(yauml VERSION 0.3.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -184,6 +184,26 @@ qt_add_executable(yauml
     src/app/update_controller.h
 )
 
+if(WIN32)
+    # Windows Explorer, taskbar shortcuts, and file associations use the icon
+    # embedded in the executable. Configure an absolute forward-slash path so
+    # rc.exe resolves it consistently for all CMake generators.
+    set(YAUML_WINDOWS_APP_ICON
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/yaml-icon.ico")
+    file(TO_CMAKE_PATH "${YAUML_WINDOWS_APP_ICON}"
+        YAUML_WINDOWS_APP_ICON_RESOURCE)
+    file(MAKE_DIRECTORY "${CMAKE_CURRENT_BINARY_DIR}/generated")
+    set(YAUML_WINDOWS_RESOURCE_FILE
+        "${CMAKE_CURRENT_BINARY_DIR}/generated/yauml.rc")
+    configure_file(
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/windows/yauml.rc.in"
+        "${YAUML_WINDOWS_RESOURCE_FILE}"
+        @ONLY)
+    target_sources(yauml PRIVATE "${YAUML_WINDOWS_RESOURCE_FILE}")
+    set_property(SOURCE "${YAUML_WINDOWS_RESOURCE_FILE}" APPEND PROPERTY
+        OBJECT_DEPENDS "${YAUML_WINDOWS_APP_ICON}")
+endif()
+
 file(GLOB_RECURSE YAUML_ICON_SVG_FILES CONFIGURE_DEPENDS
     "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/*.svg")
 qt_add_resources(yauml "yauml_icons"
@@ -192,6 +212,12 @@ qt_add_resources(yauml "yauml_icons"
     FILES
         "${CMAKE_CURRENT_SOURCE_DIR}/assets/icons/action-icons.json5"
         ${YAUML_ICON_SVG_FILES}
+)
+qt_add_resources(yauml "yauml_branding"
+    PREFIX "/branding"
+    BASE "${CMAKE_CURRENT_SOURCE_DIR}/assets"
+    FILES
+        "${CMAKE_CURRENT_SOURCE_DIR}/assets/yaml-icon.png"
 )
 
 if(WIN32 AND YAUML_LIBCLANG_LIBRARY)

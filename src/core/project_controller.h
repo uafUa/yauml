@@ -288,6 +288,17 @@ public:
                                          const QString &connectorId,
                                          bool source, const QString &side,
                                          qreal offset);
+  Q_INVOKABLE bool
+  canReattachConnectorEnds(const QString &diagramId,
+                           const QStringList &connectorIds) const;
+  Q_INVOKABLE void reattachConnectorEnds(const QString &diagramId,
+                                         const QStringList &connectorIds,
+                                         const QString &side);
+  Q_INVOKABLE bool canShiftConnectorEnds(const QString &diagramId,
+                                         const QStringList &connectorIds) const;
+  Q_INVOKABLE void shiftConnectorEnds(const QString &diagramId,
+                                      const QStringList &connectorIds,
+                                      const QString &direction);
   Q_INVOKABLE void setConnectorRouting(const QString &diagramId,
                                        const QString &connectorId,
                                        const QString &routing);
@@ -337,6 +348,7 @@ signals:
   void projectChanged();
   void projectOpened(const QString &projectPath);
   void selectionChanged();
+  void selectionReasserted();
   void undoStateChanged();
   void dirtyChanged();
   void externallyChangedProjectFilesChanged();

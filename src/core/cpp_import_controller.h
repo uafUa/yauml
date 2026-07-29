@@ -46,6 +46,13 @@ class CppImportController final : public QObject {
                  previewChanged)
   Q_PROPERTY(int unresolvedConflictCount READ unresolvedConflictCount NOTIFY
                  previewChanged)
+  Q_PROPERTY(
+      int missingSourceCount READ missingSourceCount NOTIFY previewChanged)
+  Q_PROPERTY(int selectedMissingSourceCount READ selectedMissingSourceCount
+                 NOTIFY previewChanged)
+  Q_PROPERTY(int outOfScopeCount READ outOfScopeCount NOTIFY previewChanged)
+  Q_PROPERTY(int unresolvedOutOfScopeCount READ unresolvedOutOfScopeCount NOTIFY
+                 previewChanged)
 
 public:
   explicit CppImportController(ProjectController *project,
@@ -71,6 +78,10 @@ public:
   int conflictCount() const;
   int resolvableConflictCount() const;
   int unresolvedConflictCount() const;
+  int missingSourceCount() const;
+  int selectedMissingSourceCount() const;
+  int outOfScopeCount() const;
+  int unresolvedOutOfScopeCount() const;
 
   Q_INVOKABLE void preview(const QUrl &sourceOrBuildDirectory);
   Q_INVOKABLE void previewSources(const QVariantList &sourceDirectories);
@@ -79,6 +90,12 @@ public:
   Q_INVOKABLE void setConflictResolution(const QString &conflictKey,
                                          const QString &resolution);
   Q_INVOKABLE void resolveAllConflicts(const QString &resolution);
+  Q_INVOKABLE void setMissingSourceResolution(const QString &missingSourceKey,
+                                              const QString &resolution);
+  Q_INVOKABLE void resolveAllMissingSources(const QString &resolution);
+  Q_INVOKABLE void setOutOfScopeResolution(const QString &outOfScopeKey,
+                                           const QString &resolution);
+  Q_INVOKABLE void resolveAllOutOfScope(const QString &resolution);
   Q_INVOKABLE void clearPreview();
 
 signals:
@@ -107,6 +124,8 @@ private:
   QString m_progressDetail;
   QStringList m_requestedSourcePaths;
   QHash<QString, CppImportConflictResolution> m_conflictResolutions;
+  QHash<QString, CppImportMissingSourceResolution> m_missingSourceResolutions;
+  QHash<QString, CppImportOutOfScopeResolution> m_outOfScopeResolutions;
   quint64 m_previewGeneration = 0;
   int m_progressValue = 0;
   int m_progressMaximum = 0;

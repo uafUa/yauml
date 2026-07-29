@@ -16,7 +16,8 @@ enum class CppImportAction {
   Conflict,
   Unchanged,
   UserModified,
-  MissingSource
+  MissingSource,
+  OutOfScope
 };
 
 QString toString(CppImportAction action);
@@ -26,6 +27,27 @@ enum class CppImportConflictResolution { Unresolved, KeepModel, UseSource };
 QString toString(CppImportConflictResolution resolution);
 CppImportConflictResolution
 cppImportConflictResolutionFromString(const QString &value, bool *ok = nullptr);
+
+// Removing a configured source root is intentionally separate from a missing
+// declaration inside an active root. The former can be cleaned up after an
+// explicit choice; the latter remains in the model for safety.
+enum class CppImportOutOfScopeResolution { Unresolved, Remove, KeepManual };
+
+QString toString(CppImportOutOfScopeResolution resolution);
+CppImportOutOfScopeResolution
+cppImportOutOfScopeResolutionFromString(const QString &value,
+                                        bool *ok = nullptr);
+
+// A declaration can disappear from a scan even though its source root remains
+// configured (for example after deletion, a namespace rename, or an incomplete
+// best-effort parse). Keeping it is therefore the safe default; removal or
+// detaching the binding always requires an explicit user choice.
+enum class CppImportMissingSourceResolution { Keep, Remove, KeepManual };
+
+QString toString(CppImportMissingSourceResolution resolution);
+CppImportMissingSourceResolution
+cppImportMissingSourceResolutionFromString(const QString &value,
+                                           bool *ok = nullptr);
 
 enum class CppImportProgressStage {
   Preparing,
@@ -133,6 +155,10 @@ struct CppImportItem {
   CppImportAction action = CppImportAction::Unchanged;
   CppImportConflictResolution resolution =
       CppImportConflictResolution::Unresolved;
+  CppImportOutOfScopeResolution outOfScopeResolution =
+      CppImportOutOfScopeResolution::Unresolved;
+  CppImportMissingSourceResolution missingSourceResolution =
+      CppImportMissingSourceResolution::Keep;
   CppSourceSymbol symbol;
   ModelElement desiredElement;
   std::optional<ModelElement> existingElement;
@@ -140,7 +166,13 @@ struct CppImportItem {
   QString message;
 
   QString conflictKey() const;
+  QString outOfScopeKey() const;
+  QString missingSourceKey() const;
   bool isResolvableConflict() const;
+  bool isOutOfScope() const;
+  bool isOutOfScopeResolved() const;
+  bool isMissingSource() const;
+  bool shouldRemove() const;
   bool isApplicable() const;
   ModelElement appliedElement() const;
 };
@@ -149,6 +181,10 @@ struct CppRelationshipImportItem {
   CppImportAction action = CppImportAction::Unchanged;
   CppImportConflictResolution resolution =
       CppImportConflictResolution::Unresolved;
+  CppImportOutOfScopeResolution outOfScopeResolution =
+      CppImportOutOfScopeResolution::Unresolved;
+  CppImportMissingSourceResolution missingSourceResolution =
+      CppImportMissingSourceResolution::Keep;
   CppSourceRelationship source;
   Relationship desiredRelationship;
   std::optional<Relationship> existingRelationship;
@@ -156,7 +192,13 @@ struct CppRelationshipImportItem {
   QString message;
 
   QString conflictKey() const;
+  QString outOfScopeKey() const;
+  QString missingSourceKey() const;
   bool isResolvableConflict() const;
+  bool isOutOfScope() const;
+  bool isOutOfScopeResolved() const;
+  bool isMissingSource() const;
+  bool shouldRemove() const;
   bool isApplicable() const;
   Relationship appliedRelationship() const;
 };
@@ -167,6 +209,10 @@ struct CppImportPreview {
   // The exact roots selected by the user. sourceRoot remains the common
   // discovery root for compatibility with older callers and diagnostics.
   QStringList sourceRoots;
+  // Roots stored in the model before this discovery. They let planning
+  // distinguish an intentionally excluded source tree from a declaration that
+  // unexpectedly disappeared inside an active tree.
+  QStringList previousSourceRoots;
   QString sourceRoot;
   QList<CppSourceSymbol> symbols;
   QList<CppSourceRelationship> relationships;
@@ -189,9 +235,20 @@ struct CppImportPreview {
   int resolvableConflictCount() const;
   int resolvedConflictCount() const;
   int unresolvedConflictCount() const;
+  int missingSourceCount() const;
+  int selectedMissingSourceCount() const;
+  int outOfScopeCount() const;
+  int resolvedOutOfScopeCount() const;
+  int unresolvedOutOfScopeCount() const;
   bool setConflictResolution(const QString &conflictKey,
                              CppImportConflictResolution resolution);
   void resolveAllConflicts(CppImportConflictResolution resolution);
+  bool setMissingSourceResolution(const QString &missingSourceKey,
+                                  CppImportMissingSourceResolution resolution);
+  void resolveAllMissingSources(CppImportMissingSourceResolution resolution);
+  bool setOutOfScopeResolution(const QString &outOfScopeKey,
+                               CppImportOutOfScopeResolution resolution);
+  void resolveAllOutOfScope(CppImportOutOfScopeResolution resolution);
 };
 
 class CppImportService {

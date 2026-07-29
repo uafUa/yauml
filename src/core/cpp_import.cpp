@@ -71,6 +71,101 @@ bool pathIsWithinAny(const QString &path, const QStringList &directories) {
       [&](const QString &directory) { return pathIsWithin(path, directory); });
 }
 
+void removeRelationshipAndPresentations(ProjectData &project,
+                                        const QString &relationshipId) {
+  project.relationships.erase(
+      std::remove_if(project.relationships.begin(), project.relationships.end(),
+                     [&](const Relationship &relationship) {
+                       return relationship.id == relationshipId;
+                     }),
+      project.relationships.end());
+  for (auto &diagram : project.diagrams) {
+    diagram.connectors.erase(
+        std::remove_if(diagram.connectors.begin(), diagram.connectors.end(),
+                       [&](const ConnectorPresentation &connector) {
+                         return connector.relationshipId == relationshipId;
+                       }),
+        diagram.connectors.end());
+  }
+}
+
+// Headless import uses the same cleanup semantics as the undoable GUI command.
+// Keep this mutation focused on references owned by an element; unrelated
+// project data and presentation geometry remain untouched.
+void removeElementAndReferences(ProjectData &project,
+                                const QString &elementId) {
+  const ModelElement *removed = findElement(project, elementId);
+  if (!removed)
+    return;
+  const QString parentPackageId = removed->packageId;
+  const QString parentTypeId = removed->enclosingTypeId;
+
+  QStringList relationshipIds;
+  for (const auto &relationship : std::as_const(project.relationships)) {
+    if (relationship.sourceId == elementId ||
+        relationship.targetId == elementId)
+      relationshipIds.append(relationship.id);
+  }
+  for (const QString &relationshipId : std::as_const(relationshipIds))
+    removeRelationshipAndPresentations(project, relationshipId);
+
+  for (auto &diagram : project.diagrams) {
+    QSet<QString> removedPresentationIds;
+    diagram.nodes.erase(std::remove_if(diagram.nodes.begin(),
+                                       diagram.nodes.end(),
+                                       [&](const NodePresentation &node) {
+                                         if (node.elementId != elementId)
+                                           return false;
+                                         removedPresentationIds.insert(node.id);
+                                         return true;
+                                       }),
+                        diagram.nodes.end());
+    diagram.containers.erase(
+        std::remove_if(diagram.containers.begin(), diagram.containers.end(),
+                       [&](const ContainerPresentation &container) {
+                         if (container.subjectKind !=
+                                 QStringLiteral("package") ||
+                             container.subjectId != elementId)
+                           return false;
+                         removedPresentationIds.insert(container.id);
+                         return true;
+                       }),
+        diagram.containers.end());
+    if (!removedPresentationIds.isEmpty()) {
+      for (auto &container : diagram.containers) {
+        for (const QString &presentationId :
+             std::as_const(removedPresentationIds))
+          container.childPresentationIds.removeAll(presentationId);
+      }
+    }
+  }
+
+  for (auto &element : project.elements) {
+    if (element.id == elementId)
+      continue;
+    if (element.packageId == elementId)
+      element.packageId = parentPackageId;
+    if (element.enclosingTypeId == elementId)
+      element.enclosingTypeId = parentTypeId;
+    if (element.browserParent.kind == QStringLiteral("element") &&
+        element.browserParent.id == elementId)
+      element.browserParent = {};
+  }
+  for (auto &folder : project.browserFolders) {
+    if (folder.parent.kind == QStringLiteral("element") &&
+        folder.parent.id == elementId)
+      folder.parent = {QStringLiteral("model"), {}};
+  }
+  project.browserItemOrder.removeAll(
+      QStringLiteral("element:%1").arg(elementId));
+  project.elements.erase(std::remove_if(project.elements.begin(),
+                                        project.elements.end(),
+                                        [&](const ModelElement &element) {
+                                          return element.id == elementId;
+                                        }),
+                         project.elements.end());
+}
+
 QStringList normalizeSourceRoots(const QStringList &searchPaths,
                                  QList<Diagnostic> &diagnostics) {
   QStringList roots;
@@ -313,8 +408,7 @@ ModelElement sourceElement(const CppSourceSymbol &symbol,
       options.localTypeStereotypeApplicableTo.contains(applicability)) {
     managedStereotypeIds.append(options.localTypeStereotypeId);
   }
-  if (symbol.privateNestedType &&
-      !options.privateTypeStereotypeId.isEmpty() &&
+  if (symbol.privateNestedType && !options.privateTypeStereotypeId.isEmpty() &&
       options.privateTypeStereotypeApplicableTo.contains(applicability) &&
       !managedStereotypeIds.contains(options.privateTypeStereotypeId)) {
     managedStereotypeIds.append(options.privateTypeStereotypeId);
@@ -511,14 +605,12 @@ CppImportPreview planImport(const CppImportPreview &discovery,
   for (const auto &source : result.symbols) {
     if (duplicateBindings.contains(source.symbolId))
       continue;
-    const ModelElement *previous =
-        byBinding.value(source.symbolId, nullptr);
+    const ModelElement *previous = byBinding.value(source.symbolId, nullptr);
     if (!previous) {
       const auto match =
           declarationMatchBySourceSymbol.constFind(source.symbolId);
       if (match != declarationMatchBySourceSymbol.cend()) {
-        previous =
-            byBinding.value(match->previousSymbolId, nullptr);
+        previous = byBinding.value(match->previousSymbolId, nullptr);
       }
     }
     if (!previous)
@@ -527,12 +619,10 @@ CppImportPreview planImport(const CppImportPreview &discovery,
         sourceBinding(*previous)
             .value(QStringLiteral("lastImported"))
             .toObject();
-    QString oldPackageId =
-        elementFromSnapshot(previousBaseline).packageId;
+    QString oldPackageId = elementFromSnapshot(previousBaseline).packageId;
     QString newNamespacePath = source.namespacePath;
     while (!oldPackageId.isEmpty() && !newNamespacePath.isEmpty()) {
-      const ModelElement *oldPackage =
-          elementById.value(oldPackageId, nullptr);
+      const ModelElement *oldPackage = elementById.value(oldPackageId, nullptr);
       if (!oldPackage)
         break;
       const QJsonObject oldBinding = sourceBinding(*oldPackage);
@@ -560,20 +650,16 @@ CppImportPreview planImport(const CppImportPreview &discovery,
   }
   for (auto candidate = oldPackageIdsByNewSymbol.cbegin();
        candidate != oldPackageIdsByNewSymbol.cend(); ++candidate) {
-    if (candidate.value().size() != 1 ||
-        byBinding.contains(candidate.key()))
+    if (candidate.value().size() != 1 || byBinding.contains(candidate.key()))
       continue;
     const QString oldPackageId = *candidate.value().cbegin();
     if (newSymbolsByOldPackageId.value(oldPackageId).size() != 1)
       continue;
-    const ModelElement *oldPackage =
-        elementById.value(oldPackageId, nullptr);
+    const ModelElement *oldPackage = elementById.value(oldPackageId, nullptr);
     if (!oldPackage)
       continue;
     const QString oldPackageSymbol =
-        sourceBinding(*oldPackage)
-            .value(QStringLiteral("symbolId"))
-            .toString();
+        sourceBinding(*oldPackage).value(QStringLiteral("symbolId")).toString();
     declarationMatchBySourceSymbol.insert(
         candidate.key(),
         {candidate.key(), oldPackageSymbol, oldPackageId, 100});
@@ -798,8 +884,19 @@ CppImportPreview planImport(const CppImportPreview &discovery,
     item.symbol.qualifiedName = element.name;
     item.symbol.filePath = binding.value(QStringLiteral("file")).toString();
     item.symbol.line = binding.value(QStringLiteral("line")).toInt();
+    const bool sourceRootRemoved =
+        !item.symbol.filePath.isEmpty() &&
+        pathIsWithinAny(item.symbol.filePath, result.previousSourceRoots) &&
+        !pathIsWithinAny(item.symbol.filePath, result.sourceRoots);
+    item.action = sourceRootRemoved ? CppImportAction::OutOfScope
+                                    : CppImportAction::MissingSource;
     item.message =
-        QStringLiteral("Source declaration was not discovered; model retained");
+        sourceRootRemoved
+            ? QStringLiteral("Source is outside the selected folders; choose "
+                             "whether to remove it or keep it as manual")
+            : QStringLiteral(
+                  "Previously imported declaration was not matched in this "
+                  "scan; kept in the model for safety");
     result.items.append(std::move(item));
   }
 
@@ -1072,8 +1169,19 @@ CppImportPreview planImport(const CppImportPreview &discovery,
         binding.value(QStringLiteral("classificationReason")).toString();
     item.source.sourceName = elementNameById.value(relationship.sourceId);
     item.source.targetName = elementNameById.value(relationship.targetId);
-    item.message = QStringLiteral(
-        "Source relationship was not discovered; model retained");
+    const bool sourceRootRemoved =
+        !item.source.filePath.isEmpty() &&
+        pathIsWithinAny(item.source.filePath, result.previousSourceRoots) &&
+        !pathIsWithinAny(item.source.filePath, result.sourceRoots);
+    item.action = sourceRootRemoved ? CppImportAction::OutOfScope
+                                    : CppImportAction::MissingSource;
+    item.message =
+        sourceRootRemoved
+            ? QStringLiteral("Source is outside the selected folders; choose "
+                             "whether to remove it or keep it as manual")
+            : QStringLiteral(
+                  "Previously imported relationship was not matched in this "
+                  "scan; kept in the model for safety");
     result.relationshipItems.append(std::move(item));
   }
 
@@ -2454,6 +2562,8 @@ QString toString(CppImportAction action) {
     return QStringLiteral("user-modified");
   case CppImportAction::MissingSource:
     return QStringLiteral("missing-source");
+  case CppImportAction::OutOfScope:
+    return QStringLiteral("out-of-scope");
   }
   return QStringLiteral("unchanged");
 }
@@ -2493,10 +2603,93 @@ cppImportConflictResolutionFromString(const QString &value, bool *ok) {
   return CppImportConflictResolution::Unresolved;
 }
 
+QString toString(CppImportOutOfScopeResolution resolution) {
+  switch (resolution) {
+  case CppImportOutOfScopeResolution::Unresolved:
+    return QStringLiteral("unresolved");
+  case CppImportOutOfScopeResolution::Remove:
+    return QStringLiteral("remove");
+  case CppImportOutOfScopeResolution::KeepManual:
+    return QStringLiteral("keep-manual");
+  }
+  return QStringLiteral("unresolved");
+}
+
+CppImportOutOfScopeResolution
+cppImportOutOfScopeResolutionFromString(const QString &value, bool *ok) {
+  const QString normalized = value.trimmed().toLower();
+  if (normalized == QStringLiteral("unresolved")) {
+    if (ok)
+      *ok = true;
+    return CppImportOutOfScopeResolution::Unresolved;
+  }
+  if (normalized == QStringLiteral("remove")) {
+    if (ok)
+      *ok = true;
+    return CppImportOutOfScopeResolution::Remove;
+  }
+  if (normalized == QStringLiteral("keep-manual")) {
+    if (ok)
+      *ok = true;
+    return CppImportOutOfScopeResolution::KeepManual;
+  }
+  if (ok)
+    *ok = false;
+  return CppImportOutOfScopeResolution::Unresolved;
+}
+
+QString toString(CppImportMissingSourceResolution resolution) {
+  switch (resolution) {
+  case CppImportMissingSourceResolution::Keep:
+    return QStringLiteral("keep");
+  case CppImportMissingSourceResolution::Remove:
+    return QStringLiteral("remove");
+  case CppImportMissingSourceResolution::KeepManual:
+    return QStringLiteral("keep-manual");
+  }
+  return QStringLiteral("keep");
+}
+
+CppImportMissingSourceResolution
+cppImportMissingSourceResolutionFromString(const QString &value, bool *ok) {
+  const QString normalized = value.trimmed().toLower();
+  if (normalized == QStringLiteral("keep")) {
+    if (ok)
+      *ok = true;
+    return CppImportMissingSourceResolution::Keep;
+  }
+  if (normalized == QStringLiteral("remove")) {
+    if (ok)
+      *ok = true;
+    return CppImportMissingSourceResolution::Remove;
+  }
+  if (normalized == QStringLiteral("keep-manual")) {
+    if (ok)
+      *ok = true;
+    return CppImportMissingSourceResolution::KeepManual;
+  }
+  if (ok)
+    *ok = false;
+  return CppImportMissingSourceResolution::Keep;
+}
+
 QString CppImportItem::conflictKey() const {
   return symbol.symbolId.isEmpty()
              ? QString{}
              : QStringLiteral("element:%1").arg(symbol.symbolId);
+}
+
+QString CppImportItem::outOfScopeKey() const {
+  return existingElementId.isEmpty()
+             ? QString{}
+             : QStringLiteral("out-of-scope:element:%1").arg(existingElementId);
+}
+
+QString CppImportItem::missingSourceKey() const {
+  return existingElementId.isEmpty()
+             ? QString{}
+             : QStringLiteral("missing-source:element:%1")
+                   .arg(existingElementId);
 }
 
 bool CppImportItem::isResolvableConflict() const {
@@ -2505,15 +2698,52 @@ bool CppImportItem::isResolvableConflict() const {
          existingElement->id == desiredElement.id;
 }
 
+bool CppImportItem::isOutOfScope() const {
+  return action == CppImportAction::OutOfScope && !existingElementId.isEmpty();
+}
+
+bool CppImportItem::isOutOfScopeResolved() const {
+  return isOutOfScope() &&
+         outOfScopeResolution != CppImportOutOfScopeResolution::Unresolved;
+}
+
+bool CppImportItem::isMissingSource() const {
+  return action == CppImportAction::MissingSource &&
+         !existingElementId.isEmpty();
+}
+
+bool CppImportItem::shouldRemove() const {
+  return (isOutOfScope() &&
+          outOfScopeResolution == CppImportOutOfScopeResolution::Remove) ||
+         (isMissingSource() &&
+          missingSourceResolution == CppImportMissingSourceResolution::Remove);
+}
+
 bool CppImportItem::isApplicable() const {
   return action == CppImportAction::Create ||
          action == CppImportAction::Update ||
+         (isOutOfScope() &&
+          outOfScopeResolution == CppImportOutOfScopeResolution::KeepManual) ||
+         (isMissingSource() &&
+          missingSourceResolution ==
+              CppImportMissingSourceResolution::KeepManual) ||
          (isResolvableConflict() &&
           resolution != CppImportConflictResolution::Unresolved);
 }
 
 ModelElement CppImportItem::appliedElement() const {
   Q_ASSERT(isApplicable());
+  if (isOutOfScope() || isMissingSource()) {
+    Q_ASSERT(
+        (isOutOfScope() &&
+         outOfScopeResolution == CppImportOutOfScopeResolution::KeepManual) ||
+        (isMissingSource() &&
+         missingSourceResolution ==
+             CppImportMissingSourceResolution::KeepManual));
+    ModelElement retained = desiredElement;
+    retained.extra.remove(QString::fromLatin1(kBindingKey));
+    return retained;
+  }
   if (action != CppImportAction::Conflict ||
       resolution == CppImportConflictResolution::UseSource)
     return desiredElement;
@@ -2536,6 +2766,20 @@ QString CppRelationshipImportItem::conflictKey() const {
              : QStringLiteral("relationship:%1").arg(source.symbolId);
 }
 
+QString CppRelationshipImportItem::outOfScopeKey() const {
+  return existingRelationshipId.isEmpty()
+             ? QString{}
+             : QStringLiteral("out-of-scope:relationship:%1")
+                   .arg(existingRelationshipId);
+}
+
+QString CppRelationshipImportItem::missingSourceKey() const {
+  return existingRelationshipId.isEmpty()
+             ? QString{}
+             : QStringLiteral("missing-source:relationship:%1")
+                   .arg(existingRelationshipId);
+}
+
 bool CppRelationshipImportItem::isResolvableConflict() const {
   return action == CppImportAction::Conflict &&
          existingRelationship.has_value() &&
@@ -2543,15 +2787,53 @@ bool CppRelationshipImportItem::isResolvableConflict() const {
          existingRelationship->id == desiredRelationship.id;
 }
 
+bool CppRelationshipImportItem::isOutOfScope() const {
+  return action == CppImportAction::OutOfScope &&
+         !existingRelationshipId.isEmpty();
+}
+
+bool CppRelationshipImportItem::isOutOfScopeResolved() const {
+  return isOutOfScope() &&
+         outOfScopeResolution != CppImportOutOfScopeResolution::Unresolved;
+}
+
+bool CppRelationshipImportItem::isMissingSource() const {
+  return action == CppImportAction::MissingSource &&
+         !existingRelationshipId.isEmpty();
+}
+
+bool CppRelationshipImportItem::shouldRemove() const {
+  return (isOutOfScope() &&
+          outOfScopeResolution == CppImportOutOfScopeResolution::Remove) ||
+         (isMissingSource() &&
+          missingSourceResolution == CppImportMissingSourceResolution::Remove);
+}
+
 bool CppRelationshipImportItem::isApplicable() const {
   return action == CppImportAction::Create ||
          action == CppImportAction::Update ||
+         (isOutOfScope() &&
+          outOfScopeResolution == CppImportOutOfScopeResolution::KeepManual) ||
+         (isMissingSource() &&
+          missingSourceResolution ==
+              CppImportMissingSourceResolution::KeepManual) ||
          (isResolvableConflict() &&
           resolution != CppImportConflictResolution::Unresolved);
 }
 
 Relationship CppRelationshipImportItem::appliedRelationship() const {
   Q_ASSERT(isApplicable());
+  if (isOutOfScope() || isMissingSource()) {
+    Q_ASSERT(
+        (isOutOfScope() &&
+         outOfScopeResolution == CppImportOutOfScopeResolution::KeepManual) ||
+        (isMissingSource() &&
+         missingSourceResolution ==
+             CppImportMissingSourceResolution::KeepManual));
+    Relationship retained = desiredRelationship;
+    retained.extra.remove(QString::fromLatin1(kBindingKey));
+    return retained;
+  }
   if (action != CppImportAction::Conflict ||
       resolution == CppImportConflictResolution::UseSource)
     return desiredRelationship;
@@ -2628,8 +2910,7 @@ void configureCppImportStereotypes(CppImportOptions &options,
           QStringLiteral("private"));
   if (privateDefinition) {
     options.privateTypeStereotypeId = privateDefinition->id;
-    options.privateTypeStereotypeApplicableTo =
-        privateDefinition->applicableTo;
+    options.privateTypeStereotypeApplicableTo = privateDefinition->applicableTo;
   }
 }
 
@@ -2648,7 +2929,13 @@ int CppImportPreview::relationshipApplicableCount() const {
 }
 
 int CppImportPreview::applicableCount() const {
-  return elementApplicableCount() + relationshipApplicableCount();
+  const auto removalCount = [](const auto &values) {
+    return static_cast<int>(
+        std::count_if(values.cbegin(), values.cend(),
+                      [](const auto &item) { return item.shouldRemove(); }));
+  };
+  return elementApplicableCount() + relationshipApplicableCount() +
+         removalCount(items) + removalCount(relationshipItems);
 }
 
 int CppImportPreview::conflictCount() const {
@@ -2695,6 +2982,50 @@ int CppImportPreview::unresolvedConflictCount() const {
   return conflictCount() - resolvedConflictCount();
 }
 
+int CppImportPreview::missingSourceCount() const {
+  const auto count = [](const auto &values) {
+    return static_cast<int>(
+        std::count_if(values.cbegin(), values.cend(),
+                      [](const auto &item) { return item.isMissingSource(); }));
+  };
+  return count(items) + count(relationshipItems);
+}
+
+int CppImportPreview::selectedMissingSourceCount() const {
+  const auto count = [](const auto &values) {
+    return static_cast<int>(
+        std::count_if(values.cbegin(), values.cend(), [](const auto &item) {
+          return item.isMissingSource() &&
+                 item.missingSourceResolution !=
+                     CppImportMissingSourceResolution::Keep;
+        }));
+  };
+  return count(items) + count(relationshipItems);
+}
+
+int CppImportPreview::outOfScopeCount() const {
+  const auto count = [](const auto &values) {
+    return static_cast<int>(
+        std::count_if(values.cbegin(), values.cend(),
+                      [](const auto &item) { return item.isOutOfScope(); }));
+  };
+  return count(items) + count(relationshipItems);
+}
+
+int CppImportPreview::resolvedOutOfScopeCount() const {
+  const auto count = [](const auto &values) {
+    return static_cast<int>(
+        std::count_if(values.cbegin(), values.cend(), [](const auto &item) {
+          return item.isOutOfScopeResolved();
+        }));
+  };
+  return count(items) + count(relationshipItems);
+}
+
+int CppImportPreview::unresolvedOutOfScopeCount() const {
+  return outOfScopeCount() - resolvedOutOfScopeCount();
+}
+
 bool CppImportPreview::setConflictResolution(
     const QString &conflictKey, CppImportConflictResolution resolution) {
   for (auto &item : items) {
@@ -2724,6 +3055,69 @@ void CppImportPreview::resolveAllConflicts(
   for (auto &item : relationshipItems)
     if (item.isResolvableConflict())
       item.resolution = resolution;
+}
+
+bool CppImportPreview::setMissingSourceResolution(
+    const QString &missingSourceKey,
+    CppImportMissingSourceResolution resolution) {
+  for (auto &item : items) {
+    if (item.missingSourceKey() != missingSourceKey)
+      continue;
+    if (!item.isMissingSource())
+      return false;
+    item.missingSourceResolution = resolution;
+    return true;
+  }
+  for (auto &item : relationshipItems) {
+    if (item.missingSourceKey() != missingSourceKey)
+      continue;
+    if (!item.isMissingSource())
+      return false;
+    item.missingSourceResolution = resolution;
+    return true;
+  }
+  return false;
+}
+
+void CppImportPreview::resolveAllMissingSources(
+    CppImportMissingSourceResolution resolution) {
+  for (auto &item : items)
+    if (item.isMissingSource())
+      item.missingSourceResolution = resolution;
+  for (auto &item : relationshipItems)
+    if (item.isMissingSource())
+      item.missingSourceResolution = resolution;
+}
+
+bool CppImportPreview::setOutOfScopeResolution(
+    const QString &outOfScopeKey, CppImportOutOfScopeResolution resolution) {
+  for (auto &item : items) {
+    if (item.outOfScopeKey() != outOfScopeKey)
+      continue;
+    if (!item.isOutOfScope())
+      return false;
+    item.outOfScopeResolution = resolution;
+    return true;
+  }
+  for (auto &item : relationshipItems) {
+    if (item.outOfScopeKey() != outOfScopeKey)
+      continue;
+    if (!item.isOutOfScope())
+      return false;
+    item.outOfScopeResolution = resolution;
+    return true;
+  }
+  return false;
+}
+
+void CppImportPreview::resolveAllOutOfScope(
+    CppImportOutOfScopeResolution resolution) {
+  for (auto &item : items)
+    if (item.isOutOfScope())
+      item.outOfScopeResolution = resolution;
+  for (auto &item : relationshipItems)
+    if (item.isOutOfScope())
+      item.outOfScopeResolution = resolution;
 }
 
 bool CppImportService::available() { return YAUML_HAS_LIBCLANG != 0; }
@@ -2774,15 +3168,9 @@ CppImportService::replan(const CppImportPreview &discovery,
 
 int CppImportService::apply(ProjectData &project,
                             const CppImportPreview &preview) {
-  if (preview.ok) {
-    const QStringList roots =
-        !preview.sourceRoots.isEmpty()
-            ? preview.sourceRoots
-            : (preview.sourceRoot.isEmpty() ? QStringList{}
-                                            : QStringList{preview.sourceRoot});
-    if (!roots.isEmpty())
-      project.cppImport.sourceRoots = roots;
-  }
+  if (!preview.ok || preview.unresolvedOutOfScopeCount() > 0)
+    return 0;
+
   int applied = 0;
   for (const auto &item : preview.items) {
     if (!item.isApplicable())
@@ -2804,6 +3192,69 @@ int CppImportService::apply(ProjectData &project,
       project.relationships.append(std::move(appliedRelationship));
     ++applied;
   }
+
+  QSet<QString> removedElementIds;
+  for (const auto &item : preview.items)
+    if (item.shouldRemove())
+      removedElementIds.insert(item.existingElementId);
+  QSet<QString> removedRelationshipIds;
+  for (const auto &item : preview.relationshipItems)
+    if (item.shouldRemove())
+      removedRelationshipIds.insert(item.existingRelationshipId);
+
+  // Synthetic namespace packages can be shared by declarations from roots
+  // that remain selected. Retain and detach such a package instead of
+  // invalidating still-managed children.
+  for (auto &element : project.elements) {
+    if (!removedElementIds.contains(element.id) ||
+        element.type != ElementType::Package)
+      continue;
+    const bool stillUsed =
+        std::any_of(project.elements.cbegin(), project.elements.cend(),
+                    [&](const ModelElement &candidate) {
+                      return candidate.id != element.id &&
+                             !removedElementIds.contains(candidate.id) &&
+                             (candidate.packageId == element.id ||
+                              candidate.enclosingTypeId == element.id);
+                    });
+    if (stillUsed) {
+      removedElementIds.remove(element.id);
+      element.extra.remove(QString::fromLatin1(kBindingKey));
+      ++applied;
+    }
+  }
+
+  for (const QString &relationshipId : std::as_const(removedRelationshipIds)) {
+    if (findRelationship(project, relationshipId)) {
+      removeRelationshipAndPresentations(project, relationshipId);
+      ++applied;
+    }
+  }
+
+  QStringList orderedElementIds;
+  const auto appendElements = [&](bool packages) {
+    for (const auto &element : std::as_const(project.elements)) {
+      if (removedElementIds.contains(element.id) &&
+          (element.type == ElementType::Package) == packages)
+        orderedElementIds.append(element.id);
+    }
+  };
+  appendElements(false);
+  appendElements(true);
+  for (const QString &elementId : std::as_const(orderedElementIds)) {
+    if (findElement(project, elementId)) {
+      removeElementAndReferences(project, elementId);
+      ++applied;
+    }
+  }
+
+  const QStringList roots =
+      !preview.sourceRoots.isEmpty()
+          ? preview.sourceRoots
+          : (preview.sourceRoot.isEmpty() ? QStringList{}
+                                          : QStringList{preview.sourceRoot});
+  if (!roots.isEmpty())
+    project.cppImport.sourceRoots = roots;
   return applied;
 }
 

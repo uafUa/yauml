@@ -13,6 +13,7 @@
 #include <QCoreApplication>
 #include <QFileInfo>
 #include <QGuiApplication>
+#include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
 #include <QQuickStyle>
@@ -82,6 +83,8 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
     err << "Usage: yauml " << (apply ? "cpp-import" : "cpp-preview")
         << " <project-directory> "
            "[--conflicts=unresolved|keep-model|use-source] "
+           "[--missing-source=keep|remove|keep-manual] "
+           "[--out-of-scope=unresolved|remove|keep-manual] "
         << (apply ? "[--overwrite-external-changes] " : "")
         << "[source-directory ...]\n";
     return 64;
@@ -95,9 +98,15 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
 
   yauml::CppImportConflictResolution conflictResolution =
       yauml::CppImportConflictResolution::Unresolved;
+  yauml::CppImportMissingSourceResolution missingSourceResolution =
+      yauml::CppImportMissingSourceResolution::Keep;
+  yauml::CppImportOutOfScopeResolution outOfScopeResolution =
+      yauml::CppImportOutOfScopeResolution::Unresolved;
   bool overwriteExternalChanges = false;
   QStringList requestedSourcePaths;
   const QString conflictOption = QStringLiteral("--conflicts=");
+  const QString missingSourceOption = QStringLiteral("--missing-source=");
+  const QString outOfScopeOption = QStringLiteral("--out-of-scope=");
   for (qsizetype index = 3; index < arguments.size(); ++index) {
     const QString argument = arguments.at(index);
     if (argument.startsWith(conflictOption)) {
@@ -106,6 +115,23 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
           argument.mid(conflictOption.size()), &ok);
       if (!ok) {
         err << "Unknown C++ conflict resolution: " << argument << '\n';
+        return 64;
+      }
+    } else if (argument.startsWith(missingSourceOption)) {
+      bool ok = false;
+      missingSourceResolution =
+          yauml::cppImportMissingSourceResolutionFromString(
+              argument.mid(missingSourceOption.size()), &ok);
+      if (!ok) {
+        err << "Unknown missing-source resolution: " << argument << '\n';
+        return 64;
+      }
+    } else if (argument.startsWith(outOfScopeOption)) {
+      bool ok = false;
+      outOfScopeResolution = yauml::cppImportOutOfScopeResolutionFromString(
+          argument.mid(outOfScopeOption.size()), &ok);
+      if (!ok) {
+        err << "Unknown out-of-scope resolution: " << argument << '\n';
         return 64;
       }
     } else if (apply &&
@@ -134,7 +160,12 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   yauml::configureCppImportStereotypes(options, load.project);
   yauml::CppImportPreview preview = yauml::CppImportService::preview(
       sourcePaths, load.project.elements, load.project.relationships, options);
+  preview.previousSourceRoots = load.project.cppImport.sourceRoots;
+  preview = yauml::CppImportService::replan(preview, load.project.elements,
+                                            load.project.relationships);
   preview.resolveAllConflicts(conflictResolution);
+  preview.resolveAllMissingSources(missingSourceResolution);
+  preview.resolveAllOutOfScope(outOfScopeResolution);
   writeDiagnostics(preview.diagnostics, out, err);
   for (const auto &item : preview.items) {
     out << yauml::toString(item.action).toUpper() << " "
@@ -149,6 +180,10 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
                   ? QStringLiteral("resolution: %1")
                         .arg(yauml::toString(item.resolution))
                   : QStringLiteral("manual repair required"));
+    if (item.action == yauml::CppImportAction::OutOfScope)
+      out << " — decision: " << yauml::toString(item.outOfScopeResolution);
+    if (item.action == yauml::CppImportAction::MissingSource)
+      out << " — decision: " << yauml::toString(item.missingSourceResolution);
     out << '\n';
   }
   for (const auto &item : preview.relationshipItems) {
@@ -167,6 +202,10 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
                   ? QStringLiteral("resolution: %1")
                         .arg(yauml::toString(item.resolution))
                   : QStringLiteral("manual repair required"));
+    if (item.action == yauml::CppImportAction::OutOfScope)
+      out << " — decision: " << yauml::toString(item.outOfScopeResolution);
+    if (item.action == yauml::CppImportAction::MissingSource)
+      out << " — decision: " << yauml::toString(item.missingSourceResolution);
     out << '\n';
   }
   if (!preview.ok)
@@ -180,8 +219,15 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
         << preview.relationships.size() << " relationship(s), "
         << preview.applicableCount() << " applicable change(s), "
         << preview.conflictCount() << " conflict(s), "
-        << preview.unresolvedConflictCount() << " unresolved\n";
-    return preview.unresolvedConflictCount() > 0 ? 3 : 0;
+        << preview.unresolvedConflictCount() << " unresolved conflict(s), "
+        << preview.missingSourceCount() << " not found in scan, "
+        << preview.selectedMissingSourceCount() << " selected for cleanup, "
+        << preview.outOfScopeCount() << " out-of-scope item(s), "
+        << preview.unresolvedOutOfScopeCount() << " unresolved\n";
+    return preview.unresolvedConflictCount() > 0 ||
+                   preview.unresolvedOutOfScopeCount() > 0
+               ? 3
+               : 0;
   }
 
   yauml::ProjectData imported = load.project;
@@ -201,8 +247,17 @@ int runCppImportCommand(int argc, char *argv[], bool apply) {
   if (preview.unresolvedConflictCount() > 0)
     out << "; " << preview.unresolvedConflictCount()
         << " conflict(s) remain unresolved";
+  if (preview.unresolvedOutOfScopeCount() > 0)
+    out << "; " << preview.unresolvedOutOfScopeCount()
+        << " out-of-scope item(s) remain unresolved";
+  if (preview.selectedMissingSourceCount() > 0)
+    out << "; " << preview.selectedMissingSourceCount()
+        << " not-found item(s) resolved";
   out << '\n';
-  return preview.unresolvedConflictCount() > 0 ? 3 : 0;
+  return preview.unresolvedConflictCount() > 0 ||
+                 preview.unresolvedOutOfScopeCount() > 0
+             ? 3
+             : 0;
 }
 
 } // namespace
@@ -230,6 +285,7 @@ int main(int argc, char *argv[]) {
   application.setApplicationDisplayName(QStringLiteral("yauml"));
   application.setApplicationVersion(QStringLiteral(YAUML_VERSION));
   application.setOrganizationName(QStringLiteral("yauml"));
+  application.setWindowIcon(QIcon(QStringLiteral(":/branding/yaml-icon.png")));
   migratePreviousProductSettings();
 
   qmlRegisterType<yauml::DiagramCanvas>("Yauml.Native", 1, 0, "DiagramCanvas");
@@ -276,8 +332,8 @@ int main(int argc, char *argv[]) {
   engine.rootContext()->setContextProperty(QStringLiteral("uiTheme"), &uiTheme);
   engine.rootContext()->setContextProperty(QStringLiteral("iconRegistry"),
                                            &iconRegistry);
-  engine.rootContext()->setContextProperty(
-      QStringLiteral("updateController"), &updateController);
+  engine.rootContext()->setContextProperty(QStringLiteral("updateController"),
+                                           &updateController);
   QObject::connect(
       &engine, &QQmlApplicationEngine::objectCreationFailed, &application,
       [] { QCoreApplication::exit(1); }, Qt::QueuedConnection);

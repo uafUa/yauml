@@ -18,8 +18,21 @@ class ProjectTreeModel final : public QAbstractItemModel {
   Q_OBJECT
   Q_PROPERTY(QString searchPattern READ searchPattern WRITE setSearchPattern
                  NOTIFY searchPatternChanged)
+  Q_PROPERTY(
+      QStringList columns READ columns WRITE setColumns NOTIFY columnsChanged)
 public:
-  enum Role { IdRole = Qt::UserRole + 1, KindRole, TypeRole, NestedRole };
+  enum Role {
+    IdRole = Qt::UserRole + 1,
+    KindRole,
+    TypeRole,
+    NestedRole,
+    NameRole,
+    SourcePathRole,
+    SourceDirectoryRole,
+    SourceFileRole,
+    StereotypesRole,
+    QualifiedNameRole
+  };
   Q_ENUM(Role)
 
   explicit ProjectTreeModel(ProjectController *controller);
@@ -30,6 +43,8 @@ public:
   int rowCount(const QModelIndex &parent = QModelIndex()) const override;
   int columnCount(const QModelIndex &parent = QModelIndex()) const override;
   QVariant data(const QModelIndex &index, int role) const override;
+  QVariant headerData(int section, Qt::Orientation orientation,
+                      int role = Qt::DisplayRole) const override;
   QHash<int, QByteArray> roleNames() const override;
   Q_INVOKABLE QModelIndex indexForObject(const QString &objectId,
                                          const QString &kind) const;
@@ -45,12 +60,15 @@ public:
   Q_INVOKABLE void startTreeDrag(const QModelIndexList &indexes);
   QString searchPattern() const;
   void setSearchPattern(const QString &pattern);
+  QStringList columns() const;
+  void setColumns(const QStringList &columns);
 
 public slots:
   void reset();
 
 signals:
   void searchPatternChanged();
+  void columnsChanged();
 
 private:
   struct TreeNode;
@@ -67,6 +85,7 @@ private:
 
   ProjectController *m_controller;
   QString m_searchPattern;
+  QStringList m_columns{QStringLiteral("name")};
   QPersistentModelIndex m_selectionAnchor;
   std::vector<std::unique_ptr<TreeNode>> m_nodes;
   TreeNode *m_invisibleRoot = nullptr;

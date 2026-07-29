@@ -19,6 +19,7 @@ namespace {
 
 constexpr int kDefaultDetachedWidth = 900;
 constexpr int kDefaultDetachedHeight = 650;
+constexpr int kWheelGestureQuietPeriodMs = 250;
 constexpr auto kDiagramMimeType = "application/x-yauml-diagram-id";
 
 QRect defaultDetachedGeometry(int x = 120, int y = 120) {
@@ -68,6 +69,21 @@ WorkspaceController::WorkspaceController(ProjectController *project,
 WorkspaceController::~WorkspaceController() {
   if (m_persistenceEnabled)
     persistWorkspace();
+}
+
+void WorkspaceController::noteProjectTreeWheelInput() {
+  m_projectTreeWheelInput.restart();
+}
+
+bool WorkspaceController::consumeDiagramWheelSuppression() {
+  if (!m_projectTreeWheelInput.isValid() ||
+      m_projectTreeWheelInput.elapsed() > kWheelGestureQuietPeriodMs)
+    return false;
+
+  // Restart for every discarded event: suppression ends only after the
+  // physical wheel/touchpad gesture has actually gone quiet.
+  m_projectTreeWheelInput.restart();
+  return true;
 }
 
 int WorkspaceController::rowCount(const QModelIndex &parent) const {

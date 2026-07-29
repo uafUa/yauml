@@ -179,6 +179,28 @@ QStringList browserItemKeysFromJson(const ProjectData &project,
   return keys;
 }
 
+QStringList nestedTypeDeletionOrder(const ProjectData &project,
+                                    const QStringList &requestedElementIds) {
+  QStringList result;
+  QSet<QString> visited;
+  const auto appendDescendantsFirst = [&](const auto &self,
+                                          const QString &elementId) -> void {
+    if (elementId.isEmpty() || visited.contains(elementId) ||
+        !findElement(project, elementId)) {
+      return;
+    }
+    visited.insert(elementId);
+    for (const auto &candidate : project.elements) {
+      if (candidate.enclosingTypeId == elementId)
+        self(self, candidate.id);
+    }
+    result.append(elementId);
+  };
+  for (const QString &elementId : requestedElementIds)
+    appendDescendantsFirst(appendDescendantsFirst, elementId);
+  return result;
+}
+
 QStringList missingRelatedTypeIds(const ProjectData &project,
                                   const Diagram &diagram,
                                   const QString &elementId, bool incoming) {
@@ -555,6 +577,24 @@ QPointF anchorPoint(const QRectF &rect, const ConnectorAnchor &anchor) {
   return rect.center();
 }
 
+QPointF resolvedConnectorAnchorPoint(const ConnectorPresentation &connector,
+                                     bool source,
+                                     const QRectF &endpointGeometry,
+                                     const QRectF &otherEndpointGeometry) {
+  const ConnectorAnchor &anchor =
+      source ? connector.sourceAnchor : connector.targetAnchor;
+  if (anchor.side != ConnectorSide::Automatic)
+    return anchorPoint(endpointGeometry, anchor);
+
+  const QPointF automaticTarget =
+      connector.bendPoints.isEmpty()
+          ? otherEndpointGeometry.center()
+          : (source ? connector.bendPoints.constFirst().position
+                    : connector.bendPoints.constLast().position);
+  return anchorPoint(endpointGeometry,
+                     edgeAnchorToward(endpointGeometry, automaticTarget));
+}
+
 bool horizontalSide(ConnectorSide side) {
   return side == ConnectorSide::Left || side == ConnectorSide::Right;
 }
@@ -850,6 +890,129 @@ NodePortSnapPointChange nodePortSnapPointChange(const ProjectData &project,
     appendEndpointChange(connector, false);
   }
   return change;
+}
+
+QList<const NodePresentation *>
+commonConnectorEndpointNodes(const ProjectData &project, const Diagram &diagram,
+                             const QStringList &connectorIds) {
+  const QSet<QString> requested(connectorIds.cbegin(), connectorIds.cend());
+  if (requested.size() < 2)
+    return {};
+
+  QSet<QString> commonElementIds;
+  qsizetype matchedConnectorCount = 0;
+  for (const auto &connector : diagram.connectors) {
+    if (!requested.contains(connector.id))
+      continue;
+    const auto *relationship =
+        findRelationship(project, connector.relationshipId);
+    if (!relationship)
+      return {};
+    const QSet<QString> endpointElementIds{relationship->sourceId,
+                                           relationship->targetId};
+    if (matchedConnectorCount == 0)
+      commonElementIds = endpointElementIds;
+    else
+      commonElementIds.intersect(endpointElementIds);
+    ++matchedConnectorCount;
+    if (commonElementIds.isEmpty())
+      return {};
+  }
+  if (matchedConnectorCount != requested.size())
+    return {};
+
+  QList<const NodePresentation *> nodes;
+  QSet<QString> representedElementIds;
+  for (const auto &node : diagram.nodes) {
+    if (!commonElementIds.contains(node.elementId) ||
+        representedElementIds.contains(node.elementId)) {
+      continue;
+    }
+    nodes.append(&node);
+    representedElementIds.insert(node.elementId);
+  }
+  return representedElementIds.size() == commonElementIds.size()
+             ? nodes
+             : QList<const NodePresentation *>{};
+}
+
+struct ReattachEndpoint {
+  qsizetype connectorIndex = -1;
+  bool source = false;
+  qreal remoteProjection = 0.0;
+};
+
+struct ShiftEndpoint {
+  qsizetype connectorIndex = -1;
+  bool source = false;
+  ConnectorSide side = ConnectorSide::Automatic;
+  int snapIndex = -1;
+};
+
+QString connectorEndpointKey(const QString &connectorId, bool source) {
+  return connectorId +
+         (source ? QStringLiteral("|source") : QStringLiteral("|target"));
+}
+
+int snapOffsetIndex(const QVector<qreal> &offsets, qreal offset) {
+  constexpr qreal kOffsetTolerance = 0.000001;
+  for (int index = 0; index < offsets.size(); ++index)
+    if (std::abs(offsets.at(index) - offset) <= kOffsetTolerance)
+      return index;
+  return -1;
+}
+
+QVector<qreal> availableSnapOffsets(int beforePointCount, int afterPointCount,
+                                    const QList<qreal> &occupiedBeforeOffsets) {
+  const QVector<qreal> offsets = connector_ports::snapOffsets(afterPointCount);
+  QVector<bool> occupied(offsets.size(), false);
+  for (const qreal beforeOffset : occupiedBeforeOffsets) {
+    bool attached = false;
+    const qreal afterOffset = connector_ports::remapAttachedOffset(
+        beforeOffset, beforePointCount, afterPointCount, &attached);
+    if (!attached)
+      continue;
+    const int index = snapOffsetIndex(offsets, afterOffset);
+    if (index >= 0)
+      occupied[index] = true;
+  }
+
+  QVector<qreal> available;
+  available.reserve(offsets.size());
+  for (int index = 0; index < offsets.size(); ++index)
+    if (!occupied.at(index))
+      available.append(offsets.at(index));
+  return available;
+}
+
+QVector<qreal> spreadAcrossAvailableOffsets(const QVector<qreal> &available,
+                                            qsizetype requestedCount) {
+  QVector<qreal> result;
+  if (requestedCount <= 0 || available.size() < requestedCount)
+    return result;
+  result.reserve(requestedCount);
+  if (requestedCount == 1) {
+    result.append(available.at(available.size() / 2));
+    return result;
+  }
+
+  // Use the complete available range while retaining strict ordering. This
+  // avoids bunching a two-connector fan around one end merely because every
+  // side has an odd number of snap points.
+  int previousIndex = -1;
+  for (qsizetype index = 0; index < requestedCount; ++index) {
+    const qreal proportionalIndex = static_cast<qreal>(index) *
+                                    (available.size() - 1) /
+                                    (requestedCount - 1);
+    int selectedIndex = qRound(proportionalIndex);
+    selectedIndex = std::max(selectedIndex, previousIndex + 1);
+    const int lastAllowed =
+        available.size() - static_cast<int>(requestedCount - index);
+    selectedIndex = std::min(selectedIndex, lastAllowed);
+    result.append(available.at(selectedIndex));
+    previousIndex = selectedIndex;
+  }
+  return result;
 }
 
 QList<NodePortSnapPointChange>
@@ -1619,6 +1782,9 @@ void ProjectController::assignStereotypes(const QString &kind,
 }
 
 int ProjectController::applyCppImportPlan(const CppImportPreview &preview) {
+  if (preview.unresolvedOutOfScopeCount() > 0)
+    return 0;
+
   QList<ModelElement> desiredElements;
   desiredElements.reserve(preview.elementApplicableCount());
   for (const auto &item : preview.items)
@@ -1629,6 +1795,45 @@ int ProjectController::applyCppImportPlan(const CppImportPreview &preview) {
   for (const auto &item : preview.relationshipItems)
     if (item.isApplicable())
       desiredRelationships.append(item.appliedRelationship());
+
+  QSet<QString> removedElementIds;
+  for (const auto &item : preview.items)
+    if (item.shouldRemove())
+      removedElementIds.insert(item.existingElementId);
+  QSet<QString> removedRelationshipIds;
+  for (const auto &item : preview.relationshipItems)
+    if (item.shouldRemove())
+      removedRelationshipIds.insert(item.existingRelationshipId);
+
+  // A namespace package can be represented by source declarations from more
+  // than one selected root. Never delete it while a retained model element
+  // still uses it; detach the package from synchronization instead.
+  for (const auto &element : m_data.elements) {
+    if (!removedElementIds.contains(element.id) ||
+        element.type != ElementType::Package)
+      continue;
+    const bool stillUsed =
+        std::any_of(m_data.elements.cbegin(), m_data.elements.cend(),
+                    [&](const ModelElement &candidate) {
+                      return candidate.id != element.id &&
+                             !removedElementIds.contains(candidate.id) &&
+                             (candidate.packageId == element.id ||
+                              candidate.enclosingTypeId == element.id);
+                    });
+    if (!stillUsed)
+      continue;
+    removedElementIds.remove(element.id);
+    ModelElement retained = element;
+    retained.extra.remove(QStringLiteral("sourceBinding"));
+    desiredElements.append(std::move(retained));
+    m_diagnostics.addWarning(
+        QStringLiteral("cpp-import"),
+        QStringLiteral("Retained package %1 because model elements outside "
+                       "the removed source folders still use it")
+            .arg(element.name),
+        element.id);
+  }
+
   const QStringList sourceRoots =
       !preview.sourceRoots.isEmpty()
           ? preview.sourceRoots
@@ -1637,12 +1842,54 @@ int ProjectController::applyCppImportPlan(const CppImportPreview &preview) {
   const bool sourceRootsChanged =
       !sourceRoots.isEmpty() && sourceRoots != m_data.cppImport.sourceRoots;
   if (desiredElements.isEmpty() && desiredRelationships.isEmpty() &&
+      removedElementIds.isEmpty() && removedRelationshipIds.isEmpty() &&
       !sourceRootsChanged)
     return 0;
-  const int count = desiredElements.size() + desiredRelationships.size();
+
+  const int count = desiredElements.size() + desiredRelationships.size() +
+                    removedElementIds.size() + removedRelationshipIds.size();
+  const bool needsMacro =
+      !removedElementIds.isEmpty() || !removedRelationshipIds.isEmpty();
+  if (needsMacro)
+    m_undoStack.beginMacro(QStringLiteral("Synchronize C++ sources"));
   pushCommand(std::make_unique<ApplyCppImportCommand>(
       this, m_data, std::move(desiredElements), std::move(desiredRelationships),
       sourceRoots));
+
+  // Explicit relationship removals come first. Element deletion then cascades
+  // any remaining incident relationships and their connector presentations.
+  QStringList orderedRelationshipIds;
+  for (const auto &relationship : std::as_const(m_data.relationships)) {
+    if (removedRelationshipIds.contains(relationship.id))
+      orderedRelationshipIds.append(relationship.id);
+  }
+  for (const QString &relationshipId : std::as_const(orderedRelationshipIds)) {
+    if (findRelationship(m_data, relationshipId)) {
+      pushCommand(std::make_unique<DeleteRelationshipCommand>(this, m_data,
+                                                              relationshipId));
+    }
+  }
+
+  // Remove types before packages. Package deletion reparents any retained
+  // children, while packages selected for deletion are handled last.
+  QStringList orderedElementIds;
+  const auto appendByPackageState = [&](bool packages) {
+    for (const auto &element : std::as_const(m_data.elements)) {
+      if (removedElementIds.contains(element.id) &&
+          (element.type == ElementType::Package) == packages)
+        orderedElementIds.append(element.id);
+    }
+  };
+  appendByPackageState(false);
+  appendByPackageState(true);
+  for (const QString &elementId : std::as_const(orderedElementIds)) {
+    if (findElement(m_data, elementId)) {
+      pushCommand(
+          std::make_unique<DeleteElementCommand>(this, m_data, elementId));
+    }
+  }
+  if (needsMacro)
+    m_undoStack.endMacro();
   return count;
 }
 
@@ -1831,6 +2078,8 @@ void ProjectController::deleteBrowserItems(const QString &itemsJson) {
       folderIds.size() + elementIds.size() + diagramIds.size();
   if (requestedCount == 0)
     return;
+  const QStringList elementsToDelete =
+      nestedTypeDeletionOrder(m_data, elementIds);
 
   m_undoStack.beginMacro(
       requestedCount == 1
@@ -1839,7 +2088,11 @@ void ProjectController::deleteBrowserItems(const QString &itemsJson) {
   for (const QString &folderId : folderIds)
     pushCommand(
         std::make_unique<DeleteBrowserFolderCommand>(this, m_data, folderId));
-  for (const QString &elementId : elementIds)
+  // Nested types are semantic children, not merely browser-tree children.
+  // Delete descendants first so each DeleteElementCommand can retain its
+  // focused snapshot/revert logic without temporarily promoting surviving
+  // children to the deleted owner's parent.
+  for (const QString &elementId : elementsToDelete)
     pushCommand(
         std::make_unique<DeleteElementCommand>(this, m_data, elementId));
   for (const QString &diagramId : diagramIds)
@@ -3211,14 +3464,28 @@ void ProjectController::deleteRelationships(
 void ProjectController::deleteElement(const QString &elementId) {
   if (!findElement(m_data, elementId))
     return;
-  pushCommand(std::make_unique<DeleteElementCommand>(this, m_data, elementId));
-  if (m_selectedKind == QStringLiteral("element") && m_selectedId == elementId)
+  const QStringList elementsToDelete =
+      nestedTypeDeletionOrder(m_data, {elementId});
+  const bool cascadesNestedTypes = elementsToDelete.size() > 1;
+  if (cascadesNestedTypes)
+    m_undoStack.beginMacro(QStringLiteral("Delete type and nested types"));
+  for (const QString &id : elementsToDelete)
+    pushCommand(std::make_unique<DeleteElementCommand>(this, m_data, id));
+  if (cascadesNestedTypes)
+    m_undoStack.endMacro();
+  if (m_selectedKind == QStringLiteral("element") &&
+      elementsToDelete.contains(m_selectedId))
     clearSelection();
 }
 
 void ProjectController::selectObject(const QString &id, const QString &kind) {
-  if (m_selectedId == id && m_selectedKind == kind)
+  if (m_selectedId == id && m_selectedKind == kind) {
+    // Selection is also an interaction notification. A repeated diagram click
+    // lets other views recover if their local selection changed while the
+    // semantic object remained active.
+    emit selectionReasserted();
     return;
+  }
   m_selectedId = id;
   m_selectedKind = kind;
   emit selectionChanged();
@@ -3671,6 +3938,380 @@ void ProjectController::updateConnectorAnchor(const QString &diagramId,
     return;
   pushCommand(std::make_unique<MoveConnectorAnchorCommand>(
       this, diagramId, connectorId, source, before, after));
+}
+
+bool ProjectController::canReattachConnectorEnds(
+    const QString &diagramId, const QStringList &connectorIds) const {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  return diagram &&
+         !commonConnectorEndpointNodes(m_data, *diagram, connectorIds)
+              .isEmpty();
+}
+
+void ProjectController::reattachConnectorEnds(const QString &diagramId,
+                                              const QStringList &connectorIds,
+                                              const QString &side) {
+  bool sideOk = false;
+  const ConnectorSide parsedSide = connectorSideFromString(side, &sideOk);
+  if (!sideOk || parsedSide == ConnectorSide::Automatic) {
+    m_diagnostics.addError(
+        QStringLiteral("command"),
+        QStringLiteral("Cannot reattach connector ends to unknown side '%1'")
+            .arg(side),
+        diagramId);
+    return;
+  }
+
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram)
+    return;
+  const QList<const NodePresentation *> commonNodes =
+      commonConnectorEndpointNodes(m_data, *diagram, connectorIds);
+  if (commonNodes.isEmpty())
+    return;
+
+  const QSet<QString> selectedConnectorIds(connectorIds.cbegin(),
+                                           connectorIds.cend());
+  QHash<QString, const NodePresentation *> nodeByElementId;
+  nodeByElementId.reserve(diagram->nodes.size());
+  for (const auto &node : diagram->nodes)
+    if (!nodeByElementId.contains(node.elementId))
+      nodeByElementId.insert(node.elementId, &node);
+
+  const bool verticalSide =
+      parsedSide == ConnectorSide::Left || parsedSide == ConnectorSide::Right;
+  QList<NodePortSnapPointChange> portChanges;
+  QList<ConnectorEndpointAnchorChange> anchorChanges;
+  bool materialChange = false;
+
+  for (const auto *commonNode : commonNodes) {
+    QList<ReattachEndpoint> endpoints;
+    QSet<QString> arrangedEndpointKeys;
+    for (qsizetype connectorIndex = 0;
+         connectorIndex < diagram->connectors.size(); ++connectorIndex) {
+      const auto &connector = diagram->connectors.at(connectorIndex);
+      if (!selectedConnectorIds.contains(connector.id))
+        continue;
+      const auto *relationship =
+          findRelationship(m_data, connector.relationshipId);
+      if (!relationship)
+        return;
+
+      const auto appendEndpoint = [&](bool source,
+                                      const QString &remoteElementId) {
+        const auto *remoteNode =
+            nodeByElementId.value(remoteElementId, nullptr);
+        if (!remoteNode)
+          return false;
+        const QPointF remoteEndpoint = resolvedConnectorAnchorPoint(
+            connector, !source, remoteNode->geometry, commonNode->geometry);
+        endpoints.append(
+            {connectorIndex, source,
+             verticalSide ? remoteEndpoint.y() : remoteEndpoint.x()});
+        arrangedEndpointKeys.insert(connectorEndpointKey(connector.id, source));
+        return true;
+      };
+      if (relationship->sourceId == commonNode->elementId &&
+          !appendEndpoint(true, relationship->targetId)) {
+        return;
+      }
+      if (relationship->targetId == commonNode->elementId &&
+          !appendEndpoint(false, relationship->sourceId)) {
+        return;
+      }
+    }
+    if (endpoints.isEmpty())
+      continue;
+
+    std::stable_sort(
+        endpoints.begin(), endpoints.end(),
+        [](const ReattachEndpoint &left, const ReattachEndpoint &right) {
+          constexpr qreal kProjectionTolerance = 0.000001;
+          if (std::abs(left.remoteProjection - right.remoteProjection) >
+              kProjectionTolerance) {
+            return left.remoteProjection < right.remoteProjection;
+          }
+          if (left.connectorIndex != right.connectorIndex)
+            return left.connectorIndex < right.connectorIndex;
+          return left.source && !right.source;
+        });
+
+    const int beforePointCount =
+        connector_ports::snapPointCountForSide(*commonNode, parsedSide);
+    QList<qreal> occupiedBeforeOffsets;
+    const auto collectOccupiedEndpoint =
+        [&](const ConnectorPresentation &connector, bool source,
+            const Relationship &relationship) {
+          if (arrangedEndpointKeys.contains(
+                  connectorEndpointKey(connector.id, source))) {
+            return;
+          }
+          const QString &elementId =
+              source ? relationship.sourceId : relationship.targetId;
+          const ConnectorAnchor &anchor =
+              source ? connector.sourceAnchor : connector.targetAnchor;
+          if (elementId != commonNode->elementId || anchor.side != parsedSide) {
+            return;
+          }
+          bool attached = false;
+          connector_ports::remapAttachedOffset(anchor.offset, beforePointCount,
+                                               beforePointCount, &attached);
+          if (attached)
+            occupiedBeforeOffsets.append(anchor.offset);
+        };
+    for (const auto &connector : diagram->connectors) {
+      const auto *relationship =
+          findRelationship(m_data, connector.relationshipId);
+      if (!relationship)
+        continue;
+      collectOccupiedEndpoint(connector, true, *relationship);
+      collectOccupiedEndpoint(connector, false, *relationship);
+    }
+
+    int afterPointCount = beforePointCount;
+    QVector<qreal> availableOffsets;
+    for (; afterPointCount <= connector_ports::kMaximumSnapPointCount;
+         afterPointCount += 2) {
+      availableOffsets = availableSnapOffsets(beforePointCount, afterPointCount,
+                                              occupiedBeforeOffsets);
+      if (availableOffsets.size() >= endpoints.size())
+        break;
+    }
+    if (afterPointCount > connector_ports::kMaximumSnapPointCount) {
+      m_diagnostics.addWarning(
+          QStringLiteral("command"),
+          QStringLiteral(
+              "Cannot arrange %1 connector ends on one side: the maximum "
+              "of %2 snap points would be insufficient")
+              .arg(endpoints.size())
+              .arg(connector_ports::kMaximumSnapPointCount),
+          commonNode->id);
+      return;
+    }
+
+    int afterHorizontal = commonNode->horizontalPortSnapPoints;
+    int afterVertical = commonNode->verticalPortSnapPoints;
+    if (verticalSide)
+      afterVertical = afterPointCount;
+    else
+      afterHorizontal = afterPointCount;
+    if (afterHorizontal != commonNode->horizontalPortSnapPoints ||
+        afterVertical != commonNode->verticalPortSnapPoints) {
+      portChanges.append(nodePortSnapPointChange(
+          m_data, *diagram, *commonNode, afterHorizontal, afterVertical));
+      materialChange = true;
+    }
+
+    const QVector<qreal> assignedOffsets =
+        spreadAcrossAvailableOffsets(availableOffsets, endpoints.size());
+    Q_ASSERT(assignedOffsets.size() == endpoints.size());
+    for (qsizetype index = 0; index < endpoints.size(); ++index) {
+      const auto &endpoint = endpoints.at(index);
+      const auto &connector = diagram->connectors.at(endpoint.connectorIndex);
+      const ConnectorAnchor before =
+          endpoint.source ? connector.sourceAnchor : connector.targetAnchor;
+      ConnectorAnchor after = before;
+      after.side = parsedSide;
+      after.offset = assignedOffsets.at(index);
+      anchorChanges.append(
+          {connector.id, endpoint.source, before, std::move(after)});
+      materialChange =
+          materialChange || before != anchorChanges.constLast().after;
+    }
+  }
+
+  if (!materialChange)
+    return;
+  pushCommand(std::make_unique<UpdateConnectorEndsCommand>(
+      this, diagramId, std::move(portChanges), std::move(anchorChanges),
+      QStringLiteral("Reattach connector ends to %1 side")
+          .arg(toString(parsedSide))));
+}
+
+bool ProjectController::canShiftConnectorEnds(
+    const QString &diagramId, const QStringList &connectorIds) const {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram)
+    return false;
+  const QList<const NodePresentation *> commonNodes =
+      commonConnectorEndpointNodes(m_data, *diagram, connectorIds);
+  if (commonNodes.isEmpty())
+    return false;
+
+  const QSet<QString> selectedConnectorIds(connectorIds.cbegin(),
+                                           connectorIds.cend());
+  bool foundEndpoint = false;
+  for (const auto *commonNode : commonNodes) {
+    for (const auto &connector : diagram->connectors) {
+      if (!selectedConnectorIds.contains(connector.id))
+        continue;
+      const auto *relationship =
+          findRelationship(m_data, connector.relationshipId);
+      if (!relationship)
+        return false;
+      const auto endpointIsShiftable = [&](bool source) {
+        const QString &elementId =
+            source ? relationship->sourceId : relationship->targetId;
+        if (elementId != commonNode->elementId)
+          return true;
+        foundEndpoint = true;
+        const ConnectorAnchor &anchor =
+            source ? connector.sourceAnchor : connector.targetAnchor;
+        if (anchor.side == ConnectorSide::Automatic)
+          return false;
+        const int pointCount =
+            connector_ports::snapPointCountForSide(*commonNode, anchor.side);
+        return snapOffsetIndex(connector_ports::snapOffsets(pointCount),
+                               anchor.offset) >= 0;
+      };
+      if (!endpointIsShiftable(true) || !endpointIsShiftable(false))
+        return false;
+    }
+  }
+  return foundEndpoint;
+}
+
+void ProjectController::shiftConnectorEnds(const QString &diagramId,
+                                           const QStringList &connectorIds,
+                                           const QString &direction) {
+  const bool towardStart = direction == QStringLiteral("left");
+  if (!towardStart && direction != QStringLiteral("right")) {
+    m_diagnostics.addError(
+        QStringLiteral("command"),
+        QStringLiteral("Unknown connector-end shift direction: %1")
+            .arg(direction),
+        diagramId);
+    return;
+  }
+
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || !canShiftConnectorEnds(diagramId, connectorIds))
+    return;
+  const QList<const NodePresentation *> commonNodes =
+      commonConnectorEndpointNodes(m_data, *diagram, connectorIds);
+  const QSet<QString> selectedConnectorIds(connectorIds.cbegin(),
+                                           connectorIds.cend());
+  const int indexDelta = towardStart ? -1 : 1;
+  QList<NodePortSnapPointChange> portChanges;
+  QList<ConnectorEndpointAnchorChange> anchorChanges;
+
+  for (const auto *commonNode : commonNodes) {
+    QHash<int, QList<ShiftEndpoint>> endpointsBySide;
+    for (qsizetype connectorIndex = 0;
+         connectorIndex < diagram->connectors.size(); ++connectorIndex) {
+      const auto &connector = diagram->connectors.at(connectorIndex);
+      if (!selectedConnectorIds.contains(connector.id))
+        continue;
+      const auto *relationship =
+          findRelationship(m_data, connector.relationshipId);
+      if (!relationship)
+        return;
+      const auto appendEndpoint = [&](bool source) {
+        const QString &elementId =
+            source ? relationship->sourceId : relationship->targetId;
+        if (elementId != commonNode->elementId)
+          return;
+        const ConnectorAnchor &anchor =
+            source ? connector.sourceAnchor : connector.targetAnchor;
+        const int pointCount =
+            connector_ports::snapPointCountForSide(*commonNode, anchor.side);
+        const int index = snapOffsetIndex(
+            connector_ports::snapOffsets(pointCount), anchor.offset);
+        Q_ASSERT(anchor.side != ConnectorSide::Automatic && index >= 0);
+        endpointsBySide[static_cast<int>(anchor.side)].append(
+            {connectorIndex, source, anchor.side, index});
+      };
+      appendEndpoint(true);
+      appendEndpoint(false);
+    }
+
+    bool growHorizontal = false;
+    bool growVertical = false;
+    for (auto group = endpointsBySide.cbegin(); group != endpointsBySide.cend();
+         ++group) {
+      const ConnectorSide side = static_cast<ConnectorSide>(group.key());
+      const int pointCount =
+          connector_ports::snapPointCountForSide(*commonNode, side);
+      const bool needsGrowth = std::any_of(
+          group->cbegin(), group->cend(), [&](const ShiftEndpoint &endpoint) {
+            const int destination = endpoint.snapIndex + indexDelta;
+            return destination < 0 || destination >= pointCount;
+          });
+      if (!needsGrowth)
+        continue;
+      if (side == ConnectorSide::Top || side == ConnectorSide::Bottom)
+        growHorizontal = true;
+      else
+        growVertical = true;
+    }
+
+    int afterHorizontal = commonNode->horizontalPortSnapPoints;
+    int afterVertical = commonNode->verticalPortSnapPoints;
+    const auto growPointCount = [&](int current, const QString &axis) {
+      if (current + 2 <= connector_ports::kMaximumSnapPointCount)
+        return current + 2;
+      m_diagnostics.addWarning(
+          QStringLiteral("command"),
+          QStringLiteral(
+              "Cannot shift connector ends further along the %1 axis: "
+              "the maximum of %2 snap points has been reached")
+              .arg(axis)
+              .arg(connector_ports::kMaximumSnapPointCount),
+          commonNode->id);
+      return -1;
+    };
+    if (growHorizontal) {
+      afterHorizontal =
+          growPointCount(afterHorizontal, QStringLiteral("horizontal"));
+      if (afterHorizontal < 0)
+        return;
+    }
+    if (growVertical) {
+      afterVertical = growPointCount(afterVertical, QStringLiteral("vertical"));
+      if (afterVertical < 0)
+        return;
+    }
+    if (growHorizontal || growVertical) {
+      portChanges.append(nodePortSnapPointChange(
+          m_data, *diagram, *commonNode, afterHorizontal, afterVertical));
+    }
+
+    for (auto group = endpointsBySide.cbegin(); group != endpointsBySide.cend();
+         ++group) {
+      const ConnectorSide side = static_cast<ConnectorSide>(group.key());
+      const int beforePointCount =
+          connector_ports::snapPointCountForSide(*commonNode, side);
+      const int afterPointCount =
+          snapPointCountForSide(side, afterHorizontal, afterVertical);
+      const QVector<qreal> afterOffsets =
+          connector_ports::snapOffsets(afterPointCount);
+
+      for (const auto &endpoint : *group) {
+        const auto &connector = diagram->connectors.at(endpoint.connectorIndex);
+        const ConnectorAnchor before =
+            endpoint.source ? connector.sourceAnchor : connector.targetAnchor;
+        bool attached = false;
+        const qreal remapped = connector_ports::remapAttachedOffset(
+            before.offset, beforePointCount, afterPointCount, &attached);
+        const int remappedIndex = snapOffsetIndex(afterOffsets, remapped);
+        Q_ASSERT(attached && remappedIndex >= 0);
+        const int destinationIndex = remappedIndex + indexDelta;
+        Q_ASSERT(destinationIndex >= 0 &&
+                 destinationIndex < afterOffsets.size());
+        ConnectorAnchor after = before;
+        after.offset = afterOffsets.at(destinationIndex);
+        anchorChanges.append(
+            {connector.id, endpoint.source, before, std::move(after)});
+      }
+    }
+  }
+
+  if (anchorChanges.isEmpty())
+    return;
+  pushCommand(std::make_unique<UpdateConnectorEndsCommand>(
+      this, diagramId, std::move(portChanges), std::move(anchorChanges),
+      towardStart ? QStringLiteral("Shift connector ends left")
+                  : QStringLiteral("Shift connector ends right")));
 }
 
 void ProjectController::setConnectorRouting(const QString &diagramId,

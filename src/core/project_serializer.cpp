@@ -1785,14 +1785,20 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
       if (!elementIds.contains(parent.id) || parent.id == subjectId)
         diagnostics.append(error(
             QStringLiteral("validation"),
-            QStringLiteral("An element browser parent is invalid"), subjectId));
+            QStringLiteral("Browser item %1 references invalid parent element "
+                           "%2")
+                .arg(subjectId, parent.id),
+            subjectId));
       return;
     }
     if (parent.kind == QStringLiteral("folder")) {
       if (!folderIds.contains(parent.id) || parent.id == subjectId)
         diagnostics.append(error(
             QStringLiteral("validation"),
-            QStringLiteral("A folder browser parent is invalid"), subjectId));
+            QStringLiteral("Browser item %1 references invalid parent folder "
+                           "%2")
+                .arg(subjectId, parent.id),
+            subjectId));
       return;
     }
     diagnostics.append(error(
@@ -1909,13 +1915,19 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
     checkId(relationship.id, QStringLiteral("relationship"));
     relationshipIds.insert(relationship.id);
     if (!elementIds.contains(relationship.sourceId))
-      diagnostics.append(error(QStringLiteral("validation"),
-                               QStringLiteral("Relationship source is missing"),
-                               relationship.id));
+      diagnostics.append(error(
+          QStringLiteral("validation"),
+          QStringLiteral("Relationship %1 source references missing model "
+                         "element %2")
+              .arg(relationship.id, relationship.sourceId),
+          relationship.id));
     if (!elementIds.contains(relationship.targetId))
-      diagnostics.append(error(QStringLiteral("validation"),
-                               QStringLiteral("Relationship target is missing"),
-                               relationship.id));
+      diagnostics.append(error(
+          QStringLiteral("validation"),
+          QStringLiteral("Relationship %1 target references missing model "
+                         "element %2")
+              .arg(relationship.id, relationship.targetId),
+          relationship.id));
     validateStereotypeReferences(relationship.stereotypeIds,
                                  stereotype_catalog::kRelationshipApplicability,
                                  relationship.id);
@@ -1941,8 +1953,10 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
       if (!validFolder && !validPackage) {
         diagnostics.append(
             error(QStringLiteral("validation"),
-                  QStringLiteral("Container presentation references an invalid "
-                                 "folder or UML package"),
+                  QStringLiteral("Diagram \"%1\" container presentation %2 "
+                                 "references missing or invalid %3 %4")
+                      .arg(diagram.name, container.id, container.subjectKind,
+                           container.subjectId),
                   container.id));
       }
       const QString subjectKey =
@@ -1970,7 +1984,9 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
       if (!elementIds.contains(node.elementId))
         diagnostics.append(error(
             QStringLiteral("validation"),
-            QStringLiteral("Node presentation references a missing element"),
+            QStringLiteral("Diagram \"%1\" node presentation %2 references "
+                           "missing element %3")
+                .arg(diagram.name, node.id, node.elementId),
             node.id));
       if (presentedElements.contains(node.elementId))
         diagnostics.append(error(
@@ -2001,8 +2017,10 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
         if (childId == container.id || !presentationIds.contains(childId)) {
           diagnostics.append(
               error(QStringLiteral("validation"),
-                    QStringLiteral("Container references an invalid child "
-                                   "presentation"),
+                    QStringLiteral("Diagram \"%1\" container presentation %2 "
+                                   "references missing or invalid child "
+                                   "presentation %3")
+                        .arg(diagram.name, container.id, childId),
                     container.id));
           continue;
         }
@@ -2046,10 +2064,12 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
     for (const auto &connector : diagram.connectors) {
       checkId(connector.id, QStringLiteral("connector presentation"));
       if (!relationshipIds.contains(connector.relationshipId))
-        diagnostics.append(
-            error(QStringLiteral("validation"),
-                  QStringLiteral("Connector references a missing relationship"),
-                  connector.id));
+        diagnostics.append(error(
+            QStringLiteral("validation"),
+            QStringLiteral("Diagram \"%1\" connector presentation %2 "
+                           "references missing relationship %3")
+                .arg(diagram.name, connector.id, connector.relationshipId),
+            connector.id));
       const auto checkAnchor = [&](const ConnectorAnchor &anchor,
                                    const QString &name) {
         if (anchor.side != ConnectorSide::Automatic &&

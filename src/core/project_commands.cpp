@@ -1236,6 +1236,43 @@ void MoveConnectorAnchorCommand::apply(ProjectData &project,
   }
 }
 
+UpdateConnectorEndsCommand::UpdateConnectorEndsCommand(
+    ProjectController *controller, QString diagramId,
+    QList<NodePortSnapPointChange> portChanges,
+    QList<ConnectorEndpointAnchorChange> anchorChanges, QString description)
+    : ProjectCommand(controller, std::move(description)),
+      m_diagramId(std::move(diagramId)), m_portChanges(std::move(portChanges)),
+      m_anchorChanges(std::move(anchorChanges)) {}
+
+void UpdateConnectorEndsCommand::execute(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    applyPortSnapPointChanges(*diagram, m_portChanges, true);
+  applyAnchorChanges(project, true);
+}
+
+void UpdateConnectorEndsCommand::revert(ProjectData &project) {
+  // Restore endpoint sides before shrinking the snap grid. The subsequent
+  // remap then returns every previously attached endpoint to its exact old
+  // marker, including selected endpoints that used the paired side.
+  applyAnchorChanges(project, false);
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    applyPortSnapPointChanges(*diagram, m_portChanges, false);
+}
+
+void UpdateConnectorEndsCommand::applyAnchorChanges(ProjectData &project,
+                                                    bool forward) {
+  auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram)
+    return;
+  for (const auto &change : m_anchorChanges) {
+    if (auto *connector = findConnector(*diagram, change.connectorId)) {
+      ConnectorAnchor &anchor =
+          change.source ? connector->sourceAnchor : connector->targetAnchor;
+      anchor = forward ? change.after : change.before;
+    }
+  }
+}
+
 SetConnectorsRoutingCommand::SetConnectorsRoutingCommand(
     ProjectController *controller, QString diagramId,
     QList<ConnectorRoutingChange> changes, ConnectorRouting after,

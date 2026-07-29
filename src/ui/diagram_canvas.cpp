@@ -7,6 +7,7 @@
 #include "core/project_controller.h"
 #include "core/project_style.h"
 #include "core/stereotype_catalog.h"
+#include "core/workspace_controller.h"
 #include "ui/connector_routing.h"
 #include "ui/diagram_arrangement.h"
 #include "ui/diagram_clipping.h"
@@ -1709,6 +1710,15 @@ void DiagramCanvas::setProject(ProjectController *project) {
   update();
 }
 
+WorkspaceController *DiagramCanvas::workspace() const { return m_workspace; }
+
+void DiagramCanvas::setWorkspace(WorkspaceController *workspace) {
+  if (m_workspace == workspace)
+    return;
+  m_workspace = workspace;
+  emit workspaceChanged();
+}
+
 QString DiagramCanvas::diagramId() const { return m_diagramId; }
 
 void DiagramCanvas::setDiagramId(const QString &diagramId) {
@@ -1749,6 +1759,14 @@ int DiagramCanvas::selectedContainerCount() const {
 }
 int DiagramCanvas::selectedConnectorCount() const {
   return m_selectedConnectors.size();
+}
+bool DiagramCanvas::canReattachSelectedConnectorEnds() const {
+  return m_project && m_project->canReattachConnectorEnds(
+                          m_diagramId, selectedConnectorIdsInDiagramOrder());
+}
+bool DiagramCanvas::canShiftSelectedConnectorEnds() const {
+  return m_project && m_project->canShiftConnectorEnds(
+                          m_diagramId, selectedConnectorIdsInDiagramOrder());
 }
 bool DiagramCanvas::connectorSelected() const {
   return !m_selectedConnectors.isEmpty();
@@ -4163,6 +4181,10 @@ void DiagramCanvas::hoverLeaveEvent(QHoverEvent *event) {
 }
 
 void DiagramCanvas::wheelEvent(QWheelEvent *event) {
+  if (m_workspace && m_workspace->consumeDiagramWheelSuppression()) {
+    event->accept();
+    return;
+  }
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
   clearConnectorToolboxCandidate(true);
@@ -4834,15 +4856,22 @@ void DiagramCanvas::editSelectedPresentationName() {
 void DiagramCanvas::setSelectedConnectorRouting(const QString &routing) {
   if (!m_project || m_selectedConnectors.isEmpty())
     return;
-  QStringList connectorIds;
-  const auto *d = diagram();
-  if (d) {
-    connectorIds.reserve(m_selectedConnectors.size());
-    for (const auto &connector : d->connectors)
-      if (m_selectedConnectors.contains(connector.id))
-        connectorIds.append(connector.id);
-  }
-  m_project->setConnectorsRouting(m_diagramId, connectorIds, routing);
+  m_project->setConnectorsRouting(
+      m_diagramId, selectedConnectorIdsInDiagramOrder(), routing);
+}
+
+void DiagramCanvas::reattachSelectedConnectorEnds(const QString &side) {
+  if (!m_project || !canReattachSelectedConnectorEnds())
+    return;
+  m_project->reattachConnectorEnds(m_diagramId,
+                                   selectedConnectorIdsInDiagramOrder(), side);
+}
+
+void DiagramCanvas::shiftSelectedConnectorEnds(const QString &direction) {
+  if (!m_project || !canShiftSelectedConnectorEnds())
+    return;
+  m_project->shiftConnectorEnds(
+      m_diagramId, selectedConnectorIdsInDiagramOrder(), direction);
 }
 
 void DiagramCanvas::setSelectedPortSnapPoints(int horizontalPointCount,
@@ -5038,6 +5067,18 @@ void DiagramCanvas::deleteSelectedConnector() {
     return;
   m_project->deleteRelationships(relationshipIds);
   clearCanvasSelection();
+}
+
+QStringList DiagramCanvas::selectedConnectorIdsInDiagramOrder() const {
+  QStringList connectorIds;
+  const auto *currentDiagram = diagram();
+  if (!currentDiagram)
+    return connectorIds;
+  connectorIds.reserve(m_selectedConnectors.size());
+  for (const auto &connector : currentDiagram->connectors)
+    if (m_selectedConnectors.contains(connector.id))
+      connectorIds.append(connector.id);
+  return connectorIds;
 }
 
 void DiagramCanvas::clearContainerSelection() {

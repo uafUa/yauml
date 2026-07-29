@@ -25,8 +25,12 @@ ApplicationWindow {
     property url pendingSaveUrl: ""
     property string updateResultMessage: ""
     property bool updateResultFailed: false
+    property bool applyingProjectTreeColumnWidths: false
 
-    Component.onCompleted: geometryReady = true
+    Component.onCompleted: {
+        geometryReady = true
+        Qt.callLater(applyProjectTreeColumnWidths)
+    }
     onXChanged: if (geometryReady) workspaceController.updateMainWindowGeometry(x, y, width, height)
     onYChanged: if (geometryReady) workspaceController.updateMainWindowGeometry(x, y, width, height)
     onWidthChanged: if (geometryReady) workspaceController.updateMainWindowGeometry(x, y, width, height)
@@ -91,6 +95,54 @@ ApplicationWindow {
         pendingRecentProjectUrl = ""
     }
 
+    function setProjectTreeColumnVisible(columnKey, visible) {
+        rememberProjectTreeColumnWidths()
+        const columns = applicationSettings.projectTreeColumns.slice()
+        const index = columns.indexOf(columnKey)
+        if (visible && index < 0)
+            columns.push(columnKey)
+        else if (!visible && index >= 0)
+            columns.splice(index, 1)
+        applicationSettings.projectTreeColumns = columns
+        Qt.callLater(applyProjectTreeColumnWidths)
+    }
+
+    function applyProjectTreeColumnWidths() {
+        if (projectTree.columns <= 0)
+            return
+        applyingProjectTreeColumnWidths = true
+        projectTree.clearColumnWidths()
+        const columns = applicationSettings.projectTreeColumns
+        const widths = applicationSettings.projectTreeColumnWidths
+        for (let column = 0; column < columns.length; ++column)
+            projectTree.setColumnWidth(column, widths[columns[column]])
+        projectTree.forceLayout()
+        Qt.callLater(function() {
+            applyingProjectTreeColumnWidths = false
+        })
+    }
+
+    function rememberProjectTreeColumnWidths() {
+        if (applyingProjectTreeColumnWidths || projectTree.columns <= 0)
+            return
+        const columns = applicationSettings.projectTreeColumns
+        const widths = Object.assign({},
+                                     applicationSettings.projectTreeColumnWidths)
+        for (let column = 0; column < columns.length; ++column) {
+            const width = projectTree.explicitColumnWidth(column)
+            if (width > 0)
+                widths[columns[column]] = Math.round(width)
+        }
+        applicationSettings.projectTreeColumnWidths = widths
+    }
+
+    Timer {
+        id: projectTreeColumnWidthSaveTimer
+        interval: 200
+        repeat: false
+        onTriggered: root.rememberProjectTreeColumnWidths()
+    }
+
     function saveAndContinue() {
         if (projectController.projectPath.length > 0) {
             if (projectController.saveProject())
@@ -142,6 +194,7 @@ ApplicationWindow {
     }
 
     onClosing: function(close) {
+        rememberProjectTreeColumnWidths()
         if (projectController.dirty && !closeAuthorized) {
             close.accepted = false
             pendingDocumentAction = "close"
@@ -450,12 +503,102 @@ ApplicationWindow {
                             projectTreeSearch.forceActiveFocus()
                         }
                     }
+                    CatalogToolButton {
+                        id: projectTreeColumnsButton
+                        objectName: "projectTreeColumnsButton"
+                        catalogId: "browser.chooseColumns"
+                        text: "▥"
+                        Accessible.name: qsTr("Choose project-tree columns")
+                        ToolTip.visible: hovered
+                        ToolTip.text: qsTr("Project-tree columns")
+                        onClicked: projectTreeColumnsMenu.popup(
+                                       projectTreeColumnsButton, 0, height)
+
+                        Menu {
+                            id: projectTreeColumnsMenu
+                            MenuItem {
+                                text: qsTr("Name")
+                                checkable: true
+                                checked: true
+                                enabled: false
+                            }
+                            MenuItem {
+                                text: qsTr("Relative source path")
+                                checkable: true
+                                checked: applicationSettings.projectTreeColumns
+                                         .indexOf("sourceDirectory") >= 0
+                                onToggled: root.setProjectTreeColumnVisible(
+                                               "sourceDirectory", checked)
+                            }
+                            MenuItem {
+                                text: qsTr("File name")
+                                checkable: true
+                                checked: applicationSettings.projectTreeColumns
+                                         .indexOf("sourceFile") >= 0
+                                onToggled: root.setProjectTreeColumnVisible(
+                                               "sourceFile", checked)
+                            }
+                            MenuItem {
+                                text: qsTr("Stereotypes")
+                                checkable: true
+                                checked: applicationSettings.projectTreeColumns
+                                         .indexOf("stereotypes") >= 0
+                                onToggled: root.setProjectTreeColumnVisible(
+                                               "stereotypes", checked)
+                            }
+                            MenuItem {
+                                text: qsTr("Type")
+                                checkable: true
+                                checked: applicationSettings.projectTreeColumns
+                                         .indexOf("type") >= 0
+                                onToggled: root.setProjectTreeColumnVisible(
+                                               "type", checked)
+                            }
+                            MenuItem {
+                                text: qsTr("Qualified name")
+                                checkable: true
+                                checked: applicationSettings.projectTreeColumns
+                                         .indexOf("qualifiedName") >= 0
+                                onToggled: root.setProjectTreeColumnVisible(
+                                               "qualifiedName", checked)
+                            }
+                        }
+                    }
+                }
+                Binding {
+                    target: projectController.treeModel
+                    property: "columns"
+                    value: applicationSettings.projectTreeColumns
+                }
+                HorizontalHeaderView {
+                    id: projectTreeHeader
+                    objectName: "projectTreeHeader"
+                    Layout.fillWidth: true
+                    Layout.preferredHeight: 28
+                    syncView: projectTree
+                    resizableColumns: true
+                    clip: true
+
+                    MouseArea {
+                        anchors.fill: parent
+                        acceptedButtons: Qt.RightButton
+                        onClicked: function(mouse) {
+                            projectTreeColumnsMenu.popup(
+                                        projectTreeHeader, mouse.x, mouse.y)
+                        }
+                    }
                 }
                 TreeView {
                     id: projectTree
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     model: projectController.treeModel
+                    onColumnsChanged:
+                        Qt.callLater(root.applyProjectTreeColumnWidths)
+                    onLayoutChanged: {
+                        if (!root.applyingProjectTreeColumnWidths)
+                            projectTreeColumnWidthSaveTimer.restart()
+                    }
                     clip: true
                     // Apply selection explicitly in selectFromPointer(). The
                     // native delegate can otherwise collapse an extended
@@ -466,6 +609,33 @@ ApplicationWindow {
                     readonly property string browserItemsMimeType:
                         "application/x-yauml-browser-items"
                     property bool selectionOriginatesFromTree: false
+                    function revealProjectSelection(selectRow) {
+                        const itemIndex =
+                                projectController.treeModel.indexForObject(
+                                    projectController.selectedId,
+                                    projectController.selectedKind)
+                        if (!itemIndex.valid)
+                            return
+                        projectTree.expandToIndex(itemIndex)
+                        // Expansion updates TreeView's flattened row mapping.
+                        // Select and scroll only after that mapping is current.
+                        Qt.callLater(function() {
+                            if (selectRow
+                                    && projectController.selectedKind === "element") {
+                                projectTreeSelection.select(
+                                            itemIndex,
+                                            ItemSelectionModel.ClearAndSelect
+                                            | ItemSelectionModel.Rows)
+                                projectTreeSelection.setCurrentIndex(
+                                            itemIndex,
+                                            ItemSelectionModel.NoUpdate)
+                            }
+                            const row = projectTree.rowAtIndex(itemIndex)
+                            if (row >= 0)
+                                projectTree.positionViewAtRow(
+                                            row, TableView.Contain)
+                        })
+                    }
                     function toggleBranch(row) {
                         if (row >= 0)
                             toggleExpanded(row)
@@ -525,6 +695,15 @@ ApplicationWindow {
 
                     Component.onCompleted: expandRecursively()
 
+                    // Observe without blocking TreeView's own scrolling. The
+                    // shared guard drains any inertial tail after the pointer
+                    // crosses into a diagram instead of treating it as zoom.
+                    WheelHandler {
+                        target: null
+                        blocking: false
+                        onWheel: workspaceController.noteProjectTreeWheelInput()
+                    }
+
                     Connections {
                         target: projectController.treeModel
                         function onModelReset() {
@@ -532,48 +711,24 @@ ApplicationWindow {
                             // the user's navigation context.
                             Qt.callLater(function() {
                                 projectTree.expandRecursively()
-                                const itemIndex =
-                                        projectController.treeModel.indexForObject(
-                                            projectController.selectedId,
-                                            projectController.selectedKind)
-                                if (projectController.selectedKind === "element"
-                                        && itemIndex.valid) {
-                                    projectTreeSelection.select(
-                                                itemIndex,
-                                                ItemSelectionModel.ClearAndSelect
-                                                | ItemSelectionModel.Rows)
-                                    projectTreeSelection.setCurrentIndex(
-                                                itemIndex,
-                                                ItemSelectionModel.NoUpdate)
-                                }
+                                projectTree.revealProjectSelection(true)
                             })
                         }
                     }
                     Connections {
                         target: projectController
-                        function onSelectionChanged() {
+                        function revealControllerSelection() {
                             const originatedFromTree = projectTree.selectionOriginatesFromTree
                             Qt.callLater(function() {
-                                const itemIndex = projectController.treeModel.indexForObject(
-                                                    projectController.selectedId,
-                                                    projectController.selectedKind)
-                                if (itemIndex.valid)
-                                    projectTree.expandToIndex(itemIndex)
-                                if (!originatedFromTree
-                                        && projectController.selectedKind === "element"
-                                        && itemIndex.valid) {
-                                    projectTreeSelection.select(
-                                                itemIndex,
-                                                ItemSelectionModel.ClearAndSelect
-                                                | ItemSelectionModel.Rows)
-                                    projectTreeSelection.setCurrentIndex(
-                                                itemIndex,
-                                                ItemSelectionModel.NoUpdate)
-                                }
-                                const row = projectTree.rowAtIndex(itemIndex)
-                                if (row >= 0)
-                                    projectTree.positionViewAtRow(row, TableView.Contain)
+                                projectTree.revealProjectSelection(
+                                            !originatedFromTree)
                             })
+                        }
+                        function onSelectionChanged() {
+                            revealControllerSelection()
+                        }
+                        function onSelectionReasserted() {
+                            revealControllerSelection()
                         }
                     }
 
@@ -583,11 +738,13 @@ ApplicationWindow {
                         required property string kind
                         required property string objectType
                         required property bool nested
+                        required property string name
                         property bool browserDropActive: false
                         property int browserInsertionEdge: 0
                         readonly property url treeIconSource:
-                            iconRegistry.projectTreeIcon(
+                            column === 0 ? iconRegistry.projectTreeIcon(
                                 kind, objectType, objectId, nested, expanded)
+                                         : ""
                         highlighted: kind !== "root" && (
                                          kind === "diagram"
                                          ? objectId === workspaceController.activeDiagramId
@@ -603,7 +760,8 @@ ApplicationWindow {
 
                             Image {
                                 id: treeIcon
-                                visible: treeDelegate.treeIconSource.toString() !== ""
+                                visible: treeDelegate.column === 0
+                                         && treeDelegate.treeIconSource.toString() !== ""
                                 source: treeDelegate.treeIconSource
                                 fillMode: Image.PreserveAspectFit
                                 sourceSize.width: iconRegistry.defaultSize
@@ -634,8 +792,13 @@ ApplicationWindow {
                         }
                         onClicked: {
                             if (kind !== "root") {
-                                const itemIndex = projectTree.index(treeDelegate.row,
-                                                                    treeDelegate.column)
+                                // TreeView rows are flattened view coordinates.
+                                // Resolve the semantic model index by stable ID
+                                // so nested rows cannot select a sibling/child.
+                                const itemIndex =
+                                        projectController.treeModel.indexForObject(
+                                            treeDelegate.objectId,
+                                            treeDelegate.kind)
                                 projectController.treeModel.selectFromPointer(
                                             projectTreeSelection, itemIndex)
                                 if (kind === "element" || kind === "diagram")
@@ -673,6 +836,7 @@ ApplicationWindow {
                             anchors.fill: parent
                             enabled: treeDelegate.isTreeNode
                                      && treeDelegate.hasChildren
+                                     && treeDelegate.column === 0
                             acceptedButtons: Qt.LeftButton
                             preventStealing: true
                             cursorShape: Qt.PointingHandCursor
@@ -681,15 +845,18 @@ ApplicationWindow {
 
                         DragHandler {
                             target: null
-                            enabled: treeDelegate.kind === "element"
-                                     || treeDelegate.kind === "namespace"
-                                     || treeDelegate.kind === "folder"
+                            enabled: treeDelegate.column === 0
+                                     && (treeDelegate.kind === "element"
+                                         || treeDelegate.kind === "namespace"
+                                         || treeDelegate.kind === "folder")
                             grabPermissions: PointerHandler.CanTakeOverFromAnything
                             onActiveChanged: {
                                 if (!active)
                                     return
-                                const itemIndex = projectTree.index(treeDelegate.row,
-                                                                    treeDelegate.column)
+                                const itemIndex =
+                                        projectController.treeModel.indexForObject(
+                                            treeDelegate.objectId,
+                                            treeDelegate.kind)
                                 if (!projectTreeSelection.isSelected(itemIndex)) {
                                     projectTreeSelection.select(
                                                 itemIndex,
@@ -708,11 +875,12 @@ ApplicationWindow {
                             anchors.bottom: parent.bottom
                             anchors.topMargin: 7
                             anchors.bottomMargin: 7
-                            enabled: treeDelegate.kind === "namespace"
-                                     || treeDelegate.kind === "element"
-                                     || treeDelegate.kind === "folder"
-                                     || (treeDelegate.kind === "root"
-                                         && treeDelegate.objectId === "model")
+                            enabled: treeDelegate.column === 0
+                                     && (treeDelegate.kind === "namespace"
+                                         || treeDelegate.kind === "element"
+                                         || treeDelegate.kind === "folder"
+                                         || (treeDelegate.kind === "root"
+                                             && treeDelegate.objectId === "model"))
                             keys: [projectTree.browserItemsMimeType]
                             onEntered: treeDelegate.browserDropActive = true
                             onExited: treeDelegate.browserDropActive = false
@@ -739,8 +907,9 @@ ApplicationWindow {
                                                 ? parent.bottom : undefined
                                 height: 7
                                 z: 4
-                                enabled: treeDelegate.kind === "element"
-                                         || treeDelegate.kind === "folder"
+                                enabled: treeDelegate.column === 0
+                                         && (treeDelegate.kind === "element"
+                                             || treeDelegate.kind === "folder")
                                 keys: [projectTree.browserItemsMimeType]
                                 function canReorder(drag) {
                                     if (drag.formats.indexOf(
@@ -806,9 +975,10 @@ ApplicationWindow {
                                 if (treeDelegate.kind === "root"
                                         && treeDelegate.objectId !== "model")
                                     return
-                                const itemIndex = projectTree.index(
-                                                    treeDelegate.row,
-                                                    treeDelegate.column)
+                                const itemIndex =
+                                        projectController.treeModel.indexForObject(
+                                            treeDelegate.objectId,
+                                            treeDelegate.kind)
                                 if ((treeDelegate.kind === "element"
                                      || treeDelegate.kind === "folder")
                                         && !projectTreeSelection.isSelected(
@@ -831,7 +1001,7 @@ ApplicationWindow {
                                 treeContextMenu.targetId = treeDelegate.objectId
                                 treeContextMenu.targetKind = treeDelegate.kind
                                 treeContextMenu.targetType = treeDelegate.objectType
-                                treeContextMenu.targetName = treeDelegate.text
+                                treeContextMenu.targetName = treeDelegate.name
                                 treeContextMenu.targetStyleId =
                                         projectController.explicitStyleIdForBrowserSubject(
                                             treeDelegate.kind,
@@ -2515,12 +2685,226 @@ ApplicationWindow {
         applyCatalogId: "project.applyCppSynchronization"
         parent: Overlay.overlay
         anchors.centerIn: parent
-        width: Math.min(780, parent.width - 40)
-        height: Math.min(620, parent.height - 40)
+        width: Math.min(1120, parent.width - 40)
+        height: Math.min(700, parent.height - 40)
         modal: true
         focus: true
         title: qsTr("C++ synchronization preview")
         standardButtons: Dialog.Apply | Dialog.Close
+        property string statusFilter: "all"
+        property string textFilter: ""
+        property string sortColumn: "action"
+        property bool sortAscending: true
+        readonly property var filteredPreviewItems: filterAndSortPreviewItems()
+        readonly property int filteredResolvableConflictCount:
+            filteredItemCount("conflict", true)
+        readonly property int filteredCleanupCount:
+            filteredItemCount("missing-source", false)
+            + filteredItemCount("out-of-scope", false)
+
+        function statusLabel(action) {
+            switch (action) {
+            case "create": return qsTr("CREATE")
+            case "update": return qsTr("UPDATE")
+            case "conflict": return qsTr("CONFLICT")
+            case "unchanged": return qsTr("UNCHANGED")
+            case "user-modified": return qsTr("USER MODIFIED")
+            case "missing-source": return qsTr("NOT FOUND IN SCAN")
+            case "out-of-scope": return qsTr("OUT OF SCOPE")
+            }
+            return action.toUpperCase()
+        }
+
+        function resolutionValue(item) {
+            if (item.action === "conflict")
+                return item.resolvable ? item.resolution : "manual-repair"
+            if (item.action === "out-of-scope")
+                return item.outOfScopeResolution
+            if (item.action === "missing-source")
+                return item.missingSourceResolution
+            return ""
+        }
+
+        function resolutionLabel(item) {
+            const resolution = resolutionValue(item)
+            switch (resolution) {
+            case "unresolved": return qsTr("Unresolved")
+            case "keep-model": return qsTr("Keep model")
+            case "use-source": return qsTr("Use C++ source")
+            case "keep": return qsTr("Keep for now")
+            case "remove": return qsTr("Remove from model")
+            case "keep-manual": return qsTr("Keep as manual")
+            case "manual-repair": return qsTr("Manual repair required")
+            }
+            return qsTr("—")
+        }
+
+        function itemMatchesFilter(item) {
+            if (statusFilter === "needs-decision") {
+                const unresolvedConflict =
+                        item.action === "conflict"
+                        && (!item.resolvable
+                            || item.resolution === "unresolved")
+                const unresolvedRemoval =
+                        item.action === "out-of-scope"
+                        && item.outOfScopeResolution === "unresolved"
+                if (!unresolvedConflict && !unresolvedRemoval)
+                    return false
+            } else if (statusFilter !== "all"
+                       && item.action !== statusFilter) {
+                return false
+            }
+
+            const needle = textFilter.trim().toLocaleLowerCase()
+            if (needle.length === 0)
+                return true
+            const searchable = [
+                item.action, item.name, item.type, item.file, item.message,
+                item.impact, item.resolutionDetail, item.classification,
+                resolutionLabel(item)
+            ].join(" ").toLocaleLowerCase()
+            return searchable.indexOf(needle) >= 0
+        }
+
+        function itemSortValue(item) {
+            switch (sortColumn) {
+            case "name": return item.name
+            case "type": return item.type
+            case "file": return item.file + ":" + item.line
+            case "resolution": return resolutionLabel(item)
+            }
+            return statusLabel(item.action)
+        }
+
+        function filterAndSortPreviewItems() {
+            const result = []
+            const source = cppImportController.previewItems
+            for (let index = 0; index < source.length; ++index) {
+                if (itemMatchesFilter(source[index]))
+                    result.push(source[index])
+            }
+            result.sort(function(left, right) {
+                const leftValue =
+                        String(itemSortValue(left)).toLocaleLowerCase()
+                const rightValue =
+                        String(itemSortValue(right)).toLocaleLowerCase()
+                const comparison = leftValue.localeCompare(rightValue)
+                if (comparison !== 0)
+                    return sortAscending ? comparison : -comparison
+                return String(left.name).localeCompare(String(right.name))
+            })
+            return result
+        }
+
+        function filteredItemCount(action, resolvableOnly) {
+            let count = 0
+            const items = filteredPreviewItems
+            for (let index = 0; index < items.length; ++index) {
+                if (items[index].action === action
+                        && (!resolvableOnly || items[index].resolvable))
+                    ++count
+            }
+            return count
+        }
+
+        function setSortColumn(column) {
+            if (sortColumn === column)
+                sortAscending = !sortAscending
+            else {
+                sortColumn = column
+                sortAscending = true
+            }
+        }
+
+        function sortHeaderText(label, column) {
+            if (sortColumn !== column)
+                return label
+            return label + (sortAscending ? "  ↑" : "  ↓")
+        }
+
+        function preservePreviewScroll(change) {
+            const savedContentY = cppImportPreviewList.contentY
+            change()
+            // Replacing a QVariantList resets ListView's viewport. Restore it
+            // after bindings have produced the refreshed, filtered model.
+            Qt.callLater(function() {
+                const minimum = cppImportPreviewList.originY
+                const maximum = Math.max(
+                                  minimum,
+                                  minimum
+                                  + cppImportPreviewList.contentHeight
+                                  - cppImportPreviewList.height)
+                cppImportPreviewList.contentY = Math.max(
+                            minimum, Math.min(maximum, savedContentY))
+            })
+        }
+
+        function setConflictResolution(conflictKey, resolution) {
+            preservePreviewScroll(function() {
+                cppImportController.setConflictResolution(
+                            conflictKey, resolution)
+            })
+        }
+
+        function resolveAllConflicts(resolution) {
+            preservePreviewScroll(function() {
+                cppImportController.resolveAllConflicts(resolution)
+            })
+        }
+
+        function setOutOfScopeResolution(outOfScopeKey, resolution) {
+            preservePreviewScroll(function() {
+                cppImportController.setOutOfScopeResolution(
+                            outOfScopeKey, resolution)
+            })
+        }
+
+        function resolveAllOutOfScope(resolution) {
+            preservePreviewScroll(function() {
+                cppImportController.resolveAllOutOfScope(resolution)
+            })
+        }
+
+        function setMissingSourceResolution(missingSourceKey, resolution) {
+            preservePreviewScroll(function() {
+                cppImportController.setMissingSourceResolution(
+                            missingSourceKey, resolution)
+            })
+        }
+
+        function resolveVisibleConflicts(resolution) {
+            preservePreviewScroll(function() {
+                // Each controller call rebuilds previewItems, so iterate a
+                // snapshot rather than the live filtered list.
+                const visibleItems = filteredPreviewItems.slice()
+                for (let index = 0; index < visibleItems.length; ++index) {
+                    const item = visibleItems[index]
+                    if (item.action === "conflict" && item.resolvable)
+                        cppImportController.setConflictResolution(
+                                    item.conflictKey, resolution)
+                }
+            })
+        }
+
+        function resolveVisibleCleanup(resolution) {
+            preservePreviewScroll(function() {
+                const visibleItems = filteredPreviewItems.slice()
+                for (let index = 0; index < visibleItems.length; ++index) {
+                    const item = visibleItems[index]
+                    if (item.action === "missing-source") {
+                        cppImportController.setMissingSourceResolution(
+                                    item.missingSourceKey,
+                                    resolution === "reset"
+                                    ? "keep" : resolution)
+                    } else if (item.action === "out-of-scope") {
+                        cppImportController.setOutOfScopeResolution(
+                                    item.outOfScopeKey,
+                                    resolution === "reset"
+                                    ? "unresolved" : resolution)
+                    }
+                }
+            })
+        }
 
         onOpened: {
             const applyButton = standardButton(Dialog.Apply)
@@ -2610,21 +2994,181 @@ ApplicationWindow {
                 Button {
                     text: qsTr("Keep model for all")
                     enabled: cppImportController.resolvableConflictCount > 0
-                    onClicked: cppImportController.resolveAllConflicts(
+                    onClicked: cppImportDialog.resolveAllConflicts(
                                    "keep-model")
                 }
                 Button {
                     text: qsTr("Use source for all")
                     enabled: cppImportController.resolvableConflictCount > 0
-                    onClicked: cppImportController.resolveAllConflicts(
+                    onClicked: cppImportDialog.resolveAllConflicts(
                                    "use-source")
                 }
                 Button {
                     text: qsTr("Clear choices")
                     enabled: cppImportController.unresolvedConflictCount
                              < cppImportController.conflictCount
-                    onClicked: cppImportController.resolveAllConflicts(
+                    onClicked: cppImportDialog.resolveAllConflicts(
                                    "unresolved")
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                visible: !cppImportController.busy
+                         && cppImportController.outOfScopeCount > 0
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr("%1 item(s) belong to excluded source folders; "
+                               + "%2 still need a decision")
+                          .arg(cppImportController.outOfScopeCount)
+                          .arg(cppImportController.unresolvedOutOfScopeCount)
+                    color: cppImportController.unresolvedOutOfScopeCount > 0
+                           ? uiTheme.warningBorder : uiTheme.mutedText
+                    wrapMode: Text.Wrap
+                }
+                Button {
+                    text: qsTr("Remove all")
+                    onClicked: cppImportDialog.resolveAllOutOfScope(
+                                   "remove")
+                }
+                Button {
+                    text: qsTr("Keep all as manual")
+                    onClicked: cppImportDialog.resolveAllOutOfScope(
+                                   "keep-manual")
+                }
+                Button {
+                    text: qsTr("Clear choices")
+                    enabled: cppImportController.unresolvedOutOfScopeCount
+                             < cppImportController.outOfScopeCount
+                    onClicked: cppImportDialog.resolveAllOutOfScope(
+                                   "unresolved")
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                visible: !cppImportController.busy
+                         && cppImportController.missingSourceCount > 0
+                Label {
+                    Layout.fillWidth: true
+                    text: qsTr(
+                              "%1 previously imported item(s) were not matched "
+                              + "in this scan. They are retained by default; "
+                              + "filter this table before applying a bulk action.")
+                          .arg(cppImportController.missingSourceCount)
+                    color: uiTheme.warningBorder
+                    wrapMode: Text.Wrap
+                }
+            }
+            RowLayout {
+                Layout.fillWidth: true
+                visible: !cppImportController.busy
+                         && cppImportController.previewItems.length > 0
+                spacing: 8
+
+                TextField {
+                    id: cppImportItemFilter
+                    Layout.fillWidth: true
+                    placeholderText: qsTr(
+                                         "Filter by name, type, source, or details")
+                    text: cppImportDialog.textFilter
+                    Accessible.name: qsTr("Filter synchronization items")
+                    onTextChanged: cppImportDialog.textFilter = text
+                    Keys.onEscapePressed: clear()
+                }
+                ComboBox {
+                    id: cppImportStatusFilter
+                    Layout.preferredWidth: 190
+                    model: [
+                        qsTr("All statuses"),
+                        qsTr("Needs decision"),
+                        qsTr("CREATE"),
+                        qsTr("UPDATE"),
+                        qsTr("CONFLICT"),
+                        qsTr("UNCHANGED"),
+                        qsTr("USER MODIFIED"),
+                        qsTr("NOT FOUND IN SCAN"),
+                        qsTr("OUT OF SCOPE")
+                    ]
+                    Accessible.name: qsTr("Synchronization status filter")
+                    onActivated: {
+                        const filters = [
+                            "all", "needs-decision", "create", "update",
+                            "conflict", "unchanged", "user-modified",
+                            "missing-source", "out-of-scope"
+                        ]
+                        cppImportDialog.statusFilter = filters[currentIndex]
+                    }
+                }
+                ToolButton {
+                    id: cppImportSetFilteredButton
+                    text: qsTr("Set filtered…")
+                    enabled: cppImportDialog.filteredResolvableConflictCount > 0
+                             || cppImportDialog.filteredCleanupCount > 0
+                    Accessible.name: qsTr(
+                                         "Set resolution for filtered items")
+                    onClicked: cppImportFilteredResolutionMenu.popup(
+                                   cppImportSetFilteredButton, 0, height)
+
+                    Menu {
+                        id: cppImportFilteredResolutionMenu
+                        MenuItem {
+                            text: qsTr("Keep model for filtered conflicts")
+                            enabled:
+                                cppImportDialog.filteredResolvableConflictCount
+                                > 0
+                            onTriggered:
+                                cppImportDialog.resolveVisibleConflicts(
+                                    "keep-model")
+                        }
+                        MenuItem {
+                            text: qsTr(
+                                      "Use C++ source for filtered conflicts")
+                            enabled:
+                                cppImportDialog.filteredResolvableConflictCount
+                                > 0
+                            onTriggered:
+                                cppImportDialog.resolveVisibleConflicts(
+                                    "use-source")
+                        }
+                        MenuItem {
+                            text: qsTr(
+                                      "Clear filtered conflict choices")
+                            enabled:
+                                cppImportDialog.filteredResolvableConflictCount
+                                > 0
+                            onTriggered:
+                                cppImportDialog.resolveVisibleConflicts(
+                                    "unresolved")
+                        }
+                        MenuSeparator {}
+                        MenuItem {
+                            text: qsTr(
+                                      "Remove filtered source items")
+                            enabled: cppImportDialog.filteredCleanupCount > 0
+                            onTriggered:
+                                cppImportDialog.resolveVisibleCleanup("remove")
+                        }
+                        MenuItem {
+                            text: qsTr(
+                                      "Keep filtered source items as manual")
+                            enabled: cppImportDialog.filteredCleanupCount > 0
+                            onTriggered:
+                                cppImportDialog.resolveVisibleCleanup(
+                                    "keep-manual")
+                        }
+                        MenuItem {
+                            text: qsTr(
+                                      "Reset filtered source decisions")
+                            enabled: cppImportDialog.filteredCleanupCount > 0
+                            onTriggered:
+                                cppImportDialog.resolveVisibleCleanup("reset")
+                        }
+                    }
+                }
+                Label {
+                    text: qsTr("%1 of %2 items")
+                          .arg(cppImportDialog.filteredPreviewItems.length)
+                          .arg(cppImportController.previewItems.length)
+                    color: uiTheme.mutedText
                 }
             }
             Rectangle {
@@ -2634,75 +3178,261 @@ ApplicationWindow {
                 border.color: uiTheme.controlBorder
                 radius: 3
 
-                ListView {
+                ColumnLayout {
                     anchors.fill: parent
                     anchors.margins: 1
-                    clip: true
-                    model: cppImportController.previewItems
-                    delegate: Rectangle {
-                        required property int index
-                        required property var modelData
-                        width: ListView.view.width
-                        height: Math.max(54, importItemRow.implicitHeight + 14)
-                        color: modelData.action === "conflict" ? uiTheme.warningRow
-                             : index % 2 ? uiTheme.alternateRow : uiTheme.surface
+                    spacing: 0
+
+                    Rectangle {
+                        Layout.fillWidth: true
+                        Layout.preferredHeight: 36
+                        color: uiTheme.alternateRow
 
                         RowLayout {
-                            id: importItemRow
                             anchors.fill: parent
-                            anchors.margins: 7
-                            spacing: 8
+                            spacing: 0
 
-                            Label {
+                            ToolButton {
+                                Layout.preferredWidth: 128
+                                Layout.fillHeight: true
+                                text: cppImportDialog.sortHeaderText(
+                                          qsTr("Status"), "action")
+                                font.bold: true
+                                onClicked: cppImportDialog.setSortColumn(
+                                               "action")
+                            }
+                            ToolButton {
                                 Layout.fillWidth: true
-                                text: modelData.action.toUpperCase() + "  "
-                                      + modelData.name + " (" + modelData.type + ")\n"
-                                      + modelData.message
-                                      + (modelData.resolutionDetail
-                                         ? "\n" + modelData.resolutionDetail : "")
-                                      + (modelData.file.length > 0
-                                         ? "\n" + modelData.file + ":" + modelData.line : "")
-                                      + (modelData.classification
-                                         ? "\n" + modelData.classification : "")
-                                wrapMode: Text.Wrap
+                                Layout.fillHeight: true
+                                text: cppImportDialog.sortHeaderText(
+                                          qsTr("Item"), "name")
+                                font.bold: true
+                                onClicked: cppImportDialog.setSortColumn("name")
                             }
-                            ComboBox {
-                                visible: modelData.action === "conflict"
-                                         && modelData.resolvable
-                                model: [qsTr("Unresolved"),
-                                        qsTr("Keep model"),
-                                        qsTr("Use C++ source")]
-                                currentIndex: modelData.resolution === "keep-model"
-                                              ? 1
-                                              : modelData.resolution === "use-source"
-                                                ? 2 : 0
-                                Accessible.name: qsTr(
-                                                     "Conflict resolution for %1")
-                                                 .arg(modelData.name)
-                                onActivated: {
-                                    const resolutions = [
-                                        "unresolved", "keep-model", "use-source"
-                                    ]
-                                    cppImportController.setConflictResolution(
-                                                modelData.conflictKey,
-                                                resolutions[currentIndex])
-                                }
+                            ToolButton {
+                                Layout.preferredWidth: 110
+                                Layout.fillHeight: true
+                                text: cppImportDialog.sortHeaderText(
+                                          qsTr("Type"), "type")
+                                font.bold: true
+                                onClicked: cppImportDialog.setSortColumn("type")
                             }
-                            Label {
-                                visible: modelData.action === "conflict"
-                                         && !modelData.resolvable
-                                text: qsTr("Manual repair required")
-                                color: uiTheme.warningBorder
-                                wrapMode: Text.Wrap
+                            ToolButton {
+                                Layout.preferredWidth: 220
+                                Layout.fillHeight: true
+                                text: cppImportDialog.sortHeaderText(
+                                          qsTr("Source"), "file")
+                                font.bold: true
+                                onClicked: cppImportDialog.setSortColumn("file")
+                            }
+                            ToolButton {
+                                Layout.preferredWidth: 190
+                                Layout.fillHeight: true
+                                text: cppImportDialog.sortHeaderText(
+                                          qsTr("Resolution"), "resolution")
+                                font.bold: true
+                                onClicked: cppImportDialog.setSortColumn(
+                                               "resolution")
                             }
                         }
                     }
-                    Label {
-                        anchors.centerIn: parent
-                        visible: !cppImportController.busy
-                                 && cppImportController.previewItems.length === 0
-                        text: qsTr("No C++ model declarations were discovered")
-                        color: uiTheme.mutedText
+
+                    ListView {
+                        id: cppImportPreviewList
+                        Layout.fillWidth: true
+                        Layout.fillHeight: true
+                        clip: true
+                        model: cppImportDialog.filteredPreviewItems
+                        delegate: Rectangle {
+                            required property int index
+                            required property var modelData
+                            width: ListView.view.width
+                            height: Math.max(
+                                        58, importItemRow.implicitHeight + 14)
+                            color: modelData.action === "conflict"
+                                   || modelData.action === "out-of-scope"
+                                   ? uiTheme.warningRow
+                                 : index % 2
+                                   ? uiTheme.alternateRow : uiTheme.surface
+
+                            RowLayout {
+                                id: importItemRow
+                                anchors.fill: parent
+                                anchors.margins: 7
+                                spacing: 8
+
+                                Label {
+                                    Layout.preferredWidth: 114
+                                    Layout.alignment: Qt.AlignTop
+                                    text: cppImportDialog.statusLabel(
+                                              modelData.action)
+                                    font.bold: true
+                                    wrapMode: Text.Wrap
+                                }
+                                Label {
+                                    Layout.fillWidth: true
+                                    Layout.alignment: Qt.AlignTop
+                                    text: modelData.name + "\n"
+                                          + modelData.message
+                                          + (modelData.impact
+                                             ? "\n" + modelData.impact : "")
+                                          + (modelData.resolutionDetail
+                                             ? "\n"
+                                               + modelData.resolutionDetail : "")
+                                          + (modelData.classification
+                                             ? "\n"
+                                               + modelData.classification : "")
+                                    wrapMode: Text.Wrap
+                                }
+                                Label {
+                                    Layout.preferredWidth: 96
+                                    Layout.alignment: Qt.AlignTop
+                                    text: modelData.type
+                                    wrapMode: Text.Wrap
+                                }
+                                Label {
+                                    Layout.preferredWidth: 206
+                                    Layout.alignment: Qt.AlignTop
+                                    text: modelData.file.length > 0
+                                          ? modelData.file + ":"
+                                            + modelData.line : qsTr("—")
+                                    wrapMode: Text.WrapAnywhere
+                                    color: uiTheme.mutedText
+                                }
+                                Item {
+                                    Layout.preferredWidth: 176
+                                    Layout.fillHeight: true
+
+                                    ComboBox {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        visible: modelData.action === "conflict"
+                                                 && modelData.resolvable
+                                        model: [qsTr("Unresolved"),
+                                                qsTr("Keep model"),
+                                                qsTr("Use C++ source")]
+                                        currentIndex:
+                                            modelData.resolution === "keep-model"
+                                            ? 1
+                                            : modelData.resolution
+                                              === "use-source" ? 2 : 0
+                                        Accessible.name: qsTr(
+                                            "Conflict resolution for %1")
+                                            .arg(modelData.name)
+                                        onActivated: {
+                                            const resolutions = [
+                                                "unresolved", "keep-model",
+                                                "use-source"
+                                            ]
+                                            cppImportDialog
+                                                .setConflictResolution(
+                                                    modelData.conflictKey,
+                                                    resolutions[currentIndex])
+                                        }
+                                    }
+                                    ComboBox {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        visible: modelData.action
+                                                 === "out-of-scope"
+                                        model: [qsTr("Choose action"),
+                                                qsTr("Remove from model"),
+                                                qsTr("Keep as manual")]
+                                        currentIndex:
+                                            modelData.outOfScopeResolution
+                                            === "remove" ? 1
+                                            : modelData.outOfScopeResolution
+                                              === "keep-manual" ? 2 : 0
+                                        Accessible.name: qsTr(
+                                            "Excluded source action for %1")
+                                            .arg(modelData.name)
+                                        onActivated: {
+                                            const resolutions = [
+                                                "unresolved", "remove",
+                                                "keep-manual"
+                                            ]
+                                            cppImportDialog
+                                                .setOutOfScopeResolution(
+                                                    modelData.outOfScopeKey,
+                                                    resolutions[currentIndex])
+                                        }
+                                    }
+                                    ComboBox {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        visible: modelData.action
+                                                 === "missing-source"
+                                        model: [qsTr("Keep for now"),
+                                                qsTr("Remove from model"),
+                                                qsTr("Keep as manual")]
+                                        currentIndex:
+                                            modelData.missingSourceResolution
+                                            === "remove" ? 1
+                                            : modelData
+                                              .missingSourceResolution
+                                              === "keep-manual" ? 2 : 0
+                                        Accessible.name: qsTr(
+                                            "Not-found source action for %1")
+                                            .arg(modelData.name)
+                                        onActivated: {
+                                            const resolutions = [
+                                                "keep", "remove",
+                                                "keep-manual"
+                                            ]
+                                            cppImportDialog
+                                                .setMissingSourceResolution(
+                                                    modelData.missingSourceKey,
+                                                    resolutions[currentIndex])
+                                        }
+                                    }
+                                    Label {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        visible: modelData.action === "conflict"
+                                                 && !modelData.resolvable
+                                        text: qsTr("Manual repair required")
+                                        color: uiTheme.warningBorder
+                                        wrapMode: Text.Wrap
+                                    }
+                                    Label {
+                                        anchors.left: parent.left
+                                        anchors.right: parent.right
+                                        anchors.top: parent.top
+                                        visible: modelData.action !== "conflict"
+                                                 && modelData.action
+                                                 !== "out-of-scope"
+                                                 && modelData.action
+                                                 !== "missing-source"
+                                        text: qsTr("—")
+                                        color: uiTheme.mutedText
+                                    }
+                                }
+                            }
+                        }
+                        Label {
+                            anchors.centerIn: parent
+                            visible: !cppImportController.busy
+                                     && cppImportController.previewItems.length
+                                     === 0
+                            text: qsTr(
+                                      "No C++ model declarations were discovered")
+                            color: uiTheme.mutedText
+                        }
+                        Label {
+                            anchors.centerIn: parent
+                            visible: !cppImportController.busy
+                                     && cppImportController.previewItems.length
+                                     > 0
+                                     && cppImportDialog.filteredPreviewItems
+                                     .length === 0
+                            text: qsTr(
+                                      "No synchronization items match the filter")
+                            color: uiTheme.mutedText
+                        }
                     }
                 }
             }
@@ -2784,7 +3514,7 @@ ApplicationWindow {
 
     Connections {
         target: projectController.diagnostics
-        function onErrorAdded() { logPopup.open() }
+        function onAttentionAdded() { logPopup.open() }
     }
 
     Connections {

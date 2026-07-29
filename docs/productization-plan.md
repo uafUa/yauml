@@ -186,13 +186,20 @@ history memory grow with total project size rather than the size of each edit.
   wildcards, retains ancestor context, and leaves container drag semantics
   based on the complete unfiltered subtree. `Ctrl+F` focuses the search and
   `Escape` clears it.
+- The project tree has persistent configurable columns. In addition to the
+  required name column, users can independently show the relative C++ source
+  directory, file name, stereotypes, model type, and fully qualified name.
+  Columns are selected from either the button beside search or the header
+  context menu, and user-resized widths are persisted.
 - Custom browser folders are persisted as project data and can be created at
   the model root or inside namespaces, types, and other folders. Native tree
   drag/drop reorganizes selected elements or folders with cycle protection;
   create, rename, move, and delete are compact undoable commands. Deleting a
   folder promotes its direct contents instead of deleting semantic model data.
   Delete is available from the tree context menu and applies atomically to the
-  complete extended selection. Persisted cross-type sibling ordering can be
+  complete extended selection. Deleting a class or struct cascades through its
+  semantic nested types, their relationships, and all affected presentations
+  as one undoable operation. Persisted cross-type sibling ordering can be
   changed by dragging one or more selected siblings to the top or bottom edge
   of another row; an insertion rail previews the destination. Dropping in the
   center of a container retains the existing move-into behavior. The
@@ -459,12 +466,28 @@ history memory grow with total project size rather than the size of each edit.
   and custom stereotype assignments remain intact. Existing projects gain the
   three editable definitions through a duplicate-safe schema migration.
 - Per-project repeatable synchronization controls are implemented. Applying a
-  successful preview persists its source-root list in the project manifest as part
-  of the same compact undo command as semantic changes. **Synchronize C++**
+  successful preview persists its source-root list in the project manifest as
+  part of the same compact undo command as semantic changes. **Synchronize C++**
   reruns discovery without another folder prompt, **Change C++ sources…**
   reconfigures it through preview, and headless `cpp-preview`/`cpp-import` may
   omit source arguments once a project has roots configured. Older manifests
   containing the singular `sourceRoot` key load into the new list form.
+- Removing a configured source folder produces explicit `out-of-scope` preview
+  items rather than silently retaining or deleting them. The user can remove
+  each item with its relationships and presentations, or detach its source
+  binding and keep it as manual model data. Applying is blocked until every
+  such item has a decision; cleanup and root changes form one undoable GUI
+  transaction. Headless import exposes the same policy through
+  `--out-of-scope=remove|keep-manual`.
+- A previously imported binding that is not rediscovered inside the active
+  roots is shown separately as **NOT FOUND IN SCAN**. Because an incomplete
+  best-effort scan can produce this state even when a file still exists, the
+  safe default is **Keep for now**. Each row can instead be removed with its
+  relationships and presentations or detached as manual model data. Text and
+  status filtering can scope the three **visible** bulk actions—for example,
+  filtering `uuml::` removes obsolete identities after the `yauml` namespace
+  migration without touching unrelated rows. Headless preview/import provides
+  the equivalent `--missing-source=keep|remove|keep-manual` policy.
 - Long-running GUI discovery now exposes live phase, current-file, and
   determinate translation-unit progress through the shared import service. The
   headless workflow uses the same service but may omit the optional progress
@@ -479,6 +502,15 @@ history memory grow with total project size rather than the size of each edit.
   Headless preview/import exposes the same bulk policies through an explicit
   `--conflicts` option and retains exit code 3 while any unsafe or unselected
   conflict remains unresolved.
+- The GUI preview presents Status, Item, Type, Source, and Resolution as
+  separate columns. Every header sorts in both directions; a status selector
+  includes a focused **Needs decision** view, and free-text filtering covers
+  names, types, source paths, messages, classification details, and
+  resolutions. Filtering and sorting operate only on the view, so per-item
+  conflict, not-found, and out-of-scope decisions remain keyed to stable model
+  subjects. **Set filtered…** applies a conflict or cleanup resolution to the
+  current status/text-filter result, and both individual and bulk decisions
+  preserve the list's scroll position while the preview refreshes.
 - Conservative rename/move matching is implemented for imported declarations.
   It compares only unmatched source declarations with their previous import
   baselines and requires a unique mutual-best match supported by at least two

@@ -180,6 +180,11 @@
         contexts: ["project-tree context menu"],
         svg: "",
       },
+      chooseColumns: {
+        label: "Choose project-tree columns",
+        contexts: ["project-tree search bar"],
+        svg: "",
+      },
     },
 
     createElement: {
@@ -394,6 +399,36 @@
         label: "Use orthogonal routing",
         contexts: ["relationship Routing menu"],
         svg: "route-orthogonal.svg",
+      },
+      reattachLeft: {
+        label: "Reattach common connector ends to the left side",
+        contexts: ["relationship context menu"],
+        svg: "",
+      },
+      reattachRight: {
+        label: "Reattach common connector ends to the right side",
+        contexts: ["relationship context menu"],
+        svg: "",
+      },
+      reattachTop: {
+        label: "Reattach common connector ends to the top side",
+        contexts: ["relationship context menu"],
+        svg: "",
+      },
+      reattachBottom: {
+        label: "Reattach common connector ends to the bottom side",
+        contexts: ["relationship context menu"],
+        svg: "",
+      },
+      shiftLeft: {
+        label: "Shift common connector ends left or up",
+        contexts: ["relationship context menu"],
+        svg: "",
+      },
+      shiftRight: {
+        label: "Shift common connector ends right or down",
+        contexts: ["relationship context menu"],
+        svg: "",
       },
       deleteRelationship: {
         label: "Delete relationship",
