@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(yauml VERSION 0.3.0 LANGUAGES CXX)
+project(yauml VERSION 0.3.1 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -184,7 +184,22 @@ qt_add_executable(yauml
     src/app/update_controller.h
 )
 
+qt_add_executable(yauml_cli
+    src/app/cli_main.cpp
+)
+set_target_properties(yauml_cli PROPERTIES OUTPUT_NAME "yauml-cli")
+target_link_libraries(yauml_cli PRIVATE yauml_core Qt6::Core)
+target_compile_definitions(yauml_cli PRIVATE
+    YAUML_VERSION="${PROJECT_VERSION}"
+)
+
 if(WIN32)
+    # The editor must use the Windows GUI subsystem so launching it from
+    # Explorer or the installer does not create a console window. Headless
+    # commands remain available through the separate console executable.
+    set_target_properties(yauml PROPERTIES WIN32_EXECUTABLE ON)
+    set_target_properties(yauml_cli PROPERTIES WIN32_EXECUTABLE OFF)
+
     # Windows Explorer, taskbar shortcuts, and file associations use the icon
     # embedded in the executable. Configure an absolute forward-slash path so
     # rc.exe resolves it consistently for all CMake generators.
@@ -274,8 +289,10 @@ endif()
 
 if(MSVC)
     target_compile_options(yauml PRIVATE /W4 /permissive-)
+    target_compile_options(yauml_cli PRIVATE /W4 /permissive-)
 else()
     target_compile_options(yauml PRIVATE -Wall -Wextra -Wpedantic)
+    target_compile_options(yauml_cli PRIVATE -Wall -Wextra -Wpedantic)
 endif()
 
 if(WIN32)
@@ -373,13 +390,14 @@ if(BUILD_TESTING)
     endif()
     add_test(NAME yauml_render_regression COMMAND yauml_render_tests)
     add_test(NAME yauml_cli_validate
-        COMMAND yauml validate ${CMAKE_CURRENT_SOURCE_DIR}/examples/sample.yauml)
+        COMMAND yauml_cli validate
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/sample.yauml)
     add_test(NAME yauml_performance_example_validate
-        COMMAND yauml validate
+        COMMAND yauml_cli validate
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/performance.yauml)
     if(YAUML_LIBCLANG_INCLUDE_DIR AND YAUML_LIBCLANG_LIBRARY)
         add_test(NAME yauml_cpp_preview
-            COMMAND yauml cpp-preview
+            COMMAND yauml_cli cpp-preview
                 ${CMAKE_CURRENT_SOURCE_DIR}/examples/sample.yauml
                 ${YAUML_CPP_IMPORT_FIXTURE_BUILD_DIR})
     endif()
@@ -421,7 +439,8 @@ endif()
 
 if(WIN32 AND YAUML_LIBCLANG_RUNTIME)
     foreach(YAUML_CLANG_RUNTIME_TARGET
-            yauml yauml_core_tests yauml_canvas_tests yauml_render_tests)
+            yauml yauml_cli yauml_core_tests yauml_canvas_tests
+            yauml_render_tests)
         if(TARGET ${YAUML_CLANG_RUNTIME_TARGET})
             add_custom_command(TARGET ${YAUML_CLANG_RUNTIME_TARGET} POST_BUILD
                 COMMAND ${CMAKE_COMMAND} -E copy_if_different

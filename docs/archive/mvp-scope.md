@@ -1,6 +1,11 @@
 # yauml MVP Scope
 
-Status: accepted baseline
+> Historical document. This scope was accepted for the completed MVP and is
+> retained only as a record of the original product boundary. For the current
+> product, see the [README](../../README.md) and
+> [productization plan](../productization-plan.md).
+
+Status: archived accepted baseline
 
 ## 1. MVP objective
 
@@ -144,14 +149,14 @@ Logs are diagnostics and must not become a second source-control or merge system
 
 ## 8. Headless architecture
 
-A headless `yauml` executable is part of the architecture from day one. It uses
-the same domain, validation, persistence, transaction, and diagnostic services as
-the desktop application.
+A headless `yauml-cli` executable is part of the architecture from day one. It
+uses the same domain, validation, persistence, transaction, and diagnostic
+services as the `yauml` desktop application.
 
 The MVP must provide a functional command equivalent to:
 
 ```text
-yauml validate <project>
+yauml-cli validate <project>
 ```
 
 The CLI and core also define the import/change-set boundary needed by a future
@@ -196,7 +201,7 @@ The MVP is complete when all of the following are demonstrable:
    committed as one undoable action, or cancelled without a model change.
 5. Saving the same state twice produces byte-for-byte identical project data.
 6. Invalid files and broken references produce actionable diagnostics in the GUI
-   log and through `yauml validate`.
+   log and through `yauml-cli validate`.
 7. An interrupted save can recover the last valid project state.
 8. The GUI and CLI use the same domain and persistence implementation.
 9. The main window provides the specified central tabbed diagram area and

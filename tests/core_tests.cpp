@@ -4391,6 +4391,73 @@ void CoreTests::bulkConnectorEndpointReattachmentIsOrderedAndUndoable() {
   controller.redo();
   QCOMPARE(controller.data(), after);
 
+  // The remote presentations share an X coordinate but have distinct angular
+  // positions around the bottom-side normal. Geometry, rather than the
+  // deliberately scrambled connector insertion order, must define the fan.
+  controller.reattachConnectorEnds(diagramId, selected,
+                                   QStringLiteral("bottom"));
+  const auto &bottomArrangedDiagram = controller.data().diagrams.first();
+  const auto bottomSourceAnchor = [&](const QString &connectorId) {
+    const auto *connector = findConnector(bottomArrangedDiagram, connectorId);
+    return connector ? connector->sourceAnchor : ConnectorAnchor{};
+  };
+  QVERIFY(bottomSourceAnchor(upperHighConnector).side == ConnectorSide::Bottom);
+  QVERIFY(bottomSourceAnchor(upperHighConnector).offset <
+          bottomSourceAnchor(highConnector).offset);
+  QVERIFY(bottomSourceAnchor(highConnector).offset <
+          bottomSourceAnchor(middleConnector).offset);
+  QVERIFY(bottomSourceAnchor(middleConnector).offset <
+          bottomSourceAnchor(lowConnector).offset);
+
+  // All remote presentations are to the right, while their vertical distance
+  // from the source increases. Relative to the source's bottom-side normal,
+  // the lowest presentation is least rightward and must receive the leftmost
+  // port. Absolute X/Y sorting would produce the opposite, visually awkward
+  // fan shown by the reported real-world layout.
+  ProjectController normalAwareController;
+  const QString normalAwareDiagramId =
+      normalAwareController.data().diagrams.first().id;
+  for (int index = 0; index < 4; ++index)
+    normalAwareController.addElement(QStringLiteral("class"),
+                                     normalAwareDiagramId);
+  const auto normalAwareNodes =
+      normalAwareController.data().diagrams.first().nodes;
+  normalAwareController.updateNodeGeometry(normalAwareDiagramId,
+                                           normalAwareNodes.at(0).id, 50.0,
+                                           50.0, 160.0, 100.0);
+  normalAwareController.updateNodeGeometry(normalAwareDiagramId,
+                                           normalAwareNodes.at(1).id, 400.0,
+                                           50.0, 160.0, 100.0);
+  normalAwareController.updateNodeGeometry(normalAwareDiagramId,
+                                           normalAwareNodes.at(2).id, 400.0,
+                                           250.0, 160.0, 100.0);
+  normalAwareController.updateNodeGeometry(normalAwareDiagramId,
+                                           normalAwareNodes.at(3).id, 400.0,
+                                           650.0, 160.0, 100.0);
+  const QString rightHighConnector = normalAwareController.createRelationship(
+      normalAwareDiagramId, normalAwareNodes.at(0).id,
+      normalAwareNodes.at(1).id, QStringLiteral("dependency"));
+  const QString rightMiddleConnector = normalAwareController.createRelationship(
+      normalAwareDiagramId, normalAwareNodes.at(0).id,
+      normalAwareNodes.at(2).id, QStringLiteral("association"));
+  const QString rightLowConnector = normalAwareController.createRelationship(
+      normalAwareDiagramId, normalAwareNodes.at(0).id,
+      normalAwareNodes.at(3).id, QStringLiteral("generalization"));
+  const QStringList normalAwareSelection{
+      rightHighConnector, rightMiddleConnector, rightLowConnector};
+  normalAwareController.reattachConnectorEnds(
+      normalAwareDiagramId, normalAwareSelection, QStringLiteral("bottom"));
+  const auto &normalAwareDiagram =
+      normalAwareController.data().diagrams.first();
+  const auto normalAwareSourceOffset = [&](const QString &connectorId) {
+    const auto *connector = findConnector(normalAwareDiagram, connectorId);
+    return connector ? connector->sourceAnchor.offset : -1.0;
+  };
+  QVERIFY(normalAwareSourceOffset(rightLowConnector) <
+          normalAwareSourceOffset(rightMiddleConnector));
+  QVERIFY(normalAwareSourceOffset(rightMiddleConnector) <
+          normalAwareSourceOffset(rightHighConnector));
+
   // Parallel relationships share both endpoint presentations. One operation
   // therefore arranges both ends without asking the user to choose a node.
   ProjectController parallelController;

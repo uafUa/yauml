@@ -162,6 +162,11 @@ history memory grow with total project size rather than the size of each edit.
   fully free perimeter placement, and relative offsets keep snapped ends on
   their points as presentations resize. Counts are persisted and changed
   through one undoable presentation command.
+- Selected connector groups can reattach common ends to any side or shift them
+  over snap points as one undoable operation. Reattachment orders remote
+  endpoints by their angle relative to the chosen side's outward normal, so
+  both tangential and normal placement contribute to a compact, deterministic
+  fan. Distance and stable identity only resolve exact angular ties.
 - The Connectors preferences page implements both the default connector shape
   and editors for all seven relationship gesture keys. Assignments are applied
   atomically, normalized to uppercase, restricted to one letter or digit, and
@@ -436,7 +441,8 @@ history memory grow with total project size rather than the size of each edit.
 - A shared asynchronous GUI/headless service implements change-set preview,
   persistent source bindings and provenance, last-imported baselines, and
   user-authoritative conflict handling. GUI apply is one undoable command;
-  `cpp-preview` and `cpp-import` expose the same rules headlessly. Imported
+  `yauml-cli cpp-preview` and `yauml-cli cpp-import` expose the same rules
+  headlessly. Imported
   relationships are semantic model data and gain diagram connectors only
   where both endpoint presentations exist. Conflicts are structured log entries
   and never overwrite manual model edits.
@@ -469,8 +475,9 @@ history memory grow with total project size rather than the size of each edit.
   successful preview persists its source-root list in the project manifest as
   part of the same compact undo command as semantic changes. **Synchronize C++**
   reruns discovery without another folder prompt, **Change C++ sources…**
-  reconfigures it through preview, and headless `cpp-preview`/`cpp-import` may
-  omit source arguments once a project has roots configured. Older manifests
+  reconfigures it through preview, and headless `yauml-cli cpp-preview` /
+  `yauml-cli cpp-import` may omit source arguments once a project has roots
+  configured. Older manifests
   containing the singular `sourceRoot` key load into the new list form.
 - Removing a configured source folder produces explicit `out-of-scope` preview
   items rather than silently retaining or deleting them. The user can remove
@@ -567,6 +574,10 @@ history memory grow with total project size rather than the size of each edit.
   for stable updates at a configurable daily interval and hand user-approved
   updates to the maintenance tool after the normal save-and-close flow.
   Cross-platform packaging remains future work.
+- Windows distribution separates the GUI-subsystem `yauml.exe` from the
+  console-subsystem `yauml-cli.exe`. This keeps normal desktop startup free of
+  a terminal window while preserving script-friendly validation and C++ import;
+  packaging verifies both PE subsystem values to prevent regression.
 
 ## Phase 6: diagram export — lower priority
 

@@ -412,11 +412,13 @@ try {
             -InstallationRoot $verificationRoot
         Assert-WindowsUninstallEntry -InstallationRoot $verificationRoot
 
-        $installedExecutable = Join-Path $verificationRoot "yauml.exe"
-        & $installedExecutable validate `
+        $installedGuiExecutable = Join-Path $verificationRoot "yauml.exe"
+        $installedCliExecutable =
+            Join-Path $verificationRoot "yauml-cli.exe"
+        & $installedCliExecutable validate `
             (Join-Path $repositoryRoot "examples\sample.yauml")
         if ($LASTEXITCODE -ne 0) {
-            throw "The installed application's validation check failed."
+            throw "The installed CLI validation check failed."
         }
 
         # Also test installing the downloaded installer over an existing copy.
@@ -433,10 +435,10 @@ try {
             throw "The installer did not replace the existing installation."
         }
         Assert-WindowsUninstallEntry -InstallationRoot $verificationRoot
-        & $installedExecutable validate `
+        & $installedCliExecutable validate `
             (Join-Path $repositoryRoot "examples\sample.yauml")
         if ($LASTEXITCODE -ne 0) {
-            throw "The replaced application's validation check failed."
+            throw "The replaced CLI validation check failed."
         }
 
         $maintenanceTool = Join-Path $verificationRoot "maintenancetool.exe"
@@ -447,8 +449,12 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw "The generated uninstaller failed to remove the test install."
         }
-        if (Test-Path -LiteralPath $installedExecutable) {
+        if (Test-Path -LiteralPath $installedGuiExecutable) {
             throw "The test installation still contains yauml.exe after purge."
+        }
+        if (Test-Path -LiteralPath $installedCliExecutable) {
+            throw "The test installation still contains yauml-cli.exe after " +
+                "purge."
         }
         if (@(Get-YaumlUninstallEntries `
                 -InstallationRoot $verificationRoot).Count -ne 0) {

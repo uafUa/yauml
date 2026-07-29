@@ -4,6 +4,7 @@ function Component()
     // files. The in-app updater normally starts after yauml exits, while this
     // also protects updates started directly from maintenancetool.exe.
     component.addStopProcessForUpdateRequest("yauml.exe");
+    component.addStopProcessForUpdateRequest("yauml-cli.exe");
     component.addStopProcessForUpdateRequest("u" + "uml.exe");
 }
 

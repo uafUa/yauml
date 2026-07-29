@@ -89,7 +89,9 @@ folders.
 - Projects are ordinary local directories containing readable JSON5 files.
 - Source import never rewrites C++ files.
 - Unsaved, externally changed, and interrupted saves are handled explicitly.
-- Validation and import are also available for headless workflows.
+- Validation and import are also available through the console-friendly
+  `yauml-cli` executable; the desktop `yauml` executable opens without a
+  terminal window.
 - Installed builds can check for stable updates and hand approved updates to
   the maintenance tool.
 

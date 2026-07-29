@@ -1,7 +1,9 @@
 # yauml: Product and Architecture Brainstorm
 
-Status: Phase 3 productization underway; MVP accepted on 2026-07-21 in
-[`mvp-scope.md`](mvp-scope.md)
+Status: historical product and architecture framing; MVP accepted on 2026-07-21
+in the archived [`mvp-scope.md`](archive/mvp-scope.md). Current priorities and
+completed slices are tracked in the
+[productization plan](productization-plan.md).
 
 ## 1. Working vision
 
@@ -44,14 +46,15 @@ synchronization and diagram export are post-MVP capabilities.
 6. Review semantic and diagram changes as readable source-control diffs.
 7. Export diagrams as SVG, PNG, and PDF for documentation.
 
-The MVP implements only the manual modeling, diagram editing, persistence,
-validation, and Git-reviewable storage portions of these workflows. See
-[`mvp-scope.md`](mvp-scope.md) for the binding MVP boundary.
+The initial MVP implemented the manual modeling, diagram editing, persistence,
+validation, and Git-reviewable storage portions of these workflows. See the
+archived [`mvp-scope.md`](archive/mvp-scope.md) for that historical boundary.
 
 ## 3. Product scope
 
-The capabilities below describe the intended product, not the accepted MVP.
-Unless explicitly included in [`mvp-scope.md`](mvp-scope.md), they are post-MVP.
+The capabilities below describe the intended product as it was framed around
+the MVP. The archived [`mvp-scope.md`](archive/mvp-scope.md) records which parts
+belonged to that milestone.
 
 ### Target semantic model
 
@@ -357,7 +360,7 @@ small shared workspace file for intentional team defaults.
 - Keep diagram geometry out of semantic files.
 - Write changed files to temporary siblings, flush, and atomically replace.
 - Include an explicit schema version and deterministic migration pipeline.
-- Provide `yauml validate` and `yauml format` command-line operations.
+- Provide `yauml-cli validate` and `yauml-cli format` command-line operations.
 - Establish the headless import/change-set boundary from the beginning, even
   though concrete C++ import and synchronization are post-MVP.
 - Never require users to understand internal IDs for ordinary edits, while keeping

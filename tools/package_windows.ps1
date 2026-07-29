@@ -101,11 +101,43 @@ function Deploy-MsvcRuntime {
         -Destination $Destination
 }
 
+function Get-PeSubsystem {
+    param([string]$ExecutablePath)
+
+    # The PE optional header stores Subsystem at the same offset for PE32 and
+    # PE32+. Reading it directly keeps this release invariant independent of
+    # Visual Studio command-prompt tools such as dumpbin.
+    $stream = [System.IO.File]::OpenRead($ExecutablePath)
+    $reader = [System.IO.BinaryReader]::new($stream)
+    try {
+        if ($reader.ReadUInt16() -ne 0x5A4D) {
+            throw "'$ExecutablePath' does not contain an MZ header."
+        }
+        $stream.Position = 0x3C
+        $peOffset = $reader.ReadInt32()
+        $stream.Position = $peOffset
+        if ($reader.ReadUInt32() -ne 0x00004550) {
+            throw "'$ExecutablePath' does not contain a PE header."
+        }
+        $stream.Position = $peOffset + 24
+        $optionalHeaderMagic = $reader.ReadUInt16()
+        if ($optionalHeaderMagic -ne 0x10B -and
+            $optionalHeaderMagic -ne 0x20B) {
+            throw "'$ExecutablePath' has an unsupported PE optional header."
+        }
+        $stream.Position = $peOffset + 24 + 68
+        return $reader.ReadUInt16()
+    } finally {
+        $reader.Dispose()
+    }
+}
+
 function Assert-PackageContents {
     param([string]$PackageDirectory)
 
     $requiredFiles = @(
         "yauml.exe",
+        "yauml-cli.exe",
         "libclang.dll",
         "Qt6Core.dll",
         "Qt6Gui.dll",
@@ -121,6 +153,21 @@ function Assert-PackageContents {
         if (-not (Test-Path -LiteralPath $fullPath -PathType Leaf)) {
             throw "Required package runtime file is missing: $relativePath"
         }
+    }
+
+    $guiSubsystem =
+        Get-PeSubsystem -ExecutablePath (
+            Join-Path $PackageDirectory "yauml.exe")
+    if ($guiSubsystem -ne 2) {
+        throw "yauml.exe must use the Windows GUI subsystem; found " +
+            "subsystem $guiSubsystem."
+    }
+    $cliSubsystem =
+        Get-PeSubsystem -ExecutablePath (
+            Join-Path $PackageDirectory "yauml-cli.exe")
+    if ($cliSubsystem -ne 3) {
+        throw "yauml-cli.exe must use the Windows console subsystem; found " +
+            "subsystem $cliSubsystem."
     }
 }
 
@@ -149,9 +196,13 @@ New-Item -ItemType Directory -Force -Path $resolvedOutputDirectory | Out-Null
 
 $binaryDirectory = Join-Path $resolvedBuildDirectory $Configuration
 $sourceExecutable = Join-Path $binaryDirectory "yauml.exe"
+$sourceCliExecutable = Join-Path $binaryDirectory "yauml-cli.exe"
 $sourceLibClang = Join-Path $binaryDirectory "libclang.dll"
 if (-not (Test-Path -LiteralPath $sourceExecutable)) {
     throw "Application executable was not found at '$sourceExecutable'."
+}
+if (-not (Test-Path -LiteralPath $sourceCliExecutable)) {
+    throw "Headless executable was not found at '$sourceCliExecutable'."
 }
 if (-not (Test-Path -LiteralPath $sourceLibClang)) {
     throw "libclang.dll was not found at '$sourceLibClang'. " +
@@ -170,6 +221,8 @@ $stagingDirectory = Join-Path $temporaryRoot $packageBaseName
 try {
     New-Item -ItemType Directory -Force -Path $stagingDirectory | Out-Null
     Copy-Item -LiteralPath $sourceExecutable -Destination $stagingDirectory
+    Copy-Item -LiteralPath $sourceCliExecutable `
+        -Destination $stagingDirectory
     Copy-Item -LiteralPath $sourceLibClang -Destination $stagingDirectory
     Copy-Item -LiteralPath (Join-Path $repositoryRoot "README.md") `
         -Destination $stagingDirectory
@@ -195,7 +248,8 @@ try {
     Assert-PackageContents -PackageDirectory $stagingDirectory
 
     if ($Verify) {
-        $stagedExecutable = Join-Path $stagingDirectory "yauml.exe"
+        $stagedGuiExecutable = Join-Path $stagingDirectory "yauml.exe"
+        $stagedCliExecutable = Join-Path $stagingDirectory "yauml-cli.exe"
         $previousPath = $env:PATH
         $previousQpaPlatform = $env:QT_QPA_PLATFORM
         $previousQuickBackend = $env:QT_QUICK_BACKEND
@@ -210,15 +264,15 @@ try {
                 (Join-Path $env:SystemRoot "System32\Wbem")
             ) -join [System.IO.Path]::PathSeparator
 
-            & $stagedExecutable validate `
+            & $stagedCliExecutable validate `
                 (Join-Path $repositoryRoot "examples\sample.yauml")
             if ($LASTEXITCODE -ne 0) {
-                throw "The packaged application's validation smoke test failed."
+                throw "The packaged CLI validation smoke test failed."
             }
 
             $env:QT_QPA_PLATFORM = "windows"
             $env:QT_QUICK_BACKEND = "software"
-            & $stagedExecutable --smoke-test
+            & $stagedGuiExecutable --smoke-test
             if ($LASTEXITCODE -ne 0) {
                 throw "The packaged application's UI smoke test failed."
             }

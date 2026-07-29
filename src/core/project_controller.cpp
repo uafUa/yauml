@@ -939,8 +939,33 @@ commonConnectorEndpointNodes(const ProjectData &project, const Diagram &diagram,
 struct ReattachEndpoint {
   qsizetype connectorIndex = -1;
   bool source = false;
-  qreal remoteProjection = 0.0;
+  qreal remoteAngle = 0.0;
+  qreal remoteDistance = 0.0;
 };
+
+struct ConnectorSideFrame {
+  QPointF origin;
+  QPointF tangent;
+  QPointF outwardNormal;
+};
+
+ConnectorSideFrame connectorSideFrame(const QRectF &geometry,
+                                      ConnectorSide side) {
+  const QPointF center = geometry.center();
+  switch (side) {
+  case ConnectorSide::Left:
+    return {{geometry.left(), center.y()}, {0.0, 1.0}, {-1.0, 0.0}};
+  case ConnectorSide::Right:
+    return {{geometry.right(), center.y()}, {0.0, 1.0}, {1.0, 0.0}};
+  case ConnectorSide::Top:
+    return {{center.x(), geometry.top()}, {1.0, 0.0}, {0.0, -1.0}};
+  case ConnectorSide::Bottom:
+    return {{center.x(), geometry.bottom()}, {1.0, 0.0}, {0.0, 1.0}};
+  case ConnectorSide::Automatic:
+    break;
+  }
+  return {center, {1.0, 0.0}, {0.0, 1.0}};
+}
 
 struct ShiftEndpoint {
   qsizetype connectorIndex = -1;
@@ -3985,6 +4010,8 @@ void ProjectController::reattachConnectorEnds(const QString &diagramId,
   bool materialChange = false;
 
   for (const auto *commonNode : commonNodes) {
+    const ConnectorSideFrame sideFrame =
+        connectorSideFrame(commonNode->geometry, parsedSide);
     QList<ReattachEndpoint> endpoints;
     QSet<QString> arrangedEndpointKeys;
     for (qsizetype connectorIndex = 0;
@@ -4005,9 +4032,17 @@ void ProjectController::reattachConnectorEnds(const QString &diagramId,
           return false;
         const QPointF remoteEndpoint = resolvedConnectorAnchorPoint(
             connector, !source, remoteNode->geometry, commonNode->geometry);
-        endpoints.append(
-            {connectorIndex, source,
-             verticalSide ? remoteEndpoint.y() : remoteEndpoint.x()});
+        const QPointF relativeEndpoint = remoteEndpoint - sideFrame.origin;
+        const qreal tangentProjection =
+            QPointF::dotProduct(relativeEndpoint, sideFrame.tangent);
+        const qreal normalProjection =
+            QPointF::dotProduct(relativeEndpoint, sideFrame.outwardNormal);
+        endpoints.append({
+            connectorIndex,
+            source,
+            std::atan2(tangentProjection, normalProjection),
+            std::hypot(relativeEndpoint.x(), relativeEndpoint.y()),
+        });
         arrangedEndpointKeys.insert(connectorEndpointKey(connector.id, source));
         return true;
       };
@@ -4026,10 +4061,18 @@ void ProjectController::reattachConnectorEnds(const QString &diagramId,
     std::stable_sort(
         endpoints.begin(), endpoints.end(),
         [](const ReattachEndpoint &left, const ReattachEndpoint &right) {
-          constexpr qreal kProjectionTolerance = 0.000001;
-          if (std::abs(left.remoteProjection - right.remoteProjection) >
-              kProjectionTolerance) {
-            return left.remoteProjection < right.remoteProjection;
+          constexpr qreal kAngleTolerance = 0.000000001;
+          constexpr qreal kDistanceTolerance = 0.000001;
+          if (std::abs(left.remoteAngle - right.remoteAngle) >
+              kAngleTolerance) {
+            return left.remoteAngle < right.remoteAngle;
+          }
+          // Collinear endpoints have the same angular position relative to
+          // the side normal. Distance is the remaining geometric distinction
+          // before the stable connector-identity fallback.
+          if (std::abs(left.remoteDistance - right.remoteDistance) >
+              kDistanceTolerance) {
+            return left.remoteDistance < right.remoteDistance;
           }
           if (left.connectorIndex != right.connectorIndex)
             return left.connectorIndex < right.connectorIndex;
