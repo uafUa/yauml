@@ -20,6 +20,8 @@ class ProjectTreeModel final : public QAbstractItemModel {
                  NOTIFY searchPatternChanged)
   Q_PROPERTY(
       QStringList columns READ columns WRITE setColumns NOTIFY columnsChanged)
+  Q_PROPERTY(bool relationshipsVisible READ relationshipsVisible WRITE
+                 setRelationshipsVisible NOTIFY relationshipsVisibleChanged)
 public:
   enum Role {
     IdRole = Qt::UserRole + 1,
@@ -62,6 +64,8 @@ public:
   void setSearchPattern(const QString &pattern);
   QStringList columns() const;
   void setColumns(const QStringList &columns);
+  bool relationshipsVisible() const;
+  void setRelationshipsVisible(bool visible);
 
 public slots:
   void reset();
@@ -69,6 +73,7 @@ public slots:
 signals:
   void searchPatternChanged();
   void columnsChanged();
+  void relationshipsVisibleChanged();
 
 private:
   struct TreeNode;
@@ -86,6 +91,7 @@ private:
   ProjectController *m_controller;
   QString m_searchPattern;
   QStringList m_columns{QStringLiteral("name")};
+  bool m_relationshipsVisible = true;
   QPersistentModelIndex m_selectionAnchor;
   std::vector<std::unique_ptr<TreeNode>> m_nodes;
   TreeNode *m_invisibleRoot = nullptr;
@@ -95,6 +101,7 @@ private:
   QHash<QString, TreeNode *> m_folderNodes;
   QHash<QString, TreeNode *> m_namespaceNodes;
   QHash<QString, TreeNode *> m_diagramNodes;
+  QHash<QString, TreeNode *> m_relationshipNodes;
 };
 
 class DiagramListModel final : public QAbstractListModel {

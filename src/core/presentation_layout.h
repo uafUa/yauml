@@ -29,14 +29,17 @@ inline constexpr qreal kMinimumContainerHeight = 100.0;
 QSizeF nodeContentSize(const ModelElement &element);
 QSizeF nodeContentSize(const ProjectData &project, const ModelElement &element);
 QSizeF nodeContentSize(const ProjectData &project, const ModelElement &element,
-                       bool showAttributes, bool showOperations);
+                       bool showAttributes, bool showOperations,
+                       OperationSignatureMode operationSignatureMode =
+                           OperationSignatureMode::Full);
 // Measures a node using the exact title rendered in its current diagram
 // context. This prevents a namespace frame's hidden prefix from inflating a
 // fitted presentation.
-QSizeF nodeContentSizeForDisplayName(const ProjectData &project,
-                                     const ModelElement &element,
-                                     const QString &displayName,
-                                     bool showAttributes, bool showOperations);
+QSizeF nodeContentSizeForDisplayName(
+    const ProjectData &project, const ModelElement &element,
+    const QString &displayName, bool showAttributes, bool showOperations,
+    OperationSignatureMode operationSignatureMode =
+        OperationSignatureMode::Full);
 QSizeF nodePlacementSize(const ModelElement &element,
                          const QString &sizingMode);
 QSizeF nodePlacementSize(const ProjectData &project,

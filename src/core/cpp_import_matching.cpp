@@ -1,5 +1,7 @@
 #include "core/cpp_import_matching.h"
 
+#include "core/model_operation.h"
+
 #include <QDir>
 #include <QFileInfo>
 
@@ -32,15 +34,14 @@ int matchConfidence(const CppSourceSymbol &source,
   const QString sourcePath = comparablePath(source.filePath);
   const QString importedPath = comparablePath(imported.filePath);
   const bool sameFile = !sourcePath.isEmpty() && sourcePath == importedPath;
-  const bool sameQualifiedName =
-      source.qualifiedName == imported.qualifiedName;
-  const bool sameUnqualifiedName =
-      unqualifiedName(source.qualifiedName) ==
-      unqualifiedName(imported.qualifiedName);
+  const bool sameQualifiedName = source.qualifiedName == imported.qualifiedName;
+  const bool sameUnqualifiedName = unqualifiedName(source.qualifiedName) ==
+                                   unqualifiedName(imported.qualifiedName);
   const bool attributesMatch =
       !source.attributes.isEmpty() && source.attributes == imported.attributes;
   const bool operationsMatch =
-      !source.operations.isEmpty() && source.operations == imported.operations;
+      !source.operations.isEmpty() &&
+      modelOperationsSemanticallyEqual(source.operations, imported.operations);
 
   // Location, name, and structure are independent evidence categories. Never
   // preserve identity based on only one of them, even when the numeric score

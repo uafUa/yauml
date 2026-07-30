@@ -107,6 +107,14 @@ history memory grow with total project size rather than the size of each edit.
   effective visibility drives scene-graph rendering, in-place hit testing, and
   fit-to-content sizing; all settings persist in diagram JSON5 and use compact
   undo commands.
+- Operations are structured semantic records rather than opaque display
+  strings. Stable identity, parameters, return type, visibility, modifiers,
+  and precise source location persist in schema 4, with automatic migration
+  from legacy string signatures. Diagrams independently choose **Full
+  signature**, **Name + return type**, or **Name only**, and classifier
+  presentations may inherit or override that choice. Rendering and
+  fit-to-content use the effective detail while text editing continues to
+  expose the complete signature.
 - Persisted, presentation-only diagram filters are implemented. An always
   visible diagram badge opens criteria for classifier kind, project
   stereotypes, name wildcard, and operation/field wildcard; name and member
@@ -471,6 +479,13 @@ history memory grow with total project size rather than the size of each edit.
   moving the declaration to a header removes it, while manual `private`, `api`,
   and custom stereotype assignments remain intact. Existing projects gain the
   three editable definitions through a duplicate-safe schema migration.
+- Source-bound types, operations, and relationships can navigate directly to
+  their imported file, line, and column in VS Code. The command is available
+  from F12, project-tree and diagram context menus, the properties panel, and
+  the configurable presentation toolbox. The executable/command is an
+  application preference, common Windows VS Code installations are discovered
+  automatically, and diagram double-click navigation is separately opt-in so
+  the existing in-place editing gesture remains the default.
 - Per-project repeatable synchronization controls are implemented. Applying a
   successful preview persists its source-root list in the project manifest as
   part of the same compact undo command as semantic changes. **Synchronize C++**

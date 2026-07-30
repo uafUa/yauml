@@ -1,3 +1,4 @@
+#include "core/model_operation.h"
 #include "core/project_data.h"
 #include "core/project_serializer.h"
 
@@ -35,7 +36,9 @@ yauml::ProjectData createPerformanceProject(int elementCount) {
         QStringLiteral("Component%1").arg(index + 1, 3, 10, QLatin1Char('0'));
     element.attributes = {QStringLiteral("+ value%1: int").arg(index + 1),
                           QStringLiteral("- state: State")};
-    element.operations = {QStringLiteral("+ update(input: Data): Result")};
+    element.operations = {yauml::modelOperationFromSignature(
+        QStringLiteral("+ update(input: Data): Result"),
+        element.id + QStringLiteral(":operation:0"))};
     project.elements.append(element);
 
     yauml::NodePresentation node;

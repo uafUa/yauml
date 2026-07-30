@@ -1,8 +1,10 @@
 #include "core/cpp_import.h"
 
 #include "core/cpp_import_matching.h"
+#include "core/model_operation.h"
 #include "core/stereotype_catalog.h"
 
+#include <QCryptographicHash>
 #include <QDir>
 #include <QFileInfo>
 #include <QHash>
@@ -26,7 +28,7 @@ namespace {
 
 constexpr auto kBindingKey = "sourceBinding";
 constexpr auto kBindingLanguage = "cpp";
-constexpr auto kBindingVersion = 2;
+constexpr auto kBindingVersion = 3;
 constexpr auto kManagedStereotypeIdsKey = "managedStereotypeIds";
 
 Diagnostic importDiagnostic(DiagnosticSeverity severity, const QString &message,
@@ -273,7 +275,7 @@ QJsonObject elementSnapshot(const ModelElement &element) {
   snapshot.insert(QStringLiteral("attributes"),
                   QJsonArray::fromStringList(element.attributes));
   snapshot.insert(QStringLiteral("operations"),
-                  QJsonArray::fromStringList(element.operations));
+                  modelOperationsToJson(element.operations));
   snapshot.insert(QStringLiteral("packageId"), element.packageId);
   snapshot.insert(QStringLiteral("enclosingTypeId"), element.enclosingTypeId);
   return snapshot;
@@ -296,7 +298,9 @@ ModelElement elementFromSnapshot(const QJsonObject &snapshot) {
     element.type = ElementType::Class;
   element.name = snapshot.value(QStringLiteral("name")).toString();
   element.attributes = stringList(snapshot.value(QStringLiteral("attributes")));
-  element.operations = stringList(snapshot.value(QStringLiteral("operations")));
+  element.operations =
+      modelOperationsFromJson(snapshot.value(QStringLiteral("operations")))
+          .value_or(QList<ModelOperation>{});
   element.packageId = snapshot.value(QStringLiteral("packageId")).toString();
   element.enclosingTypeId =
       snapshot.value(QStringLiteral("enclosingTypeId")).toString();
@@ -307,7 +311,7 @@ bool sourceOwnedStateEquals(const ModelElement &left,
                             const ModelElement &right) {
   return left.type == right.type && left.name == right.name &&
          left.attributes == right.attributes &&
-         left.operations == right.operations &&
+         modelOperationsSemanticallyEqual(left.operations, right.operations) &&
          left.packageId == right.packageId &&
          left.enclosingTypeId == right.enclosingTypeId;
 }
@@ -1094,6 +1098,8 @@ CppImportPreview planImport(const CppImportPreview &discovery,
         !sourceOwnedStateEquals(item.desiredRelationship, lastImported);
     const bool converged =
         sourceOwnedStateEquals(*existing, item.desiredRelationship);
+    const QJsonObject desiredBinding = sourceBinding(item.desiredRelationship);
+    const bool sourceBindingChanged = binding != desiredBinding;
     if (userChanged && sourceChanged && !converged) {
       item.action = CppImportAction::Conflict;
       item.message = QStringLiteral(
@@ -1105,23 +1111,36 @@ CppImportPreview planImport(const CppImportPreview &discovery,
                          "user-edited model remains authoritative")
               .arg(source.sourceName, source.targetName),
           existing->id));
-    } else if (userChanged && !sourceChanged && identityMatched) {
+    } else if (userChanged && !sourceChanged &&
+               (identityMatched || sourceBindingChanged)) {
+      // Source locations and classification evidence are navigation metadata,
+      // not user-owned UML fields. Refresh them even when the user has named
+      // or otherwise edited the relationship, while retaining those edits.
       Relationship bindingOnlyUpdate = *existing;
       bindingOnlyUpdate.extra = item.desiredRelationship.extra;
       item.desiredRelationship = std::move(bindingOnlyUpdate);
       item.action = CppImportAction::Update;
-      item.message = QStringLiteral(
-          "Refresh matched C++ relationship binding; user-edited model "
-          "retained");
+      item.message =
+          identityMatched
+              ? QStringLiteral(
+                    "Refresh matched C++ relationship binding; user-edited "
+                    "model retained")
+              : QStringLiteral(
+                    "Refresh C++ relationship source binding; user-edited "
+                    "model retained");
     } else if (userChanged && !sourceChanged) {
       item.action = CppImportAction::UserModified;
       item.message = QStringLiteral("User-edited relationship retained");
-    } else if (identityMatched || sourceChanged || (converged && userChanged)) {
+    } else if (identityMatched || sourceChanged || sourceBindingChanged ||
+               (converged && userChanged)) {
       item.action = CppImportAction::Update;
       if (identityMatched)
         item.message =
             QStringLiteral("Matched relationship after C++ declaration "
                            "rename or move");
+      else if (sourceBindingChanged && !sourceChanged)
+        item.message =
+            QStringLiteral("Refresh C++ relationship source binding");
       else
         item.message = converged ? QStringLiteral("Refresh source baseline")
                                  : QStringLiteral("Source changed");
@@ -1232,6 +1251,21 @@ QString accessPrefix(CX_CXXAccessSpecifier access, bool structDefault) {
     return structDefault ? QStringLiteral("+") : QStringLiteral("-");
   }
   return QStringLiteral("-");
+}
+
+MemberVisibility accessVisibility(CX_CXXAccessSpecifier access,
+                                  bool structDefault) {
+  switch (access) {
+  case CX_CXXPublic:
+    return MemberVisibility::Public;
+  case CX_CXXProtected:
+    return MemberVisibility::Protected;
+  case CX_CXXPrivate:
+    return MemberVisibility::Private;
+  case CX_CXXInvalidAccessSpecifier:
+    return structDefault ? MemberVisibility::Public : MemberVisibility::Private;
+  }
+  return MemberVisibility::Private;
 }
 
 bool supportedSemanticScope(CXCursor cursor) {
@@ -1505,7 +1539,85 @@ struct MemberVisitorContext {
   CppSourceSymbol *symbol;
   QList<DiscoveredTypeUse> *typeUses;
   bool structDefault;
+  // Libclang can collapse distinct overloads to the same USR while recovering
+  // from missing third-party types (for example QPointF and QRectF both
+  // becoming int). Retain the original tokenized declaration for the rare
+  // collision group so every imported operation still receives a stable,
+  // deterministic identity.
+  QHash<QString, QList<int>> operationIndexesByBaseId;
+  QHash<QString, QStringList> operationDiscriminatorsByBaseId;
 };
+
+QString operationDiscriminator(CXCursor cursor,
+                               const ModelOperation &operation) {
+  QStringList tokens;
+  CXToken *cursorTokens = nullptr;
+  unsigned tokenCount = 0;
+  const CXTranslationUnit translationUnit =
+      clang_Cursor_getTranslationUnit(cursor);
+  clang_tokenize(translationUnit, clang_getCursorExtent(cursor), &cursorTokens,
+                 &tokenCount);
+  for (unsigned index = 0; index < tokenCount; ++index) {
+    const QString token = takeString(
+        clang_getTokenSpelling(translationUnit, cursorTokens[index]));
+    if (token == QStringLiteral("{") || token == QStringLiteral(";"))
+      break;
+    if (!token.isEmpty())
+      tokens.append(token);
+  }
+  if (cursorTokens)
+    clang_disposeTokens(translationUnit, cursorTokens, tokenCount);
+
+  if (!tokens.isEmpty())
+    return tokens.join(u' ');
+
+  // Tokenization should always succeed for an AST cursor. Keep a deterministic
+  // recovery path for malformed translation units without ever returning an
+  // empty discriminator that could silently discard a distinct overload.
+  return QStringLiteral("%1|%2:%3")
+      .arg(modelOperationSignature(operation), operation.sourceFile)
+      .arg(operation.sourceLine);
+}
+
+QString disambiguatedOperationId(const QString &baseId,
+                                 const QString &discriminator) {
+  const QByteArray digest = QCryptographicHash::hash(discriminator.toUtf8(),
+                                                     QCryptographicHash::Sha256)
+                                .toHex()
+                                .left(16);
+  return QStringLiteral("%1:overload:%2")
+      .arg(baseId, QString::fromLatin1(digest));
+}
+
+void appendOperation(MemberVisitorContext &context, ModelOperation operation,
+                     CXCursor cursor) {
+  const QString baseId = operation.id;
+  const QString discriminator = operationDiscriminator(cursor, operation);
+  QList<int> &indexes = context.operationIndexesByBaseId[baseId];
+  QStringList &discriminators = context.operationDiscriminatorsByBaseId[baseId];
+
+  const qsizetype duplicateIndex = discriminators.indexOf(discriminator);
+  if (duplicateIndex >= 0) {
+    // The same declaration can be visited more than once in a recovering AST.
+    // It is one semantic operation and must not become a duplicate model row.
+    return;
+  }
+
+  if (!indexes.isEmpty()) {
+    // The first operation initially keeps Clang's ordinary USR. Only a proven
+    // collision changes the IDs, limiting churn in already synchronized
+    // projects while making every member of the collision group unambiguous.
+    if (indexes.size() == 1) {
+      ModelOperation &first = context.symbol->operations[indexes.first()];
+      first.id = disambiguatedOperationId(baseId, discriminators.first());
+    }
+    operation.id = disambiguatedOperationId(baseId, discriminator);
+  }
+
+  indexes.append(context.symbol->operations.size());
+  discriminators.append(discriminator);
+  context.symbol->operations.append(std::move(operation));
+}
 
 CXChildVisitResult visitRecordMember(CXCursor cursor, CXCursor,
                                      CXClientData clientData) {
@@ -1522,8 +1634,8 @@ CXChildVisitResult visitRecordMember(CXCursor cursor, CXCursor,
       context.symbol->baseSymbolIds.append(baseSymbolId);
     return CXChildVisit_Continue;
   }
-  const QString prefix =
-      accessPrefix(clang_getCXXAccessSpecifier(cursor), context.structDefault);
+  const CX_CXXAccessSpecifier access = clang_getCXXAccessSpecifier(cursor);
+  const QString prefix = accessPrefix(access, context.structDefault);
   if (kind == CXCursor_FieldDecl) {
     const QString name = cursorSpelling(cursor);
     if (!name.isEmpty()) {
@@ -1543,37 +1655,49 @@ CXChildVisitResult visitRecordMember(CXCursor cursor, CXCursor,
   const QString name = cursorSpelling(cursor);
   if (name.isEmpty())
     return CXChildVisit_Continue;
-  QStringList parameters;
+  ModelOperation operation;
+  operation.id = takeString(clang_getCursorUSR(cursor));
+  if (operation.id.isEmpty()) {
+    operation.id = QStringLiteral("%1:operation:%2")
+                       .arg(context.symbol->symbolId,
+                            typeSpelling(clang_getCursorType(cursor)));
+  }
+  operation.name = name;
+  operation.visibility = accessVisibility(access, context.structDefault);
+  if (kind == CXCursor_Constructor)
+    operation.kind = OperationKind::Constructor;
+  else if (kind == CXCursor_Destructor)
+    operation.kind = OperationKind::Destructor;
+  operation.sourceFile =
+      cursorFilePath(cursor, &operation.sourceLine, &operation.sourceColumn);
+
   const int argumentCount = clang_Cursor_getNumArguments(cursor);
   for (int index = 0; index < argumentCount; ++index) {
     const CXCursor argument = clang_Cursor_getArgument(cursor, index);
-    QString argumentName = cursorSpelling(argument);
-    const QString argumentType = typeSpelling(clang_getCursorType(argument));
-    if (argumentName.isEmpty())
-      parameters.append(argumentType);
-    else
-      parameters.append(
-          QStringLiteral("%1: %2").arg(argumentName, argumentType));
+    OperationParameter parameter;
+    parameter.name = cursorSpelling(argument);
+    parameter.type = typeSpelling(clang_getCursorType(argument));
+    operation.parameters.append(std::move(parameter));
     appendTypeUses(argument, clang_getCursorType(argument),
                    TypeUseContext::Signature, name, *context.symbol,
                    *context.typeUses);
   }
 
-  QString operation =
-      QStringLiteral("%1 %2(%3)")
-          .arg(prefix, name, parameters.join(QStringLiteral(", ")));
   if (kind == CXCursor_CXXMethod) {
     appendTypeUses(cursor, clang_getCursorResultType(cursor),
                    TypeUseContext::Signature, name, *context.symbol,
                    *context.typeUses);
-    operation += QStringLiteral(": %1").arg(
-        typeSpelling(clang_getCursorResultType(cursor)));
+    operation.returnType = typeSpelling(clang_getCursorResultType(cursor));
     if (clang_CXXMethod_isConst(cursor))
-      operation += QStringLiteral(" const");
+      operation.modifiers.append(QStringLiteral("const"));
+    if (clang_CXXMethod_isVirtual(cursor))
+      operation.modifiers.append(QStringLiteral("virtual"));
+    if (clang_CXXMethod_isPureVirtual(cursor))
+      operation.modifiers.append(QStringLiteral("abstract"));
     if (clang_CXXMethod_isStatic(cursor))
-      operation += QStringLiteral(" {static}");
+      operation.modifiers.append(QStringLiteral("static"));
   }
-  context.symbol->operations.append(std::move(operation));
+  appendOperation(context, std::move(operation), cursor);
   return CXChildVisit_Continue;
 }
 

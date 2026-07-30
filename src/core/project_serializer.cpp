@@ -3,6 +3,7 @@
 #include "core/connector_port_layout.h"
 #include "core/diagram_filter.h"
 #include "core/json5.h"
+#include "core/model_operation.h"
 #include "core/project_schema.h"
 #include "core/project_schema_version.h"
 #include "core/project_serializer_test_support.h"
@@ -28,7 +29,9 @@ constexpr auto kManifestName = "manifest.json5";
 constexpr auto kModelName = "model/model.json5";
 constexpr auto kDiagramsName = "diagrams/diagrams.json5";
 constexpr auto kRecoveryDirectory = ".yauml-recovery";
-constexpr auto kPreviousRecoveryDirectory = "." "u" "uml-recovery";
+constexpr auto kPreviousRecoveryDirectory = "."
+                                            "u"
+                                            "uml-recovery";
 constexpr auto kRecoveryMarker = "pending";
 #ifdef Q_OS_WIN
 constexpr auto kPathCaseSensitivity = Qt::CaseInsensitive;
@@ -90,9 +93,9 @@ void addCurrentRevisionEntry(ProjectFileRevision &revision,
   }
 }
 
-ProjectFileRevision savedRevision(
-    const QString &root,
-    const QList<QPair<QString, QByteArray>> &files) {
+ProjectFileRevision
+savedRevision(const QString &root,
+              const QList<QPair<QString, QByteArray>> &files) {
   ProjectFileRevision revision;
   revision.rootPath = QDir::cleanPath(root);
   for (const auto &[path, bytes] : files)
@@ -122,8 +125,7 @@ QStringList externallyChangedFiles(
 }
 
 bool writeFile(const QString &path, const QByteArray &bytes,
-               test_support::ProjectWritePurpose purpose,
-               QString &writeError) {
+               test_support::ProjectWritePurpose purpose, QString &writeError) {
   using test_support::ProjectWriteBoundary;
   using test_support::ProjectWriteStage;
 
@@ -131,8 +133,7 @@ bool writeFile(const QString &path, const QByteArray &bytes,
     if (!test_support::detail::shouldInjectProjectWriteFault(
             ProjectWriteBoundary{purpose, stage, path}))
       return false;
-    writeError =
-        QStringLiteral("Injected persistence fault for %1").arg(path);
+    writeError = QStringLiteral("Injected persistence fault for %1").arg(path);
     return true;
   };
 
@@ -439,7 +440,8 @@ QJsonObject elementToJson(const ModelElement &element) {
   else
     object.remove(QStringLiteral("enclosingTypeId"));
   object.insert(QStringLiteral("attributes"), stringArray(element.attributes));
-  object.insert(QStringLiteral("operations"), stringArray(element.operations));
+  object.insert(QStringLiteral("operations"),
+                modelOperationsToJson(element.operations));
   object.insert(QStringLiteral("enumLiterals"),
                 stringArray(element.enumLiterals));
   if (!element.browserParent.kind.isEmpty())
@@ -569,6 +571,12 @@ QJsonObject nodeToJson(const NodePresentation &node) {
     object.insert(QStringLiteral("showOperations"), *node.showOperations);
   else
     object.remove(QStringLiteral("showOperations"));
+  if (node.operationSignatureMode) {
+    object.insert(QStringLiteral("operationSignatureMode"),
+                  toString(*node.operationSignatureMode));
+  } else {
+    object.remove(QStringLiteral("operationSignatureMode"));
+  }
   if (!node.styleId.isEmpty())
     object.insert(QStringLiteral("styleId"), node.styleId);
   else
@@ -787,6 +795,12 @@ QByteArray diagramsBytes(const ProjectData &project) {
       object.insert(QStringLiteral("showOperations"), false);
     else
       object.remove(QStringLiteral("showOperations"));
+    if (diagram.operationSignatureMode != OperationSignatureMode::Full) {
+      object.insert(QStringLiteral("operationSignatureMode"),
+                    toString(diagram.operationSignatureMode));
+    } else {
+      object.remove(QStringLiteral("operationSignatureMode"));
+    }
     const QJsonObject filter = filterToJson(diagram.filter);
     if (diagram_filter::isActive(diagram.filter) || !filter.isEmpty())
       object.insert(QStringLiteral("filter"), filter);
@@ -967,9 +981,8 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
       QString::fromLatin1(kRecoveryDirectory),
       QString::fromLatin1(kPreviousRecoveryDirectory)};
   for (const QString &recoveryDirectory : recoveryDirectories) {
-    if (!QFileInfo::exists(
-            QDir(root).filePath(recoveryDirectory + u'/' +
-                                QString::fromLatin1(kRecoveryMarker)))) {
+    if (!QFileInfo::exists(QDir(root).filePath(
+            recoveryDirectory + u'/' + QString::fromLatin1(kRecoveryMarker)))) {
       continue;
     }
     outcome.recovered =
@@ -1020,11 +1033,9 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
   // Saving always targets the canonical paths. Track them even when an older
   // or hand-authored manifest points elsewhere, so a newly appeared target is
   // not overwritten without detection.
-  addCurrentRevisionEntry(outcome.revision,
-                          QString::fromLatin1(kManifestName));
+  addCurrentRevisionEntry(outcome.revision, QString::fromLatin1(kManifestName));
   addCurrentRevisionEntry(outcome.revision, QString::fromLatin1(kModelName));
-  addCurrentRevisionEntry(outcome.revision,
-                          QString::fromLatin1(kDiagramsName));
+  addCurrentRevisionEntry(outcome.revision, QString::fromLatin1(kDiagramsName));
 
   auto migration = ProjectSchemaMigrator::migrate(
       {sourceManifest, modelResult.document.object(),
@@ -1140,8 +1151,15 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
         object.value(QStringLiteral("enclosingTypeId")).toString();
     element.attributes =
         readStringArray(object.value(QStringLiteral("attributes")));
-    element.operations =
-        readStringArray(object.value(QStringLiteral("operations")));
+    QString operationsError;
+    const auto operations = modelOperationsFromJson(
+        object.value(QStringLiteral("operations")), &operationsError);
+    if (operations) {
+      element.operations = *operations;
+    } else {
+      outcome.diagnostics.append(
+          error(QStringLiteral("validation"), operationsError, element.id));
+    }
     element.enumLiterals =
         readStringArray(object.value(QStringLiteral("enumLiterals")));
     element.browserParent =
@@ -1300,6 +1318,22 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
           readVisibilityOverride(QStringLiteral("showAttributes"));
       node.showOperations =
           readVisibilityOverride(QStringLiteral("showOperations"));
+      const QJsonValue signatureModeValue =
+          nodeObject.value(QStringLiteral("operationSignatureMode"));
+      if (!signatureModeValue.isUndefined()) {
+        bool modeOk = false;
+        const auto mode = operationSignatureModeFromString(
+            signatureModeValue.toString(), &modeOk);
+        if (modeOk) {
+          node.operationSignatureMode = mode;
+        } else {
+          outcome.diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral(
+                        "Node operationSignatureMode has an unknown value"),
+                    node.id));
+        }
+      }
       node.styleId = nodeObject.value(QStringLiteral("styleId")).toString();
       node.extra = withoutKeys(
           nodeObject,
@@ -1308,6 +1342,7 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
            QStringLiteral("horizontalPortSnapPoints"),
            QStringLiteral("verticalPortSnapPoints"),
            QStringLiteral("showAttributes"), QStringLiteral("showOperations"),
+           QStringLiteral("operationSignatureMode"),
            QStringLiteral("styleId")});
       diagram.nodes.append(node);
     }
@@ -1389,14 +1424,30 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
         readDiagramVisibility(QStringLiteral("showAttributes"));
     diagram.showOperations =
         readDiagramVisibility(QStringLiteral("showOperations"));
+    const QJsonValue signatureModeValue =
+        object.value(QStringLiteral("operationSignatureMode"));
+    if (!signatureModeValue.isUndefined()) {
+      bool modeOk = false;
+      diagram.operationSignatureMode = operationSignatureModeFromString(
+          signatureModeValue.toString(), &modeOk);
+      if (!modeOk) {
+        outcome.diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral(
+                      "Diagram operationSignatureMode has an unknown value"),
+                  diagram.id));
+        diagram.operationSignatureMode = OperationSignatureMode::Full;
+      }
+    }
     diagram.filter = readDiagramFilter(object.value(QStringLiteral("filter")),
                                        diagram.id, outcome.diagnostics);
     diagram.extra = withoutKeys(
         object,
         {QStringLiteral("id"), QStringLiteral("name"),
          QStringLiteral("showAttributes"), QStringLiteral("showOperations"),
-         QStringLiteral("filter"), QStringLiteral("containers"),
-         QStringLiteral("nodes"), QStringLiteral("connectors")});
+         QStringLiteral("operationSignatureMode"), QStringLiteral("filter"),
+         QStringLiteral("containers"), QStringLiteral("nodes"),
+         QStringLiteral("connectors")});
     project.diagrams.append(diagram);
   }
 
@@ -1463,12 +1514,12 @@ SaveOutcome ProjectSerializer::save(const QString &projectPath,
   for (const auto &[path, bytes] : files) {
     QString ioError;
     const QByteArray existing = readFile(path, ioError);
-    currentTargetDigests.insert(
-        revisionKey(root, path),
-        ioError.isEmpty()
-            ? contentDigest(existing)
-            : (QFileInfo::exists(path) ? QByteArrayLiteral("unreadable")
-                                       : QByteArrayLiteral("missing")));
+    currentTargetDigests.insert(revisionKey(root, path),
+                                ioError.isEmpty()
+                                    ? contentDigest(existing)
+                                    : (QFileInfo::exists(path)
+                                           ? QByteArrayLiteral("unreadable")
+                                           : QByteArrayLiteral("missing")));
     if (!ioError.isEmpty() || existing != bytes) {
       allSame = false;
     }
@@ -1480,24 +1531,22 @@ SaveOutcome ProjectSerializer::save(const QString &projectPath,
     return outcome;
   }
 
-  const auto refuseExternalChanges =
-      [&](const QStringList &changedFiles) {
-        if (changedFiles.isEmpty())
-          return false;
-        outcome.externallyChangedFiles = changedFiles;
-        outcome.externalChangesDetected = true;
-        outcome.diagnostics.append(warning(
-            QStringLiteral("external-change"),
-            QStringLiteral(
-                "Saving was stopped because project files changed outside "
-                "yauml: %1")
-                .arg(changedFiles.join(QStringLiteral(", ")))));
-        return true;
-      };
+  const auto refuseExternalChanges = [&](const QStringList &changedFiles) {
+    if (changedFiles.isEmpty())
+      return false;
+    outcome.externallyChangedFiles = changedFiles;
+    outcome.externalChangesDetected = true;
+    outcome.diagnostics.append(
+        warning(QStringLiteral("external-change"),
+                QStringLiteral(
+                    "Saving was stopped because project files changed outside "
+                    "yauml: %1")
+                    .arg(changedFiles.join(QStringLiteral(", ")))));
+    return true;
+  };
   if (!overwriteExternalChanges) {
-    if (refuseExternalChanges(
-            externallyChangedFiles(root, expectedRevision,
-                                   currentTargetDigests)))
+    if (refuseExternalChanges(externallyChangedFiles(root, expectedRevision,
+                                                     currentTargetDigests)))
       return outcome;
   }
 
@@ -1519,8 +1568,8 @@ SaveOutcome ProjectSerializer::save(const QString &projectPath,
 
   for (const auto &[path, bytes] : files) {
     QString ioError;
-    if (!writeFile(path, bytes,
-                   test_support::ProjectWritePurpose::ProjectFile, ioError)) {
+    if (!writeFile(path, bytes, test_support::ProjectWritePurpose::ProjectFile,
+                   ioError)) {
       outcome.diagnostics.append(
           error(QStringLiteral("persistence"),
                 QStringLiteral("Cannot write %1: %2").arg(path, ioError)));
@@ -1695,6 +1744,28 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
     validateStereotypeReferences(
         element.stereotypeIds,
         stereotype_catalog::applicabilityFor(element.type), element.id);
+    for (const auto &operation : element.operations) {
+      checkId(operation.id, QStringLiteral("operation"));
+      if (operation.name.trimmed().isEmpty()) {
+        diagnostics.append(error(
+            QStringLiteral("validation"),
+            QStringLiteral("An operation has an empty name"), operation.id));
+      }
+      if (operation.sourceLine < 0 || operation.sourceColumn < 0) {
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("An operation source location is invalid"),
+                  operation.id));
+      }
+      for (const auto &parameter : operation.parameters) {
+        if (parameter.type.trimmed().isEmpty()) {
+          diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral("An operation parameter has an empty type"),
+                    operation.id));
+        }
+      }
+    }
     if (!element.enclosingTypeId.isEmpty()) {
       const auto *owner = findElement(project, element.enclosingTypeId);
       if (!owner || owner->id == element.id ||

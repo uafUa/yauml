@@ -3,6 +3,7 @@
 #include "core/connector_port_layout.h"
 #include "core/cpp_import.h"
 #include "core/diagram_filter.h"
+#include "core/model_operation.h"
 #include "core/presentation_layout.h"
 #include "core/project_command.h"
 #include "core/project_commands.h"
@@ -240,7 +241,8 @@ QSizeF nodePlacementSizeForDiagram(const ProjectData &project,
             presentation_layout::kFixedNodeHeight};
   }
   return presentation_layout::nodeContentSize(
-      project, element, diagram.showAttributes, diagram.showOperations);
+      project, element, diagram.showAttributes, diagram.showOperations,
+      diagram.operationSignatureMode);
 }
 
 QString packageIdForBrowserTarget(const ProjectData &project,
@@ -1276,7 +1278,7 @@ QString ProjectController::selectedAttributes() const {
 
 QString ProjectController::selectedOperations() const {
   const auto *element = selectedElement();
-  return element ? element->operations.join(u'\n') : QString();
+  return element ? modelOperationsText(element->operations) : QString();
 }
 
 QString ProjectController::selectedLiterals() const {
@@ -1964,7 +1966,9 @@ QString ProjectController::addElementAtImpl(const QString &type,
   element.name = label + QString::number(sameType + 1);
   if (elementType == ElementType::Class || elementType == ElementType::Struct) {
     element.attributes = {QStringLiteral("+ attribute: Type")};
-    element.operations = {QStringLiteral("+ operation(): void")};
+    element.operations = {modelOperationFromSignature(
+        QStringLiteral("+ operation(): void"),
+        element.id + QStringLiteral(":operation:0"))};
   } else if (elementType == ElementType::Enumeration) {
     element.enumLiterals = {QStringLiteral("Value")};
   }
@@ -1992,7 +1996,8 @@ QString ProjectController::addElementAtImpl(const QString &type,
       node.id = newId();
       node.elementId = element.id;
       const QSizeF contentSize = presentation_layout::nodeContentSize(
-          m_data, element, diagram->showAttributes, diagram->showOperations);
+          m_data, element, diagram->showAttributes, diagram->showOperations,
+          diagram->operationSignatureMode);
       if (std::isfinite(x) && std::isfinite(y)) {
         node.geometry = QRectF(QPointF(x, y), contentSize);
         if (coordinatesAreCenter)
@@ -2083,6 +2088,7 @@ void ProjectController::deleteBrowserItems(const QString &itemsJson) {
   QStringList folderIds;
   QStringList elementIds;
   QStringList diagramIds;
+  QStringList relationshipIds;
   QSet<QString> seen;
   for (const QJsonValue &value : document.array()) {
     const QJsonObject object = value.toObject();
@@ -2098,9 +2104,12 @@ void ProjectController::deleteBrowserItems(const QString &itemsJson) {
       elementIds.append(id);
     else if (kind == QStringLiteral("diagram") && findDiagram(m_data, id))
       diagramIds.append(id);
+    else if (kind == QStringLiteral("relationship") &&
+             findRelationship(m_data, id))
+      relationshipIds.append(id);
   }
-  const int requestedCount =
-      folderIds.size() + elementIds.size() + diagramIds.size();
+  const int requestedCount = folderIds.size() + elementIds.size() +
+                             diagramIds.size() + relationshipIds.size();
   if (requestedCount == 0)
     return;
   const QStringList elementsToDelete =
@@ -2110,6 +2119,12 @@ void ProjectController::deleteBrowserItems(const QString &itemsJson) {
       requestedCount == 1
           ? QStringLiteral("Delete project-tree item")
           : QStringLiteral("Delete %1 project-tree items").arg(requestedCount));
+  // Explicitly selected relationships are removed first. If their source or
+  // target types are selected in the same operation, the later element
+  // commands then observe an already-consistent model and undo in reverse.
+  for (const QString &relationshipId : relationshipIds)
+    pushCommand(std::make_unique<DeleteRelationshipCommand>(this, m_data,
+                                                            relationshipId));
   for (const QString &folderId : folderIds)
     pushCommand(
         std::make_unique<DeleteBrowserFolderCommand>(this, m_data, folderId));
@@ -3350,6 +3365,27 @@ QString ProjectController::transferDiagramPresentations(
   return targetDiagramId;
 }
 
+void ProjectController::removeConnectorPresentations(
+    const QString &diagramId, const QStringList &connectorIds) {
+  if (connectorIds.isEmpty())
+    return;
+  const QSet<QString> requested(connectorIds.cbegin(), connectorIds.cend());
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram)
+    return;
+
+  QSet<QString> validIds;
+  for (const auto &connector : diagram->connectors)
+    if (requested.contains(connector.id))
+      validIds.insert(connector.id);
+  if (validIds.isEmpty())
+    return;
+
+  pushCommand(std::make_unique<RemoveConnectorPresentationsCommand>(
+      this, m_data, diagramId, validIds));
+  clearSelection();
+}
+
 void ProjectController::removePresentations(const QString &diagramId,
                                             const QStringList &nodeIds) {
   if (nodeIds.isEmpty())
@@ -3606,6 +3642,18 @@ void ProjectController::setDiagramCompartmentVisible(const QString &diagramId,
       this, diagramId, attributes, before, visible));
 }
 
+void ProjectController::setDiagramOperationSignatureMode(
+    const QString &diagramId, const QString &mode) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  bool valid = false;
+  const OperationSignatureMode after =
+      operationSignatureModeFromString(mode, &valid);
+  if (!diagram || !valid || diagram->operationSignatureMode == after)
+    return;
+  pushCommand(std::make_unique<SetDiagramOperationSignatureModeCommand>(
+      this, diagramId, diagram->operationSignatureMode, after));
+}
+
 void ProjectController::setNodeCompartmentVisibility(
     const QString &diagramId, const QString &nodeId, const QString &compartment,
     const QString &visibility) {
@@ -3645,6 +3693,35 @@ void ProjectController::setNodesCompartmentVisibility(
     return;
   pushCommand(std::make_unique<SetNodeCompartmentVisibilityCommand>(
       this, attributes, diagramId, std::move(changes)));
+}
+
+void ProjectController::setNodesOperationSignatureMode(
+    const QString &diagramId, const QStringList &nodeIds, const QString &mode) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || nodeIds.isEmpty())
+    return;
+
+  std::optional<OperationSignatureMode> after;
+  if (mode != QStringLiteral("inherit")) {
+    bool valid = false;
+    after = operationSignatureModeFromString(mode, &valid);
+    if (!valid)
+      return;
+  }
+
+  const QSet<QString> requestedNodeIds(nodeIds.cbegin(), nodeIds.cend());
+  QList<NodeOperationSignatureModeChange> changes;
+  changes.reserve(requestedNodeIds.size());
+  for (const auto &node : diagram->nodes) {
+    if (requestedNodeIds.contains(node.id) &&
+        node.operationSignatureMode != after) {
+      changes.append({node.id, node.operationSignatureMode, after});
+    }
+  }
+  if (!changes.isEmpty()) {
+    pushCommand(std::make_unique<SetNodeOperationSignatureModeCommand>(
+        this, diagramId, std::move(changes)));
+  }
 }
 
 void ProjectController::updatePresentationGeometries(
@@ -4589,7 +4666,7 @@ void ProjectController::editText(const QString &objectId, const QString &field,
     } else if (field == QStringLiteral("operation") && index >= 0 &&
                index < element->operations.size()) {
       property = ElementTextProperty::Operation;
-      before = element->operations.at(index);
+      before = modelOperationSignature(element->operations.at(index));
     } else if (field == QStringLiteral("literal") && index >= 0 &&
                index < element->enumLiterals.size()) {
       property = ElementTextProperty::Literal;
@@ -4641,11 +4718,14 @@ void ProjectController::setSelectedAttributes(const QString &value) {
 
 void ProjectController::setSelectedOperations(const QString &value) {
   const auto *element = findElement(m_data, m_selectedId);
-  const QStringList after = lines(value);
+  if (!element)
+    return;
+  const QList<ModelOperation> after =
+      modelOperationsFromText(value, element->operations);
   if (element && element->operations != after)
-    pushCommand(std::make_unique<SetElementListCommand>(
-        this, element->id, ElementListProperty::Operations, element->operations,
-        after, QStringLiteral("Edit operations")));
+    pushCommand(std::make_unique<SetElementOperationsCommand>(
+        this, element->id, element->operations, after,
+        QStringLiteral("Edit operations")));
 }
 
 void ProjectController::setSelectedLiterals(const QString &value) {

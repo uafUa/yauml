@@ -61,7 +61,9 @@ belonged to that milestone.
 - Projects and packages/namespaces.
 - Classes, structs, interfaces, and enumerations.
 - Nested classifiers and explicit containment.
-- Attributes, operations, parameters, visibility, and common modifiers.
+- Attributes and structured operations, including stable operation identity,
+  parameters, return types, visibility, common modifiers, and source
+  locations.
 - Enumeration literals.
 - Generalization/inheritance and interface realization/implementation.
 - Dependency, association with navigability, aggregation, composition, and
@@ -101,6 +103,10 @@ belonged to that milestone.
 - Model browser, property inspector, diagram tabs, and persistent workspace state.
 - In-place editing for every editable text value rendered on a diagram. Inspector
   edits and in-place edits use the same validation and command path.
+- Per-diagram operation signature detail (**Full signature**, **Name + return
+  type**, or **Name only**) with presentation-level inheritance and overrides.
+  This is presentation state only; the semantic operation always retains its
+  complete structured signature.
 - Detachable diagram tabs and standalone tabbed diagram-area windows that share
   one project session and can be arranged across multiple monitors.
 

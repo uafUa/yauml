@@ -84,6 +84,36 @@ Menu {
                              "operations",
                              !root.canvas.diagramOperationsVisible)
         }
+        MenuSeparator {}
+        Menu {
+            title: qsTr("Operation signatures")
+            MenuItem {
+                text: qsTr("Full signature")
+                checkable: true
+                checked: root.canvasAvailable
+                         && root.canvas.diagramOperationSignatureMode === "full"
+                onTriggered: root.canvas.setDiagramOperationSignatureMode(
+                                 "full")
+            }
+            MenuItem {
+                text: qsTr("Name + return type")
+                checkable: true
+                checked: root.canvasAvailable
+                         && root.canvas.diagramOperationSignatureMode
+                            === "name-and-return-type"
+                onTriggered: root.canvas.setDiagramOperationSignatureMode(
+                                 "name-and-return-type")
+            }
+            MenuItem {
+                text: qsTr("Name only")
+                checkable: true
+                checked: root.canvasAvailable
+                         && root.canvas.diagramOperationSignatureMode
+                            === "name-only"
+                onTriggered: root.canvas.setDiagramOperationSignatureMode(
+                                 "name-only")
+            }
+        }
     }
     MenuSeparator {}
     CatalogMenuItem {

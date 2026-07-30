@@ -1,6 +1,7 @@
 #include "core/project_commands.h"
 
 #include "core/diagram_filter.h"
+#include "core/model_operation.h"
 #include "core/project_controller.h"
 
 #include <algorithm>
@@ -744,6 +745,42 @@ void RemovePresentationsCommand::revert(ProjectData &project) {
   applyMembershipChanges(*diagram, m_membershipChanges, false);
 }
 
+RemoveConnectorPresentationsCommand::RemoveConnectorPresentationsCommand(
+    ProjectController *controller, const ProjectData &project,
+    QString diagramId, const QSet<QString> &connectorIds)
+    : ProjectCommand(controller,
+                     connectorIds.size() == 1
+                         ? QStringLiteral("Remove connector from diagram")
+                         : QStringLiteral("Remove connectors from diagram")),
+      m_diagramId(std::move(diagramId)) {
+  const auto *diagram = findDiagram(project, m_diagramId);
+  Q_ASSERT(diagram);
+  if (!diagram)
+    return;
+
+  for (qsizetype index = 0; index < diagram->connectors.size(); ++index) {
+    const auto &connector = diagram->connectors.at(index);
+    if (connectorIds.contains(connector.id))
+      m_connectors.append({index, connector});
+  }
+}
+
+void RemoveConnectorPresentationsCommand::execute(ProjectData &project) {
+  auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram)
+    return;
+  for (auto item = m_connectors.crbegin(); item != m_connectors.crend(); ++item)
+    removeRecordedValue(diagram->connectors, item->index, item->value.id);
+}
+
+void RemoveConnectorPresentationsCommand::revert(ProjectData &project) {
+  auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram)
+    return;
+  for (const auto &item : m_connectors)
+    insertAtRecordedPosition(diagram->connectors, item.index, item.value);
+}
+
 RemoveContainerPresentationCommand::RemoveContainerPresentationCommand(
     ProjectController *controller, const ProjectData &project,
     QString diagramId, QString containerId)
@@ -1074,6 +1111,29 @@ void SetDiagramCompartmentVisibilityCommand::apply(ProjectData &project,
   }
 }
 
+SetDiagramOperationSignatureModeCommand::
+    SetDiagramOperationSignatureModeCommand(ProjectController *controller,
+                                            QString diagramId,
+                                            OperationSignatureMode before,
+                                            OperationSignatureMode after)
+    : ProjectCommand(controller,
+                     QStringLiteral("Change diagram operation signatures")),
+      m_diagramId(std::move(diagramId)), m_before(before), m_after(after) {}
+
+void SetDiagramOperationSignatureModeCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void SetDiagramOperationSignatureModeCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void SetDiagramOperationSignatureModeCommand::apply(
+    ProjectData &project, OperationSignatureMode value) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    diagram->operationSignatureMode = value;
+}
+
 SetDiagramFilterCommand::SetDiagramFilterCommand(ProjectController *controller,
                                                  QString diagramId,
                                                  DiagramFilter before,
@@ -1129,6 +1189,32 @@ void SetNodeCompartmentVisibilityCommand::apply(ProjectData &project,
         node->showAttributes = value;
       else
         node->showOperations = value;
+    }
+  }
+}
+
+SetNodeOperationSignatureModeCommand::SetNodeOperationSignatureModeCommand(
+    ProjectController *controller, QString diagramId,
+    QList<NodeOperationSignatureModeChange> changes)
+    : ProjectCommand(controller,
+                     QStringLiteral("Set selected operation signatures")),
+      m_diagramId(std::move(diagramId)), m_changes(std::move(changes)) {}
+
+void SetNodeOperationSignatureModeCommand::execute(ProjectData &project) {
+  apply(project, true);
+}
+
+void SetNodeOperationSignatureModeCommand::revert(ProjectData &project) {
+  apply(project, false);
+}
+
+void SetNodeOperationSignatureModeCommand::apply(ProjectData &project,
+                                                 bool forward) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    for (const auto &change : m_changes) {
+      if (auto *node = findNode(*diagram, change.nodeId)) {
+        node->operationSignatureMode = forward ? change.after : change.before;
+      }
     }
   }
 }
@@ -1384,8 +1470,10 @@ void EditElementTextCommand::apply(ProjectData &project, const QString &value) {
       element->attributes[m_index] = value;
     break;
   case ElementTextProperty::Operation:
-    if (m_index >= 0 && m_index < element->operations.size())
-      element->operations[m_index] = value;
+    if (m_index >= 0 && m_index < element->operations.size()) {
+      element->operations[m_index] = modelOperationWithEditedSignature(
+          element->operations.at(m_index), value);
+    }
     break;
   case ElementTextProperty::Literal:
     if (m_index >= 0 && m_index < element->enumLiterals.size())
@@ -1421,13 +1509,32 @@ void SetElementListCommand::apply(ProjectData &project,
   case ElementListProperty::Attributes:
     element->attributes = value;
     break;
-  case ElementListProperty::Operations:
-    element->operations = value;
-    break;
   case ElementListProperty::Literals:
     element->enumLiterals = value;
     break;
   }
+}
+
+SetElementOperationsCommand::SetElementOperationsCommand(
+    ProjectController *controller, QString elementId,
+    QList<ModelOperation> before, QList<ModelOperation> after,
+    const QString &description)
+    : ProjectCommand(controller, description),
+      m_elementId(std::move(elementId)), m_before(std::move(before)),
+      m_after(std::move(after)) {}
+
+void SetElementOperationsCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void SetElementOperationsCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void SetElementOperationsCommand::apply(ProjectData &project,
+                                        const QList<ModelOperation> &value) {
+  if (auto *element = findElement(project, m_elementId))
+    element->operations = value;
 }
 
 EditRelationshipTextCommand::EditRelationshipTextCommand(

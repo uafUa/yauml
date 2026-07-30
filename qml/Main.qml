@@ -324,6 +324,17 @@ ApplicationWindow {
             }
             MenuSeparator {}
             CatalogAction {
+                catalogId: "source.open"
+                text: qsTr("Open in &VS Code")
+                enabled: sourceEditorController.canOpenObject(
+                             projectController.selectedKind,
+                             projectController.selectedId)
+                onTriggered: sourceEditorController.openObject(
+                                 projectController.selectedKind,
+                                 projectController.selectedId)
+            }
+            MenuSeparator {}
+            CatalogAction {
                 catalogId: "style.manage"
                 text: qsTr("Project diagram &styles…")
                 onTriggered: browserStyleDialog.openManager()
@@ -372,6 +383,17 @@ ApplicationWindow {
                 onTriggered: updateController.checkForUpdates(true)
             }
         }
+    }
+
+    Shortcut {
+        sequence: "F12"
+        context: Qt.ApplicationShortcut
+        enabled: sourceEditorController.canOpenObject(
+                     projectController.selectedKind,
+                     projectController.selectedId)
+        onActivated: sourceEditorController.openObject(
+                         projectController.selectedKind,
+                         projectController.selectedId)
     }
 
     header: ToolBar {
@@ -508,9 +530,9 @@ ApplicationWindow {
                         objectName: "projectTreeColumnsButton"
                         catalogId: "browser.chooseColumns"
                         text: "▥"
-                        Accessible.name: qsTr("Choose project-tree columns")
+                        Accessible.name: qsTr("Configure project tree")
                         ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Project-tree columns")
+                        ToolTip.text: qsTr("Project-tree display")
                         onClicked: projectTreeColumnsMenu.popup(
                                        projectTreeColumnsButton, 0, height)
 
@@ -562,6 +584,16 @@ ApplicationWindow {
                                 onToggled: root.setProjectTreeColumnVisible(
                                                "qualifiedName", checked)
                             }
+                            MenuSeparator {}
+                            MenuItem {
+                                text: qsTr("Show relationships")
+                                checkable: true
+                                checked: applicationSettings
+                                         .projectTreeRelationshipsVisible
+                                onToggled: applicationSettings
+                                           .projectTreeRelationshipsVisible =
+                                               checked
+                            }
                         }
                     }
                 }
@@ -569,6 +601,11 @@ ApplicationWindow {
                     target: projectController.treeModel
                     property: "columns"
                     value: applicationSettings.projectTreeColumns
+                }
+                Binding {
+                    target: projectController.treeModel
+                    property: "relationshipsVisible"
+                    value: applicationSettings.projectTreeRelationshipsVisible
                 }
                 HorizontalHeaderView {
                     id: projectTreeHeader
@@ -621,7 +658,9 @@ ApplicationWindow {
                         // Select and scroll only after that mapping is current.
                         Qt.callLater(function() {
                             if (selectRow
-                                    && projectController.selectedKind === "element") {
+                                    && (projectController.selectedKind === "element"
+                                        || projectController.selectedKind
+                                           === "relationship")) {
                                 projectTreeSelection.select(
                                             itemIndex,
                                             ItemSelectionModel.ClearAndSelect
@@ -801,7 +840,9 @@ ApplicationWindow {
                                             treeDelegate.kind)
                                 projectController.treeModel.selectFromPointer(
                                             projectTreeSelection, itemIndex)
-                                if (kind === "element" || kind === "diagram")
+                                if (kind === "element"
+                                        || kind === "diagram"
+                                        || kind === "relationship")
                                     projectController.selectObject(objectId, kind)
                                 else
                                     projectController.clearSelection()
@@ -980,7 +1021,8 @@ ApplicationWindow {
                                             treeDelegate.objectId,
                                             treeDelegate.kind)
                                 if ((treeDelegate.kind === "element"
-                                     || treeDelegate.kind === "folder")
+                                     || treeDelegate.kind === "folder"
+                                     || treeDelegate.kind === "relationship")
                                         && !projectTreeSelection.isSelected(
                                             itemIndex)) {
                                     projectTreeSelection.select(
@@ -1070,6 +1112,21 @@ ApplicationWindow {
                         text: projectController.selectedKind.length > 0
                               ? projectController.selectedType : qsTr("Nothing selected")
                         color: uiTheme.mutedText
+                    }
+                    CatalogButton {
+                        Layout.leftMargin: 10
+                        Layout.rightMargin: 10
+                        catalogId: "source.open"
+                        text: qsTr("Open in VS Code")
+                        visible: projectController.selectedKind === "element"
+                                 || projectController.selectedKind
+                                    === "relationship"
+                        enabled: sourceEditorController.canOpenObject(
+                                     projectController.selectedKind,
+                                     projectController.selectedId)
+                        onClicked: sourceEditorController.openObject(
+                                       projectController.selectedKind,
+                                       projectController.selectedId)
                     }
                     Label { Layout.leftMargin: 10; text: qsTr("Name"); visible: projectController.selectedKind.length > 0 }
                     TextField {
@@ -1307,6 +1364,26 @@ ApplicationWindow {
         property int selectedItemCount: 0
 
         CatalogMenuItem {
+            catalogId: "source.open"
+            visible: treeContextMenu.selectedItemCount === 1
+                     && (treeContextMenu.targetKind === "element"
+                         || treeContextMenu.targetKind === "relationship")
+            height: visible ? implicitHeight : 0
+            text: qsTr("Open in VS Code")
+            enabled: sourceEditorController.canOpenObject(
+                         treeContextMenu.targetKind,
+                         treeContextMenu.targetId)
+            onTriggered: sourceEditorController.openObject(
+                             treeContextMenu.targetKind,
+                             treeContextMenu.targetId)
+        }
+        MenuSeparator {
+            visible: treeContextMenu.selectedItemCount === 1
+                     && (treeContextMenu.targetKind === "element"
+                         || treeContextMenu.targetKind === "relationship")
+            height: visible ? implicitHeight : 0
+        }
+        CatalogMenuItem {
             catalogId: "browser.createFolder"
             visible: treeContextMenu.targetKind === "folder"
                      || treeContextMenu.targetKind === "element"
@@ -1381,7 +1458,9 @@ ApplicationWindow {
             visible: treeContextMenu.selectedItemCount > 0
             height: visible ? implicitHeight : 0
             text: treeContextMenu.selectedItemCount === 1
-                  ? qsTr("Delete")
+                  ? (treeContextMenu.targetKind === "relationship"
+                     ? qsTr("Delete relationship from model")
+                     : qsTr("Delete"))
                   : qsTr("Delete selected (%1)").arg(
                         treeContextMenu.selectedItemCount)
             onTriggered: projectController.deleteBrowserItems(
@@ -1693,8 +1772,10 @@ ApplicationWindow {
             "connector.editStereotypes": qsTr("Choose relationship stereotypes"),
             "connector.resetAnnotationPositions": qsTr("Reset annotation positions"),
             "presentation.editName": qsTr("Edit name"),
+            "source.open": qsTr("Open in VS Code"),
             "presentation.attributesVisibility": qsTr("Cycle attributes visibility"),
             "presentation.operationsVisibility": qsTr("Cycle operations visibility"),
+            "presentation.operationSignatureMode": qsTr("Cycle operation signature detail"),
             "presentation.connectorSnapPoints": qsTr("Connector snap points"),
             "presentation.addIncomingRelatedTypes": qsTr("Add types that depend on this"),
             "presentation.addOutgoingRelatedTypes": qsTr("Add types this depends on"),
@@ -1801,6 +1882,10 @@ ApplicationWindow {
                       ? 2 : 1
             automaticUpdateChecks.checked =
                     applicationSettings.automaticUpdateChecksEnabled
+            sourceEditorCommand.text =
+                    applicationSettings.sourceEditorCommand
+            sourceEditorDoubleClick.checked =
+                    applicationSettings.sourceEditorDoubleClickEnabled
             defaultConnectorRouting.currentIndex =
                     applicationSettings.defaultConnectorRouting === "orthogonal" ? 1 : 0
             const gestureKeys = applicationSettings.relationshipGestureKeys
@@ -1850,6 +1935,10 @@ ApplicationWindow {
                     : packageReassignment.currentIndex === 2 ? "allow" : "ask"
             applicationSettings.automaticUpdateChecksEnabled =
                     automaticUpdateChecks.checked
+            applicationSettings.sourceEditorCommand =
+                    sourceEditorCommand.text
+            applicationSettings.sourceEditorDoubleClickEnabled =
+                    sourceEditorDoubleClick.checked
             applicationSettings.defaultConnectorRouting =
                     defaultConnectorRouting.currentIndex === 1
                     ? "orthogonal" : "straight"
@@ -2007,6 +2096,30 @@ ApplicationWindow {
                             wrapMode: Text.Wrap
                             color: uiTheme.mutedText
                             text: qsTr("Installed builds check at most once per day. Updates are never installed without confirmation.")
+                        }
+                        Label {
+                            text: qsTr("Source editor")
+                            font.bold: true
+                        }
+                        RowLayout {
+                            Layout.fillWidth: true
+                            Label { text: qsTr("VS Code command") }
+                            TextField {
+                                id: sourceEditorCommand
+                                Layout.fillWidth: true
+                                placeholderText: "code"
+                                Accessible.name: qsTr("VS Code command")
+                            }
+                        }
+                        CheckBox {
+                            id: sourceEditorDoubleClick
+                            text: qsTr("Open source when a type or operation is double-clicked on a diagram")
+                        }
+                        Label {
+                            Layout.fillWidth: true
+                            wrapMode: Text.Wrap
+                            color: uiTheme.mutedText
+                            text: qsTr("F12 and “Open in VS Code” are always available for imported items. Enter “code” when VS Code is on PATH, or specify Code.exe/code.cmd and optional arguments.")
                         }
                         Item { Layout.preferredHeight: 8 }
                     }
@@ -2689,6 +2802,10 @@ ApplicationWindow {
         height: Math.min(700, parent.height - 40)
         modal: true
         focus: true
+        // A synchronization decision must be explicit. Qt dialogs otherwise
+        // inherit CloseOnPressOutside and appear to stop being modal when the
+        // user clicks the main window.
+        closePolicy: Popup.CloseOnEscape
         title: qsTr("C++ synchronization preview")
         standardButtons: Dialog.Apply | Dialog.Close
         property string statusFilter: "all"

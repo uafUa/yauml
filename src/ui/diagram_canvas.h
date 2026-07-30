@@ -70,6 +70,10 @@ class DiagramCanvas : public QQuickItem {
   Q_PROPERTY(QString diagramItemSizingMode READ diagramItemSizingMode WRITE
                  setDiagramItemSizingMode NOTIFY diagramItemSizingModeChanged)
   Q_PROPERTY(
+      bool sourceEditorDoubleClickEnabled READ sourceEditorDoubleClickEnabled
+          WRITE setSourceEditorDoubleClickEnabled NOTIFY
+              sourceEditorDoubleClickEnabledChanged)
+  Q_PROPERTY(
       QString defaultConnectorRouting READ defaultConnectorRouting WRITE
           setDefaultConnectorRouting NOTIFY defaultConnectorRoutingChanged)
   Q_PROPERTY(QString selectedConnectorRouting READ selectedConnectorRouting
@@ -86,6 +90,10 @@ class DiagramCanvas : public QQuickItem {
                  selectedAttributesVisibility NOTIFY canvasSelectionChanged)
   Q_PROPERTY(QString selectedOperationsVisibility READ
                  selectedOperationsVisibility NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(QString diagramOperationSignatureMode READ
+                 diagramOperationSignatureMode NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(QString selectedOperationSignatureMode READ
+                 selectedOperationSignatureMode NOTIFY canvasSelectionChanged)
   Q_PROPERTY(int incomingRelatedTypeCount READ incomingRelatedTypeCount NOTIFY
                  canvasSelectionChanged)
   Q_PROPERTY(int outgoingRelatedTypeCount READ outgoingRelatedTypeCount NOTIFY
@@ -171,6 +179,8 @@ public:
   void setGridSpacing(int spacing);
   QString diagramItemSizingMode() const;
   void setDiagramItemSizingMode(const QString &mode);
+  bool sourceEditorDoubleClickEnabled() const;
+  void setSourceEditorDoubleClickEnabled(bool enabled);
   QString defaultConnectorRouting() const;
   void setDefaultConnectorRouting(const QString &routing);
   QString selectedConnectorRouting() const;
@@ -180,6 +190,8 @@ public:
   bool diagramOperationsVisible() const;
   QString selectedAttributesVisibility() const;
   QString selectedOperationsVisibility() const;
+  QString diagramOperationSignatureMode() const;
+  QString selectedOperationSignatureMode() const;
   int incomingRelatedTypeCount() const;
   int outgoingRelatedTypeCount() const;
   bool canWrapSelectionInPackage() const;
@@ -230,8 +242,11 @@ public:
                                              int verticalPointCount);
   Q_INVOKABLE void setDiagramCompartmentVisible(const QString &compartment,
                                                 bool visible);
+  Q_INVOKABLE void setDiagramOperationSignatureMode(const QString &mode);
   Q_INVOKABLE void setSelectedCompartmentVisibility(const QString &compartment,
                                                     const QString &visibility);
+  Q_INVOKABLE void setSelectedOperationSignatureMode(const QString &mode);
+  Q_INVOKABLE void cycleSelectedOperationSignatureMode();
   Q_INVOKABLE void addRelatedTypes(const QString &direction);
   Q_INVOKABLE void fitSelectionToContent();
   Q_INVOKABLE void wrapSelectionInPackage();
@@ -266,6 +281,7 @@ signals:
   void alignmentGuidesEnabledChanged();
   void gridSpacingChanged();
   void diagramItemSizingModeChanged();
+  void sourceEditorDoubleClickEnabledChanged();
   void defaultConnectorRoutingChanged();
   void relationshipGestureKeysChanged();
   void relationshipToolboxCandidateChanged();
@@ -283,6 +299,7 @@ signals:
   void stereotypeEditRequested(const QString &objectId,
                                const QString &objectKind, qreal x, qreal y,
                                qreal width, qreal height);
+  void sourceNavigationRequested(const QString &objectId, int operationIndex);
 
 protected:
   QSGNode *updatePaintNode(QSGNode *oldNode,
@@ -494,6 +511,7 @@ private:
   bool m_alignmentGuidesEnabled;
   int m_gridSpacing;
   QString m_diagramItemSizingMode = QStringLiteral("content");
+  bool m_sourceEditorDoubleClickEnabled = false;
   ConnectorRouting m_defaultConnectorRouting;
   QVariantMap m_relationshipGestureKeys;
   bool m_relationshipToolboxCandidate = false;

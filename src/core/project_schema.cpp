@@ -1,5 +1,6 @@
 #include "core/project_schema.h"
 
+#include "core/model_operation.h"
 #include "core/project_schema_version.h"
 #include "core/stereotype_catalog.h"
 
@@ -114,6 +115,63 @@ void migrateVersionTwoToThree(ProjectJsonDocuments &documents) {
   documents.manifest.insert(QStringLiteral("schemaVersion"), 3);
 }
 
+QJsonArray migrateOperations(const QJsonValue &value,
+                             const QString &elementId) {
+  QJsonArray migrated;
+  const QJsonArray operations = value.toArray();
+  for (int index = 0; index < operations.size(); ++index) {
+    const QJsonValue operation = operations.at(index);
+    if (operation.isString()) {
+      const QString stableId =
+          QStringLiteral("%1:operation:%2").arg(elementId).arg(index + 1);
+      migrated.append(modelOperationToJson(
+          modelOperationFromSignature(operation.toString(), stableId)));
+    } else {
+      // Preserve malformed and extension values for normal schema validation.
+      migrated.append(operation);
+    }
+  }
+  return migrated;
+}
+
+void migrateVersionThreeToFour(ProjectJsonDocuments &documents) {
+  // Schema 4 promotes operation signatures from presentation strings to
+  // semantic records. Convert both the live element and its C++ import
+  // baseline with identical deterministic IDs so the first synchronization
+  // after migration does not report every operation as changed.
+  QJsonArray elements =
+      documents.model.value(QStringLiteral("elements")).toArray();
+  for (int elementIndex = 0; elementIndex < elements.size(); ++elementIndex) {
+    if (!elements.at(elementIndex).isObject())
+      continue;
+    QJsonObject element = elements.at(elementIndex).toObject();
+    QString elementId = element.value(QStringLiteral("id")).toString();
+    if (elementId.isEmpty())
+      elementId = QStringLiteral("legacy-element-%1").arg(elementIndex + 1);
+    element.insert(QStringLiteral("operations"),
+                   migrateOperations(
+                       element.value(QStringLiteral("operations")), elementId));
+
+    QJsonObject binding =
+        element.value(QStringLiteral("sourceBinding")).toObject();
+    if (!binding.isEmpty()) {
+      QJsonObject baseline =
+          binding.value(QStringLiteral("lastImported")).toObject();
+      if (!baseline.isEmpty()) {
+        baseline.insert(
+            QStringLiteral("operations"),
+            migrateOperations(baseline.value(QStringLiteral("operations")),
+                              elementId));
+        binding.insert(QStringLiteral("lastImported"), baseline);
+        element.insert(QStringLiteral("sourceBinding"), binding);
+      }
+    }
+    elements.replace(elementIndex, element);
+  }
+  documents.model.insert(QStringLiteral("elements"), elements);
+  documents.manifest.insert(QStringLiteral("schemaVersion"), 4);
+}
+
 } // namespace
 
 SchemaMigrationOutcome
@@ -148,6 +206,10 @@ ProjectSchemaMigrator::migrate(ProjectJsonDocuments documents) {
     case 2:
       migrateVersionTwoToThree(outcome.documents);
       version = 3;
+      break;
+    case 3:
+      migrateVersionThreeToFour(outcome.documents);
+      version = 4;
       break;
     default:
       outcome.diagnostics.append(schemaError(

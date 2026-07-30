@@ -42,6 +42,10 @@ constexpr auto kRecentProjectsKey = "recentProjects";
 constexpr auto kProjectTreeSettingsGroup = "preferences/projectTree";
 constexpr auto kProjectTreeColumnsKey = "columns";
 constexpr auto kProjectTreeColumnWidthsKey = "columnWidths";
+constexpr auto kProjectTreeRelationshipsVisibleKey = "relationshipsVisible";
+constexpr auto kSourceEditorSettingsGroup = "preferences/sourceEditor";
+constexpr auto kSourceEditorCommandKey = "command";
+constexpr auto kSourceEditorDoubleClickEnabledKey = "doubleClickEnabled";
 constexpr auto kLegacyScopeMigratedKey =
     "migration/previousProductSettingsImported";
 constexpr qint64 kAutomaticUpdateCheckIntervalSeconds = 24 * 60 * 60;
@@ -119,10 +123,9 @@ QString normalizedDiagramItemSizingMode(const QString &candidate) {
 
 QStringList normalizedProjectTreeColumns(const QStringList &candidate) {
   static const QStringList allowed{
-      QStringLiteral("name"), QStringLiteral("sourceDirectory"),
-      QStringLiteral("sourceFile"),
-      QStringLiteral("stereotypes"), QStringLiteral("type"),
-      QStringLiteral("qualifiedName")};
+      QStringLiteral("name"),       QStringLiteral("sourceDirectory"),
+      QStringLiteral("sourceFile"), QStringLiteral("stereotypes"),
+      QStringLiteral("type"),       QStringLiteral("qualifiedName")};
   QStringList normalized{QStringLiteral("name")};
   for (const QString &column : candidate) {
     // `sourcePath` was the combined directory/file column used by the first
@@ -160,9 +163,8 @@ QVariantMap normalizedProjectTreeColumnWidths(const QVariantMap &candidate) {
     bool ok = false;
     const int width = iterator.value().toInt(&ok);
     if (ok)
-      normalized.insert(
-          iterator.key(),
-          std::clamp(width, kMinimumColumnWidth, kMaximumColumnWidth));
+      normalized.insert(iterator.key(), std::clamp(width, kMinimumColumnWidth,
+                                                   kMaximumColumnWidth));
   }
   return normalized;
 }
@@ -286,12 +288,12 @@ QVariantMap makeDefaultContextToolboxConfiguration() {
             "connector.editTargetMultiplicity", "connector.editStereotypes",
             "connector.resetAnnotationPositions"})},
       {QStringLiteral("presentation"),
-       toolboxEntries({"presentation.editName",
+       toolboxEntries({"presentation.editName", "source.open",
                        "presentation.attributesVisibility",
                        "presentation.operationsVisibility",
+                       "presentation.operationSignatureMode",
                        "presentation.connectorSnapPoints",
-                       "arrange.fitToContent",
-                       "style.assignNamed",
+                       "arrange.fitToContent", "style.assignNamed",
                        "presentation.addIncomingRelatedTypes",
                        "presentation.addOutgoingRelatedTypes",
                        "presentation.wrapInNamespace"})},
@@ -445,8 +447,9 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
           .value(QLatin1String(kAutomaticUpdateChecksEnabledKey),
                  kDefaultAutomaticUpdateChecksEnabled)
           .toBool();
-  m_lastUpdateCheckUtc =
-      settings.value(QLatin1String(kLastUpdateCheckUtcKey)).toDateTime().toUTC();
+  m_lastUpdateCheckUtc = settings.value(QLatin1String(kLastUpdateCheckUtcKey))
+                             .toDateTime()
+                             .toUTC();
   settings.endGroup();
 
   settings.beginGroup(QLatin1String(kHistorySettingsGroup));
@@ -475,11 +478,31 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
           .toStringList());
   m_projectTreeColumnWidths = normalizedProjectTreeColumnWidths(
       settings.value(QLatin1String(kProjectTreeColumnWidthsKey)).toMap());
+  m_projectTreeRelationshipsVisible =
+      settings
+          .value(QLatin1String(kProjectTreeRelationshipsVisibleKey),
+                 kDefaultProjectTreeRelationshipsVisible)
+          .toBool();
+  settings.endGroup();
+
+  settings.beginGroup(QLatin1String(kSourceEditorSettingsGroup));
+  m_sourceEditorCommand = settings
+                              .value(QLatin1String(kSourceEditorCommandKey),
+                                     QLatin1String(kDefaultSourceEditorCommand))
+                              .toString()
+                              .trimmed();
+  if (m_sourceEditorCommand.isEmpty())
+    m_sourceEditorCommand = QLatin1String(kDefaultSourceEditorCommand);
+  m_sourceEditorDoubleClickEnabled =
+      settings
+          .value(QLatin1String(kSourceEditorDoubleClickEnabledKey),
+                 kDefaultSourceEditorDoubleClickEnabled)
+          .toBool();
   settings.endGroup();
 }
 
-void ApplicationSettings::migrateLegacyScope(
-    const QString &legacyOrganization, const QString &legacyApplication) {
+void ApplicationSettings::migrateLegacyScope(const QString &legacyOrganization,
+                                             const QString &legacyApplication) {
   QSettings current;
   if (current.value(QLatin1String(kLegacyScopeMigratedKey)).toBool())
     return;
@@ -520,8 +543,7 @@ QString ApplicationSettings::defaultPackageReassignmentPolicy() {
 
 QStringList ApplicationSettings::defaultProjectTreeColumns() {
   return {QStringLiteral("name"), QStringLiteral("sourceDirectory"),
-          QStringLiteral("sourceFile"),
-          QStringLiteral("stereotypes")};
+          QStringLiteral("sourceFile"), QStringLiteral("stereotypes")};
 }
 
 QVariantMap ApplicationSettings::defaultProjectTreeColumnWidths() {
@@ -778,6 +800,9 @@ void ApplicationSettings::resetDefaults() {
   setAutomaticUpdateChecksEnabled(kDefaultAutomaticUpdateChecksEnabled);
   setProjectTreeColumns(defaultProjectTreeColumns());
   setProjectTreeColumnWidths(defaultProjectTreeColumnWidths());
+  setProjectTreeRelationshipsVisible(kDefaultProjectTreeRelationshipsVisible);
+  setSourceEditorCommand(QLatin1String(kDefaultSourceEditorCommand));
+  setSourceEditorDoubleClickEnabled(kDefaultSourceEditorDoubleClickEnabled);
 }
 
 QStringList ApplicationSettings::projectTreeColumns() const {
@@ -805,6 +830,45 @@ void ApplicationSettings::setProjectTreeColumnWidths(
   m_projectTreeColumnWidths = normalized;
   persistProjectTreePreferences();
   emit projectTreeColumnWidthsChanged();
+}
+
+bool ApplicationSettings::projectTreeRelationshipsVisible() const {
+  return m_projectTreeRelationshipsVisible;
+}
+
+void ApplicationSettings::setProjectTreeRelationshipsVisible(bool visible) {
+  if (m_projectTreeRelationshipsVisible == visible)
+    return;
+  m_projectTreeRelationshipsVisible = visible;
+  persistProjectTreePreferences();
+  emit projectTreeRelationshipsVisibleChanged();
+}
+
+QString ApplicationSettings::sourceEditorCommand() const {
+  return m_sourceEditorCommand;
+}
+
+void ApplicationSettings::setSourceEditorCommand(const QString &command) {
+  QString normalized = command.trimmed();
+  if (normalized.isEmpty())
+    normalized = QLatin1String(kDefaultSourceEditorCommand);
+  if (m_sourceEditorCommand == normalized)
+    return;
+  m_sourceEditorCommand = normalized;
+  persistSourceEditorPreferences();
+  emit sourceEditorCommandChanged();
+}
+
+bool ApplicationSettings::sourceEditorDoubleClickEnabled() const {
+  return m_sourceEditorDoubleClickEnabled;
+}
+
+void ApplicationSettings::setSourceEditorDoubleClickEnabled(bool enabled) {
+  if (m_sourceEditorDoubleClickEnabled == enabled)
+    return;
+  m_sourceEditorDoubleClickEnabled = enabled;
+  persistSourceEditorPreferences();
+  emit sourceEditorDoubleClickEnabledChanged();
 }
 
 void ApplicationSettings::persistDiagramPreferences() const {
@@ -897,6 +961,19 @@ void ApplicationSettings::persistProjectTreePreferences() const {
                     m_projectTreeColumns);
   settings.setValue(QLatin1String(kProjectTreeColumnWidthsKey),
                     m_projectTreeColumnWidths);
+  settings.setValue(QLatin1String(kProjectTreeRelationshipsVisibleKey),
+                    m_projectTreeRelationshipsVisible);
+  settings.endGroup();
+  settings.sync();
+}
+
+void ApplicationSettings::persistSourceEditorPreferences() const {
+  QSettings settings;
+  settings.beginGroup(QLatin1String(kSourceEditorSettingsGroup));
+  settings.setValue(QLatin1String(kSourceEditorCommandKey),
+                    m_sourceEditorCommand);
+  settings.setValue(QLatin1String(kSourceEditorDoubleClickEnabledKey),
+                    m_sourceEditorDoubleClickEnabled);
   settings.endGroup();
   settings.sync();
 }

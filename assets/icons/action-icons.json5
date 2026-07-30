@@ -93,6 +93,21 @@
       },
     },
 
+    source: {
+      open: {
+        label: "Open in source editor",
+        contexts: [
+          "Edit menu",
+          "project tree menu",
+          "properties panel",
+          "diagram element menu",
+          "diagram connector menu",
+          "presentation toolbox",
+        ],
+        svg: "",
+      },
+    },
+
     workspace: {
       addDiagram: {
         label: "Add diagram",
@@ -181,7 +196,7 @@
         svg: "",
       },
       chooseColumns: {
-        label: "Choose project-tree columns",
+        label: "Configure project-tree display",
         contexts: ["project-tree search bar"],
         svg: "",
       },
@@ -360,6 +375,11 @@
         contexts: ["presentation toolbox"],
         svg: "",
       },
+      operationSignatureMode: {
+        label: "Cycle operation signature detail",
+        contexts: ["presentation toolbox"],
+        svg: "",
+      },
       copyToDiagram: {
         label: "Copy selected presentations to another diagram",
         contexts: ["element context menu", "container context menu"],
@@ -438,9 +458,9 @@
         contexts: ["relationship context menu"],
         svg: "",
       },
-      deleteRelationship: {
-        label: "Delete relationship",
-        contexts: ["relationship context menu", "Delete shortcut"],
+      removePresentation: {
+        label: "Remove connector from diagram",
+        contexts: ["connector context menu", "Delete shortcut"],
         svg: "",
       },
     },
@@ -622,6 +642,41 @@
       match: { kind: "element", objectType: "enumeration", nested: true },
       note: "If empty, integration will fall back to projectTreeNodes.enumeration.svg.",
       svg: "tree-enum.svg",
+    },
+    dependencyRelationship: {
+      label: "Dependency relationship",
+      match: { kind: "relationship", objectType: "dependency" },
+      svg: "rel-dependency.svg",
+    },
+    realizationRelationship: {
+      label: "Realization relationship",
+      match: { kind: "relationship", objectType: "realization" },
+      svg: "rel-implementation.svg",
+    },
+    generalizationRelationship: {
+      label: "Generalization relationship",
+      match: { kind: "relationship", objectType: "generalization" },
+      svg: "rel-inheritance.svg",
+    },
+    associationRelationship: {
+      label: "Association relationship",
+      match: { kind: "relationship", objectType: "association" },
+      svg: "rel-association.svg",
+    },
+    aggregationRelationship: {
+      label: "Aggregation relationship",
+      match: { kind: "relationship", objectType: "aggregation" },
+      svg: "rel-aggregation.svg",
+    },
+    compositionRelationship: {
+      label: "Composition relationship",
+      match: { kind: "relationship", objectType: "composition" },
+      svg: "rel-composition.svg",
+    },
+    containmentRelationship: {
+      label: "Containment relationship",
+      match: { kind: "relationship", objectType: "containment" },
+      svg: "rel-nesting.svg",
     },
     classDiagram: {
       label: "Class diagram",

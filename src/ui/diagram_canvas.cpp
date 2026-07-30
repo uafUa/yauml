@@ -3,6 +3,7 @@
 #include "core/application_settings.h"
 #include "core/connector_port_layout.h"
 #include "core/diagram_filter.h"
+#include "core/model_operation.h"
 #include "core/presentation_layout.h"
 #include "core/project_controller.h"
 #include "core/project_style.h"
@@ -1707,9 +1708,11 @@ void DiagramCanvas::setProject(ProjectController *project) {
       const bool selectionPruned = pruneFilteredSelection();
       if (selectionPruned)
         synchronizeProjectSelection();
-      if (selectionPruned || !m_selectedNodes.isEmpty() ||
-          !m_selectedConnectors.isEmpty() || !m_selectedContainers.isEmpty())
-        emit canvasSelectionChanged();
+      // Several diagram-level properties (compartment defaults, signature
+      // detail, filtering) share this notifier with selection-derived state.
+      // Emit it even for an empty selection so open menus never retain stale
+      // checkmarks after an undo or a diagram-default command.
+      emit canvasSelectionChanged();
       emit diagramFilterChanged();
       update();
     });
@@ -1934,6 +1937,35 @@ QString DiagramCanvas::selectedAttributesVisibility() const {
 
 QString DiagramCanvas::selectedOperationsVisibility() const {
   return selectedCompartmentVisibility(false);
+}
+
+QString DiagramCanvas::diagramOperationSignatureMode() const {
+  const auto *currentDiagram = diagram();
+  return toString(currentDiagram ? currentDiagram->operationSignatureMode
+                                 : OperationSignatureMode::Full);
+}
+
+QString DiagramCanvas::selectedOperationSignatureMode() const {
+  if (m_selectedNodeOrder.isEmpty())
+    return {};
+  const auto *currentDiagram = diagram();
+  if (!currentDiagram)
+    return {};
+
+  QString commonMode;
+  for (const QString &nodeId : m_selectedNodeOrder) {
+    const auto *node = findNode(*currentDiagram, nodeId);
+    if (!node)
+      return {};
+    const QString mode = node->operationSignatureMode
+                             ? toString(*node->operationSignatureMode)
+                             : QStringLiteral("inherit");
+    if (commonMode.isEmpty())
+      commonMode = mode;
+    else if (commonMode != mode)
+      return QStringLiteral("mixed");
+  }
+  return commonMode;
 }
 
 QString DiagramCanvas::selectedCompartmentVisibility(bool attributes) const {
@@ -2165,6 +2197,17 @@ void DiagramCanvas::setDiagramItemSizingMode(const QString &mode) {
     return;
   m_diagramItemSizingMode = normalized;
   emit diagramItemSizingModeChanged();
+}
+
+bool DiagramCanvas::sourceEditorDoubleClickEnabled() const {
+  return m_sourceEditorDoubleClickEnabled;
+}
+
+void DiagramCanvas::setSourceEditorDoubleClickEnabled(bool enabled) {
+  if (m_sourceEditorDoubleClickEnabled == enabled)
+    return;
+  m_sourceEditorDoubleClickEnabled = enabled;
+  emit sourceEditorDoubleClickEnabledChanged();
 }
 
 QString DiagramCanvas::defaultConnectorRouting() const {
@@ -3283,6 +3326,8 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
             node.showAttributes.value_or(d->showAttributes);
         const bool showOperations =
             node.showOperations.value_or(d->showOperations);
+        const OperationSignatureMode operationSignatureMode =
+            node.operationSignatureMode.value_or(d->operationSignatureMode);
         snapshot.nodes.append(
             {rect, (*element)->type,
              presentation_layout::elementDisplayNameInPackage(
@@ -3290,7 +3335,9 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
              stereotype_catalog::displayText(projectData,
                                              (*element)->stereotypeIds),
              showAttributes ? (*element)->attributes : QStringList{},
-             showOperations ? (*element)->operations : QStringList{},
+             showOperations ? modelOperationSignatures((*element)->operations,
+                                                       operationSignatureMode)
+                            : QStringList{},
              (*element)->enumLiterals,
              renderElementStyle(
                  project_style::effectiveStyleForNode(projectData, node)),
@@ -3622,7 +3669,7 @@ DiagramCanvas::TextHit DiagramCanvas::hitText(const QPointF &scenePoint) const {
         for (int i = 0; i < element->operations.size(); ++i, ++line)
           if (textLineRect(rect, line, headerHeight).contains(scenePoint))
             return {element->id, QStringLiteral("operation"), i,
-                    element->operations.at(i),
+                    modelOperationSignature(element->operations.at(i)),
                     textLineRect(rect, line, headerHeight)};
       }
     }
@@ -4191,6 +4238,36 @@ void DiagramCanvas::mouseDoubleClickEvent(QMouseEvent *event) {
                                    view.width(), view.height());
       event->accept();
       return;
+    }
+    if (m_sourceEditorDoubleClickEnabled && m_project &&
+        (hit.field == QStringLiteral("name") ||
+         hit.field == QStringLiteral("operation"))) {
+      const ModelElement *element =
+          findElement(m_project->data(), hit.objectId);
+      bool hasSourceLocation = false;
+      if (element) {
+        if (hit.field == QStringLiteral("operation") && hit.index >= 0 &&
+            hit.index < element->operations.size()) {
+          hasSourceLocation =
+              !element->operations.at(hit.index).sourceFile.trimmed().isEmpty();
+        }
+        if (!hasSourceLocation) {
+          hasSourceLocation =
+              !element->extra.value(QStringLiteral("sourceBinding"))
+                   .toObject()
+                   .value(QStringLiteral("file"))
+                   .toString()
+                   .trimmed()
+                   .isEmpty();
+        }
+      }
+      if (hasSourceLocation) {
+        emit sourceNavigationRequested(
+            hit.objectId,
+            hit.field == QStringLiteral("operation") ? hit.index : -1);
+        event->accept();
+        return;
+      }
     }
     const QRectF view = toView(hit.sceneRect);
     // The editor is a QML overlay in view coordinates, while canvas text is
@@ -4949,12 +5026,36 @@ void DiagramCanvas::setDiagramCompartmentVisible(const QString &compartment,
     m_project->setDiagramCompartmentVisible(m_diagramId, compartment, visible);
 }
 
+void DiagramCanvas::setDiagramOperationSignatureMode(const QString &mode) {
+  if (m_project)
+    m_project->setDiagramOperationSignatureMode(m_diagramId, mode);
+}
+
 void DiagramCanvas::setSelectedCompartmentVisibility(
     const QString &compartment, const QString &visibility) {
   if (!m_project || m_selectedNodeOrder.isEmpty())
     return;
   m_project->setNodesCompartmentVisibility(m_diagramId, m_selectedNodeOrder,
                                            compartment, visibility);
+}
+
+void DiagramCanvas::setSelectedOperationSignatureMode(const QString &mode) {
+  if (!m_project || m_selectedNodeOrder.isEmpty())
+    return;
+  m_project->setNodesOperationSignatureMode(m_diagramId, m_selectedNodeOrder,
+                                            mode);
+}
+
+void DiagramCanvas::cycleSelectedOperationSignatureMode() {
+  const QString current = selectedOperationSignatureMode();
+  QString next = QStringLiteral("inherit");
+  if (current == QStringLiteral("inherit"))
+    next = QStringLiteral("full");
+  else if (current == QStringLiteral("full"))
+    next = QStringLiteral("name-and-return-type");
+  else if (current == QStringLiteral("name-and-return-type"))
+    next = QStringLiteral("name-only");
+  setSelectedOperationSignatureMode(next);
 }
 
 void DiagramCanvas::addRelatedTypes(const QString &direction) {
@@ -4996,7 +5097,8 @@ void DiagramCanvas::fitSelectionToContent() {
     fitted.setSize(presentation_layout::nodeContentSizeForDisplayName(
         m_project->data(), *element, displayName,
         node->showAttributes.value_or(d->showAttributes),
-        node->showOperations.value_or(d->showOperations)));
+        node->showOperations.value_or(d->showOperations),
+        node->operationSignatureMode.value_or(d->operationSignatureMode)));
     appendGeometry(nodeId, fitted);
   }
   for (const QString &containerId : m_selectedContainers) {
@@ -5116,17 +5218,10 @@ QString DiagramCanvas::transferSelectedPresentations(
 void DiagramCanvas::deleteSelectedConnector() {
   if (!m_project || m_selectedConnectors.isEmpty())
     return;
-  const auto *d = diagram();
-  if (!d)
+  const QStringList connectorIds = selectedConnectorIdsInDiagramOrder();
+  if (connectorIds.isEmpty())
     return;
-
-  QStringList relationshipIds;
-  for (const auto &connector : d->connectors)
-    if (m_selectedConnectors.contains(connector.id))
-      relationshipIds.append(connector.relationshipId);
-  if (relationshipIds.isEmpty())
-    return;
-  m_project->deleteRelationships(relationshipIds);
+  m_project->removeConnectorPresentations(m_diagramId, connectorIds);
   clearCanvasSelection();
 }
 

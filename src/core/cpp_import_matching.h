@@ -18,7 +18,7 @@ struct CppImportedDeclaration {
   int line = 0;
   ElementType elementType = ElementType::Class;
   QStringList attributes;
-  QStringList operations;
+  QList<ModelOperation> operations;
 
   bool operator==(const CppImportedDeclaration &) const = default;
 };

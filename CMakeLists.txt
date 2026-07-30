@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(yauml VERSION 0.3.2 LANGUAGES CXX)
+project(yauml VERSION 0.4.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -64,6 +64,8 @@ add_library(yauml_core STATIC
     src/core/diagram_filter.h
     src/core/json5.cpp
     src/core/json5.h
+    src/core/model_operation.cpp
+    src/core/model_operation.h
     src/core/presentation_layout.cpp
     src/core/presentation_layout.h
     src/core/project_command.cpp
@@ -83,6 +85,8 @@ add_library(yauml_core STATIC
     src/core/project_serializer_test_support.h
     src/core/project_style.cpp
     src/core/project_style.h
+    src/core/source_editor_controller.cpp
+    src/core/source_editor_controller.h
     src/core/stereotype_catalog.cpp
     src/core/stereotype_catalog.h
     src/core/update_manifest.cpp
@@ -257,6 +261,7 @@ qt_add_qml_module(yauml
         qml/CatalogMenuItem.qml
         qml/CatalogToolButton.qml
         qml/CompartmentVisibilityToolButton.qml
+        qml/OperationSignatureModeToolButton.qml
         qml/ContextToolboxFrame.qml
         qml/DiagramArea.qml
         qml/DiagramCanvasMenu.qml

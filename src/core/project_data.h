@@ -25,6 +25,9 @@ enum class RelationshipType {
 };
 enum class ConnectorSide { Automatic, Top, Right, Bottom, Left };
 enum class ConnectorRouting { Straight, Orthogonal };
+enum class MemberVisibility { Public, Protected, Private, Package };
+enum class OperationKind { Method, Constructor, Destructor };
+enum class OperationSignatureMode { Full, NameAndReturnType, NameOnly };
 
 QString toString(ElementType type);
 ElementType elementTypeFromString(const QString &value, bool *ok = nullptr);
@@ -36,6 +39,14 @@ ConnectorSide connectorSideFromString(const QString &value, bool *ok = nullptr);
 QString toString(ConnectorRouting routing);
 ConnectorRouting connectorRoutingFromString(const QString &value,
                                             bool *ok = nullptr);
+QString toString(MemberVisibility visibility);
+MemberVisibility memberVisibilityFromString(const QString &value,
+                                            bool *ok = nullptr);
+QString toString(OperationKind kind);
+OperationKind operationKindFromString(const QString &value, bool *ok = nullptr);
+QString toString(OperationSignatureMode mode);
+OperationSignatureMode operationSignatureModeFromString(const QString &value,
+                                                        bool *ok = nullptr);
 QString newId();
 
 // Browser organization is deliberately separate from UML/C++ ownership. An
@@ -77,6 +88,39 @@ struct StereotypeDefinition {
   bool operator==(const StereotypeDefinition &) const = default;
 };
 
+struct OperationParameter {
+  QString name;
+  QString type;
+  QString direction;
+  QString defaultValue;
+  QJsonObject extra;
+
+  bool operator==(const OperationParameter &) const = default;
+};
+
+// Operations are semantic model members rather than preformatted diagram
+// lines. Stable IDs and source locations let synchronization and editor
+// navigation address one operation without replacing the classifier's whole
+// operation list. customSignature is used only as a lossless fallback for
+// legacy or hand-authored syntax which the structured parser cannot reproduce.
+struct ModelOperation {
+  QString id;
+  QString name;
+  MemberVisibility visibility = MemberVisibility::Public;
+  OperationKind kind = OperationKind::Method;
+  QList<OperationParameter> parameters;
+  QString returnType;
+  QStringList modifiers;
+  QString sourceFile;
+  int sourceLine = 0;
+  int sourceColumn = 0;
+  QJsonObject sourceExtra;
+  QString customSignature;
+  QJsonObject extra;
+
+  bool operator==(const ModelOperation &) const = default;
+};
+
 struct ModelElement {
   QString id;
   ElementType type = ElementType::Class;
@@ -86,7 +130,7 @@ struct ModelElement {
   // struct. packageId continues to identify the enclosing UML package.
   QString enclosingTypeId;
   QStringList attributes;
-  QStringList operations;
+  QList<ModelOperation> operations;
   QStringList enumLiterals;
   BrowserParent browserParent;
   QString styleId;
@@ -145,6 +189,9 @@ struct NodePresentation {
   // lets a later diagram change continue to affect non-overridden nodes.
   std::optional<bool> showAttributes;
   std::optional<bool> showOperations;
+  // An unset signature mode follows the diagram default independently of
+  // whether the operations compartment itself is shown.
+  std::optional<OperationSignatureMode> operationSignatureMode;
   QString styleId;
   QJsonObject extra;
 
@@ -227,6 +274,7 @@ struct Diagram {
   QString name;
   bool showAttributes = true;
   bool showOperations = true;
+  OperationSignatureMode operationSignatureMode = OperationSignatureMode::Full;
   DiagramFilter filter;
   QList<ContainerPresentation> containers;
   QList<NodePresentation> nodes;
@@ -307,3 +355,6 @@ Q_DECLARE_METATYPE(yauml::ElementType)
 Q_DECLARE_METATYPE(yauml::RelationshipType)
 Q_DECLARE_METATYPE(yauml::ConnectorSide)
 Q_DECLARE_METATYPE(yauml::ConnectorRouting)
+Q_DECLARE_METATYPE(yauml::MemberVisibility)
+Q_DECLARE_METATYPE(yauml::OperationKind)
+Q_DECLARE_METATYPE(yauml::OperationSignatureMode)

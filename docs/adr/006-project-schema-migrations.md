@@ -47,6 +47,9 @@ migration plus fixtures that exercise upgrade, canonical save, and reload.
 Schema 2 moved conventional stereotypes into the project-owned catalog; schema
 3 adds the `local`, `private`, and `api` definitions without duplicating
 same-named custom entries or restoring unrelated defaults a user deleted.
+Schema 4 promotes operation signature strings to structured semantic records
+and migrates both live elements and their C++ synchronization baselines with
+matching deterministic operation IDs.
 
 Opening an unversioned project produces an informational log entry and marks the
 loaded representation as migrated, but does not itself make an external write.

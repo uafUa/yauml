@@ -1,5 +1,6 @@
 #include "core/presentation_layout.h"
 
+#include "core/model_operation.h"
 #include "core/stereotype_catalog.h"
 
 #include <QCoreApplication>
@@ -14,14 +15,16 @@ namespace yauml::presentation_layout {
 namespace {
 
 QStringList bodyLines(const ModelElement &element, bool showAttributes,
-                      bool showOperations) {
+                      bool showOperations,
+                      OperationSignatureMode operationSignatureMode) {
   if (element.type == ElementType::Enumeration)
     return element.enumLiterals;
   QStringList lines;
   if (showAttributes)
     lines.append(element.attributes);
   if (showOperations)
-    lines.append(element.operations);
+    lines.append(
+        modelOperationSignatures(element.operations, operationSignatureMode));
   return lines;
 }
 
@@ -131,17 +134,19 @@ QString fullyQualifiedElementName(const ProjectData &project,
 
 } // namespace
 
-static QSizeF nodeContentSizeImpl(const ModelElement &element,
-                                  const QString &displayName,
-                                  const QString &stereotypeText,
-                                  bool showAttributes = true,
-                                  bool showOperations = true) {
+static QSizeF
+nodeContentSizeImpl(const ModelElement &element, const QString &displayName,
+                    const QString &stereotypeText, bool showAttributes = true,
+                    bool showOperations = true,
+                    OperationSignatureMode operationSignatureMode =
+                        OperationSignatureMode::Full) {
   qreal widestLine = applicationTextWidth(
       displayName.isEmpty() ? element.name : displayName, true);
   if (!stereotypeText.isEmpty())
     widestLine =
         std::max(widestLine, applicationTextWidth(stereotypeText, false));
-  const QStringList lines = bodyLines(element, showAttributes, showOperations);
+  const QStringList lines = bodyLines(element, showAttributes, showOperations,
+                                      operationSignatureMode);
   for (const QString &line : lines)
     widestLine = std::max(widestLine, applicationTextWidth(line, false));
 
@@ -167,21 +172,22 @@ QSizeF nodeContentSize(const ProjectData &project,
 }
 
 QSizeF nodeContentSize(const ProjectData &project, const ModelElement &element,
-                       bool showAttributes, bool showOperations) {
+                       bool showAttributes, bool showOperations,
+                       OperationSignatureMode operationSignatureMode) {
   return nodeContentSizeImpl(
       element, element.name,
       stereotype_catalog::displayText(project, element.stereotypeIds),
-      showAttributes, showOperations);
+      showAttributes, showOperations, operationSignatureMode);
 }
 
-QSizeF nodeContentSizeForDisplayName(const ProjectData &project,
-                                     const ModelElement &element,
-                                     const QString &displayName,
-                                     bool showAttributes, bool showOperations) {
+QSizeF nodeContentSizeForDisplayName(
+    const ProjectData &project, const ModelElement &element,
+    const QString &displayName, bool showAttributes, bool showOperations,
+    OperationSignatureMode operationSignatureMode) {
   return nodeContentSizeImpl(
       element, displayName,
       stereotype_catalog::displayText(project, element.stereotypeIds),
-      showAttributes, showOperations);
+      showAttributes, showOperations, operationSignatureMode);
 }
 
 QSizeF nodePlacementSize(const ModelElement &element,

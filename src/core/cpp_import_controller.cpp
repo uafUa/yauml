@@ -1,6 +1,7 @@
 #include "core/cpp_import_controller.h"
 
 #include "core/application_settings.h"
+#include "core/model_operation.h"
 #include "core/project_controller.h"
 
 #include <QFileInfo>
@@ -67,7 +68,8 @@ QString elementConflictDetail(const CppImportItem &item) {
   if (!attributes.isEmpty())
     differences.append(attributes);
   const QString operations = memberDifference(
-      QStringLiteral("Operations"), model.operations, source.operations);
+      QStringLiteral("Operations"), modelOperationSignatures(model.operations),
+      modelOperationSignatures(source.operations));
   if (!operations.isEmpty())
     differences.append(operations);
   if (model.packageId != source.packageId ||

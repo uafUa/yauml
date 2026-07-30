@@ -191,6 +191,12 @@ Item {
             label: qsTr("Edit name")
         },
         {
+            actionId: "source.open",
+            kind: "source",
+            fallback: qsTr("Code"),
+            label: qsTr("Open in VS Code")
+        },
+        {
             actionId: "presentation.attributesVisibility",
             kind: "attributesVisibility",
             fallback: qsTr("A"),
@@ -201,6 +207,12 @@ Item {
             kind: "operationsVisibility",
             fallback: qsTr("O"),
             label: qsTr("Cycle operations visibility")
+        },
+        {
+            actionId: "presentation.operationSignatureMode",
+            kind: "operationSignatureMode",
+            fallback: qsTr("Sig"),
+            label: qsTr("Cycle operation signature detail")
         },
         {
             actionId: "presentation.connectorSnapPoints",
@@ -275,8 +287,10 @@ Item {
                 return true
             if (kind !== "incoming" && kind !== "outgoing" && kind !== "wrap"
                     && kind !== "snapPoints"
+                    && kind !== "source"
                     && kind !== "attributesVisibility"
-                    && kind !== "operationsVisibility")
+                    && kind !== "operationsVisibility"
+                    && kind !== "operationSignatureMode")
                 return true
         }
         return false
@@ -336,6 +350,8 @@ Item {
         alignmentGuidesEnabled: applicationSettings.alignmentGuidesEnabled
         gridSpacing: applicationSettings.gridSpacing
         diagramItemSizingMode: applicationSettings.diagramItemSizingMode
+        sourceEditorDoubleClickEnabled:
+            applicationSettings.sourceEditorDoubleClickEnabled
         defaultConnectorRouting: applicationSettings.defaultConnectorRouting
         relationshipGestureKeys: applicationSettings.relationshipGestureKeys
 
@@ -378,6 +394,11 @@ Item {
                                             x, y, width, height) {
             diagramStereotypeDropdown.openAt(canvas, x, y + height,
                                              objectKind, objectId)
+        }
+
+        onSourceNavigationRequested: function(objectId, operationIndex) {
+            sourceEditorController.openObject(
+                        "element", objectId, operationIndex)
         }
 
     }
@@ -624,6 +645,20 @@ Item {
         id: elementMenu
         title: canvas.selectedNodeCount > 1
                ? qsTr("Selected elements") : qsTr("Element")
+        CatalogMenuItem {
+            catalogId: "source.open"
+            text: qsTr("Open in VS Code")
+            visible: canvas.selectedNodeCount === 1
+            height: visible ? implicitHeight : 0
+            enabled: sourceEditorController.canOpenObject(
+                         "element", projectController.selectedId)
+            onTriggered: sourceEditorController.openObject(
+                             "element", projectController.selectedId)
+        }
+        MenuSeparator {
+            visible: canvas.selectedNodeCount === 1
+            height: visible ? implicitHeight : 0
+        }
         Menu {
             title: qsTr("Create relationship")
             enabled: canvas.selectedNodeCount === 2
@@ -730,6 +765,41 @@ Item {
                 onTriggered: canvas.setSelectedCompartmentVisibility(
                                  "operations", "hide")
             }
+            MenuSeparator {}
+            Menu {
+                title: qsTr("Signature detail")
+                MenuItem {
+                    text: qsTr("Inherit diagram setting")
+                    checkable: true
+                    checked: canvas.selectedOperationSignatureMode
+                             === "inherit"
+                    onTriggered: canvas.setSelectedOperationSignatureMode(
+                                     "inherit")
+                }
+                MenuItem {
+                    text: qsTr("Full signature")
+                    checkable: true
+                    checked: canvas.selectedOperationSignatureMode === "full"
+                    onTriggered: canvas.setSelectedOperationSignatureMode(
+                                     "full")
+                }
+                MenuItem {
+                    text: qsTr("Name + return type")
+                    checkable: true
+                    checked: canvas.selectedOperationSignatureMode
+                             === "name-and-return-type"
+                    onTriggered: canvas.setSelectedOperationSignatureMode(
+                                     "name-and-return-type")
+                }
+                MenuItem {
+                    text: qsTr("Name only")
+                    checkable: true
+                    checked: canvas.selectedOperationSignatureMode
+                             === "name-only"
+                    onTriggered: canvas.setSelectedOperationSignatureMode(
+                                     "name-only")
+                }
+            }
         }
         MenuSeparator {}
         CatalogMenuItem {
@@ -821,6 +891,16 @@ Item {
         title: canvas.selectedConnectorCount > 1
                ? qsTr("Relationships")
                : qsTr("Relationship")
+        CatalogMenuItem {
+            catalogId: "source.open"
+            text: qsTr("Open in VS Code")
+            enabled: canvas.selectedConnectorCount === 1
+                     && sourceEditorController.canOpenObject(
+                         "relationship", projectController.selectedId)
+            onTriggered: sourceEditorController.openObject(
+                             "relationship", projectController.selectedId)
+        }
+        MenuSeparator {}
         CatalogMenuItem {
             catalogId: "connector.addBendPoint"
             text: qsTr("Add bend point here")
@@ -926,10 +1006,10 @@ Item {
         }
         MenuSeparator {}
         CatalogMenuItem {
-            catalogId: "connector.deleteRelationship"
+            catalogId: "connector.removePresentation"
             text: canvas.selectedConnectorCount > 1
-                  ? qsTr("Delete relationships")
-                  : qsTr("Delete relationship")
+                  ? qsTr("Remove connectors from diagram")
+                  : qsTr("Remove connector from diagram")
             onTriggered: canvas.deleteSelectedConnector()
         }
     }
@@ -1330,9 +1410,11 @@ Item {
                         modelData.kind === "incoming"
                         || modelData.kind === "outgoing"
                         || modelData.kind === "wrap"
+                        || modelData.kind === "source"
                         || modelData.kind === "snapPoints"
                         || modelData.kind === "attributesVisibility"
                         || modelData.kind === "operationsVisibility"
+                        || modelData.kind === "operationSignatureMode"
                     visible: !nodeOnly
                              || (canvas.presentationToolboxKind === "node"
                                  && (modelData.kind !== "wrap"
@@ -1346,12 +1428,19 @@ Item {
                                  !== "attributesVisibility"
                                  && parent.modelData.kind
                                     !== "operationsVisibility"
+                                 && parent.modelData.kind
+                                    !== "operationSignatureMode"
                         catalogId: parent.modelData.actionId
                         text: parent.modelData.fallback
                         enabled: parent.modelData.kind === "incoming"
                                  ? canvas.incomingRelatedTypeCount > 0
                                  : parent.modelData.kind === "outgoing"
-                                   ? canvas.outgoingRelatedTypeCount > 0 : true
+                                   ? canvas.outgoingRelatedTypeCount > 0
+                                   : parent.modelData.kind === "source"
+                                     ? sourceEditorController.canOpenObject(
+                                           "element",
+                                           projectController.selectedId)
+                                     : true
                         display: icon.source.toString().length > 0
                                  ? AbstractButton.IconOnly
                                  : AbstractButton.TextOnly
@@ -1362,6 +1451,11 @@ Item {
                             const kind = parent.modelData.kind
                             if (kind === "editName") {
                                 canvas.editSelectedPresentationName()
+                                presentationToolbox.dismiss()
+                            } else if (kind === "source") {
+                                sourceEditorController.openObject(
+                                            "element",
+                                            projectController.selectedId)
                                 presentationToolbox.dismiss()
                             } else if (kind === "fit") {
                                 fitSelectionAction.trigger()
@@ -1404,6 +1498,15 @@ Item {
                                         compartment, state)
                             canvas.forceActiveFocus()
                         }
+                    }
+
+                    OperationSignatureModeToolButton {
+                        anchors.fill: parent
+                        visible: parent.modelData.kind
+                                 === "operationSignatureMode"
+                        mode: canvas.selectedOperationSignatureMode
+                        onModeChangeRequested:
+                            canvas.cycleSelectedOperationSignatureMode()
                     }
                 }
             }

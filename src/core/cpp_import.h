@@ -115,7 +115,7 @@ struct CppSourceSymbol {
   QString namespacePath;
   ElementType elementType = ElementType::Class;
   QStringList attributes;
-  QStringList operations;
+  QList<ModelOperation> operations;
   QStringList baseSymbolIds;
   QString filePath;
   int line = 0;

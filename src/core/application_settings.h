@@ -47,9 +47,19 @@ class ApplicationSettings final : public QObject {
                  recentProjectsChanged)
   Q_PROPERTY(QStringList projectTreeColumns READ projectTreeColumns WRITE
                  setProjectTreeColumns NOTIFY projectTreeColumnsChanged)
-  Q_PROPERTY(QVariantMap projectTreeColumnWidths READ projectTreeColumnWidths
-                 WRITE setProjectTreeColumnWidths NOTIFY
-                     projectTreeColumnWidthsChanged)
+  Q_PROPERTY(
+      QVariantMap projectTreeColumnWidths READ projectTreeColumnWidths WRITE
+          setProjectTreeColumnWidths NOTIFY projectTreeColumnWidthsChanged)
+  Q_PROPERTY(
+      bool projectTreeRelationshipsVisible READ projectTreeRelationshipsVisible
+          WRITE setProjectTreeRelationshipsVisible NOTIFY
+              projectTreeRelationshipsVisibleChanged)
+  Q_PROPERTY(QString sourceEditorCommand READ sourceEditorCommand WRITE
+                 setSourceEditorCommand NOTIFY sourceEditorCommandChanged)
+  Q_PROPERTY(
+      bool sourceEditorDoubleClickEnabled READ sourceEditorDoubleClickEnabled
+          WRITE setSourceEditorDoubleClickEnabled NOTIFY
+              sourceEditorDoubleClickEnabledChanged)
 
 public:
   static constexpr int kDefaultDistributionGap = 10;
@@ -64,6 +74,9 @@ public:
   static constexpr ConnectorRouting kDefaultConnectorRouting =
       ConnectorRouting::Straight;
   static constexpr bool kDefaultAutomaticUpdateChecksEnabled = true;
+  static constexpr bool kDefaultProjectTreeRelationshipsVisible = true;
+  static constexpr auto kDefaultSourceEditorCommand = "code";
+  static constexpr bool kDefaultSourceEditorDoubleClickEnabled = false;
   static constexpr int kMaximumRecentProjects = 10;
 
   static QVariantMap defaultRelationshipGestureKeys();
@@ -119,6 +132,12 @@ public:
   void setProjectTreeColumns(const QStringList &columns);
   QVariantMap projectTreeColumnWidths() const;
   void setProjectTreeColumnWidths(const QVariantMap &widths);
+  bool projectTreeRelationshipsVisible() const;
+  void setProjectTreeRelationshipsVisible(bool visible);
+  QString sourceEditorCommand() const;
+  void setSourceEditorCommand(const QString &command);
+  bool sourceEditorDoubleClickEnabled() const;
+  void setSourceEditorDoubleClickEnabled(bool enabled);
   Q_INVOKABLE void addRecentProject(const QString &projectPath);
   Q_INVOKABLE void clearRecentProjects();
   Q_INVOKABLE void resetDefaults();
@@ -139,6 +158,9 @@ signals:
   void recentProjectsChanged();
   void projectTreeColumnsChanged();
   void projectTreeColumnWidthsChanged();
+  void projectTreeRelationshipsVisibleChanged();
+  void sourceEditorCommandChanged();
+  void sourceEditorDoubleClickEnabledChanged();
 
 private:
   void persistDiagramPreferences() const;
@@ -149,6 +171,7 @@ private:
   void persistUpdatePreferences() const;
   void persistRecentProjects() const;
   void persistProjectTreePreferences() const;
+  void persistSourceEditorPreferences() const;
 
   int m_defaultDistributionGap = kDefaultDistributionGap;
   bool m_snapToGridEnabled = kDefaultSnapToGridEnabled;
@@ -166,6 +189,11 @@ private:
   QStringList m_recentProjectPaths;
   QStringList m_projectTreeColumns;
   QVariantMap m_projectTreeColumnWidths;
+  bool m_projectTreeRelationshipsVisible =
+      kDefaultProjectTreeRelationshipsVisible;
+  QString m_sourceEditorCommand = QStringLiteral("code");
+  bool m_sourceEditorDoubleClickEnabled =
+      kDefaultSourceEditorDoubleClickEnabled;
 };
 
 } // namespace yauml

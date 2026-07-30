@@ -4,6 +4,7 @@
 #include "core/application_settings.h"
 #include "core/cpp_import_controller.h"
 #include "core/project_controller.h"
+#include "core/source_editor_controller.h"
 #include "core/workspace_controller.h"
 #include "ui/diagram_canvas.h"
 #include "ui/diagram_image_exporter.h"
@@ -58,6 +59,7 @@ int main(int argc, char *argv[]) {
 
   yauml::ProjectController project;
   yauml::ApplicationSettings applicationSettings;
+  yauml::SourceEditorController sourceEditor(&project, &applicationSettings);
   yauml::CppImportController cppImport(&project, &applicationSettings);
   yauml::WorkspaceController workspace(&project, true);
   yauml::ui::SourceFolderPicker sourceFolderPicker;
@@ -91,6 +93,8 @@ int main(int argc, char *argv[]) {
       QStringLiteral("workspaceController"), &workspace);
   engine.rootContext()->setContextProperty(
       QStringLiteral("applicationSettings"), &applicationSettings);
+  engine.rootContext()->setContextProperty(
+      QStringLiteral("sourceEditorController"), &sourceEditor);
   engine.rootContext()->setContextProperty(
       QStringLiteral("cppImportController"), &cppImport);
   engine.rootContext()->setContextProperty(QStringLiteral("sourceFolderPicker"),

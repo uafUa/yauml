@@ -5,11 +5,13 @@
 #include "core/diagnostic_model.h"
 #include "core/diagram_filter.h"
 #include "core/json5.h"
+#include "core/model_operation.h"
 #include "core/presentation_layout.h"
 #include "core/project_controller.h"
 #include "core/project_serializer.h"
 #include "core/project_serializer_test_support.h"
 #include "core/project_style.h"
+#include "core/source_editor_controller.h"
 #include "core/stereotype_catalog.h"
 #include "core/update_manifest.h"
 #include "core/workspace_controller.h"
@@ -108,11 +110,13 @@ private slots:
   void cppImportClassifiesMemberOwnershipAndDependencies();
   void cppImportCreatesNestedTypeContainment();
   void cppImportScansSourceFolderWithoutBuildMetadata();
+  void cppImportDisambiguatesRecoveredOverloads();
   void cppImportCombinesSelectedSourceFolders();
   void cppImportExcludedSourceFoldersRequireExplicitCleanupAndUndo();
   void largeModelGeometryCommandUndoRedo();
   void bulkDiagramPlacementIsOneUndoableCommand();
   void diagramCompartmentVisibilityPersistsAndIsUndoable();
+  void structuredOperationsAndSignatureModesPersist();
   void diagramFiltersPersistMatchAndUndo();
   void relatedTypeNeighborhoodActionsAreDirectionalAndUndoable();
   void diagramDropSizingModes();
@@ -153,6 +157,7 @@ private slots:
   void closingAllDetachedWindowsReturnsTheirDiagrams();
   void persistedWorkspaceRestoresTabGroups();
   void applicationPreferencesPersist();
+  void sourceEditorNavigationUsesImportedLocations();
   void applicationPreferencesMigratePreviousProductScope();
   void updateManifestValidationAndVersionComparison();
   void applicationPreferencesMigrateLegacyCppPointerTypes();
@@ -1007,7 +1012,8 @@ void CoreTests::cppRenameMatchingRequiresUniqueHighConfidence() {
   previous.line = 20;
   previous.elementType = ElementType::Class;
   previous.attributes = {QStringLiteral("- state: int")};
-  previous.operations = {QStringLiteral("+ run(): void")};
+  previous.operations = {modelOperationFromSignature(
+      QStringLiteral("+ run(): void"), QStringLiteral("operation-run"))};
 
   CppSourceSymbol renamed;
   renamed.symbolId = QStringLiteral("symbol-new");
@@ -1368,8 +1374,23 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
   QVERIFY(initialPoint->symbol.attributes.contains(QStringLiteral("+ x: int")));
   QVERIFY(
       initialPoint->symbol.attributes.contains(QStringLiteral("- y: double")));
-  QVERIFY(initialPoint->symbol.operations.contains(
-      QStringLiteral("+ length(): double const")));
+  QVERIFY(modelOperationSignatures(initialPoint->symbol.operations)
+              .contains(QStringLiteral("+ length(): double const")));
+  const auto lengthOperation =
+      std::find_if(initialPoint->symbol.operations.cbegin(),
+                   initialPoint->symbol.operations.cend(),
+                   [](const ModelOperation &operation) {
+                     return operation.name == QStringLiteral("length");
+                   });
+  QVERIFY(lengthOperation != initialPoint->symbol.operations.cend());
+  QVERIFY(!lengthOperation->id.isEmpty());
+  QCOMPARE(QFileInfo(lengthOperation->sourceFile).canonicalFilePath(),
+           QFileInfo(sourcePath).canonicalFilePath());
+  QVERIFY(lengthOperation->sourceLine > 0);
+  QVERIFY(lengthOperation->sourceColumn > 0);
+  QVERIFY(lengthOperation->visibility == MemberVisibility::Public);
+  QCOMPARE(lengthOperation->returnType, QStringLiteral("double"));
+  QCOMPARE(lengthOperation->modifiers, QStringList{QStringLiteral("const")});
 
   ProjectController controller;
   QCOMPARE(controller.applyCppImportPlan(initial), 5);
@@ -1433,6 +1454,38 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
   QVERIFY(imported.relationships.first().extra.contains(
       QStringLiteral("sourceBinding")));
 
+  // A relationship can remain semantically unchanged while source edits move
+  // its evidence to another line. Synchronization must still refresh the
+  // navigation binding instead of leaving "Open in VS Code" stale.
+  QJsonObject staleRelationshipBinding =
+      imported.relationships.first()
+          .extra.value(QStringLiteral("sourceBinding"))
+          .toObject();
+  const int relationshipSourceLine =
+      staleRelationshipBinding.value(QStringLiteral("line")).toInt();
+  QVERIFY(relationshipSourceLine > 1);
+  staleRelationshipBinding.insert(QStringLiteral("line"),
+                                  relationshipSourceLine - 1);
+  staleRelationshipBinding.insert(QStringLiteral("version"), 2);
+  imported.relationships.first().extra.insert(QStringLiteral("sourceBinding"),
+                                              staleRelationshipBinding);
+
+  const CppImportPreview bindingRefresh = CppImportService::preview(
+      sourceDirectory.path(), imported.elements, imported.relationships);
+  QCOMPARE(bindingRefresh.relationshipItems.size(), 1);
+  QVERIFY(bindingRefresh.relationshipItems.first().action ==
+          CppImportAction::Update);
+  QCOMPARE(bindingRefresh.applicableCount(), 1);
+  QCOMPARE(CppImportService::apply(imported, bindingRefresh), 1);
+  const QJsonObject refreshedRelationshipBinding =
+      imported.relationships.first()
+          .extra.value(QStringLiteral("sourceBinding"))
+          .toObject();
+  QCOMPARE(refreshedRelationshipBinding.value(QStringLiteral("line")).toInt(),
+           relationshipSourceLine);
+  QCOMPARE(
+      refreshedRelationshipBinding.value(QStringLiteral("version")).toInt(), 3);
+
   auto point =
       std::find_if(imported.elements.begin(), imported.elements.end(),
                    [](const ModelElement &element) {
@@ -1448,7 +1501,7 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
   const CppImportPreview changed = CppImportService::preview(
       sourceDirectory.path(), imported.elements, imported.relationships);
   QCOMPARE(changed.conflictCount(), 1);
-  QCOMPARE(changed.applicableCount(), 1);
+  QCOMPARE(changed.applicableCount(), 2);
   const auto changedPoint = std::find_if(
       changed.items.cbegin(), changed.items.cend(),
       [](const CppImportItem &item) {
@@ -1471,8 +1524,9 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
   QCOMPARE(ambiguousPreview.resolvedConflictCount(), 0);
   QCOMPARE(ambiguousPreview.applicableCount(), 0);
   QCOMPARE(changed.relationshipItems.size(), 1);
-  QVERIFY(changed.relationshipItems.first().action ==
-          CppImportAction::UserModified);
+  QVERIFY(changed.relationshipItems.first().action == CppImportAction::Update);
+  QCOMPARE(changed.relationshipItems.first().desiredRelationship.name,
+           QStringLiteral("user relationship label"));
 
   CppImportPreview keepModelPlan = changed;
   QVERIFY(keepModelPlan.setConflictResolution(
@@ -1480,7 +1534,7 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
   QCOMPARE(keepModelPlan.resolvedConflictCount(), 1);
   QCOMPARE(keepModelPlan.unresolvedConflictCount(), 0);
   ProjectData modelWins = imported;
-  QCOMPARE(CppImportService::apply(modelWins, keepModelPlan), 2);
+  QCOMPARE(CppImportService::apply(modelWins, keepModelPlan), 3);
   const auto retainedPoint =
       std::find_if(modelWins.elements.cbegin(), modelWins.elements.cend(),
                    [](const ModelElement &element) {
@@ -1504,7 +1558,7 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
   QVERIFY(useSourcePlan.setConflictResolution(
       changedPoint->conflictKey(), CppImportConflictResolution::UseSource));
   ProjectData sourceWins = imported;
-  QCOMPARE(CppImportService::apply(sourceWins, useSourcePlan), 2);
+  QCOMPARE(CppImportService::apply(sourceWins, useSourcePlan), 3);
   const auto sourcePoint =
       std::find_if(sourceWins.elements.cbegin(), sourceWins.elements.cend(),
                    [](const ModelElement &element) {
@@ -1514,7 +1568,7 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
   QVERIFY(sourcePoint->attributes.contains(QStringLiteral("+ z: int")));
   QVERIFY(!sourcePoint->attributes.contains(QStringLiteral("+ manual: bool")));
 
-  QCOMPARE(CppImportService::apply(imported, changed), 1);
+  QCOMPARE(CppImportService::apply(imported, changed), 2);
   point = std::find_if(imported.elements.begin(), imported.elements.end(),
                        [](const ModelElement &element) {
                          return element.name == QStringLiteral("demo::Point");
@@ -1528,7 +1582,8 @@ void CoreTests::cppImportUsesClangAndProtectsUserEdits() {
                      return element.name == QStringLiteral("demo::Service");
                    });
   QVERIFY(service != imported.elements.cend());
-  QVERIFY(service->operations.contains(QStringLiteral("+ stop(): void")));
+  QVERIFY(modelOperationSignatures(service->operations)
+              .contains(QStringLiteral("+ stop(): void")));
   QCOMPARE(imported.relationships.first().name,
            QStringLiteral("user relationship label"));
 
@@ -2254,6 +2309,66 @@ void CoreTests::cppImportScansSourceFolderWithoutBuildMetadata() {
   QCOMPARE(standalone->packageId, detailPackage->id);
 }
 
+void CoreTests::cppImportDisambiguatesRecoveredOverloads() {
+  if (!CppImportService::available())
+    QSKIP("This build was configured without libclang");
+
+  QTemporaryDir sourceDirectory;
+  QVERIFY(sourceDirectory.isValid());
+  const QString sourcePath =
+      QDir(sourceDirectory.path()).filePath(QStringLiteral("Recovered.h"));
+  writeTestFile(
+      sourcePath,
+      QByteArrayLiteral("#pragma once\n"
+                        "namespace recovered {\n"
+                        "class Canvas {\n"
+                        "  int toView(const MissingPoint &point) const;\n"
+                        "  int toView(const MissingRect &rect) const;\n"
+                        "};\n"
+                        "}\n"));
+
+  const CppImportPreview first =
+      CppImportService::preview(sourceDirectory.path(), {}, {}, {});
+  QVERIFY(first.ok);
+  const auto symbol = std::find_if(first.symbols.cbegin(), first.symbols.cend(),
+                                   [](const CppSourceSymbol &candidate) {
+                                     return candidate.qualifiedName ==
+                                            QStringLiteral("recovered::Canvas");
+                                   });
+  QVERIFY(symbol != first.symbols.cend());
+  QCOMPARE(symbol->operations.size(), 2);
+  QVERIFY(!symbol->operations.at(0).id.isEmpty());
+  QVERIFY(!symbol->operations.at(1).id.isEmpty());
+  QVERIFY(symbol->operations.at(0).id != symbol->operations.at(1).id);
+  QVERIFY(symbol->operations.at(0).id.contains(QStringLiteral(":overload:")));
+  QVERIFY(symbol->operations.at(1).id.contains(QStringLiteral(":overload:")));
+
+  ProjectData project = createStarterProject();
+  QVERIFY(CppImportService::apply(project, first) > 0);
+  const QList<Diagnostic> validation = ProjectSerializer::validate(project);
+  QVERIFY2(std::none_of(validation.cbegin(), validation.cend(),
+                        [](const Diagnostic &diagnostic) {
+                          return diagnostic.severity ==
+                                 DiagnosticSeverity::Error;
+                        }),
+           qPrintable(validation.isEmpty() ? QString{}
+                                           : validation.first().message));
+
+  // A repeated best-effort scan must produce the same operation IDs even
+  // though the types remain unresolved.
+  const CppImportPreview second = CppImportService::preview(
+      sourceDirectory.path(), project.elements, project.relationships, {});
+  QVERIFY(second.ok);
+  const auto rescanned = std::find_if(
+      second.symbols.cbegin(), second.symbols.cend(),
+      [](const CppSourceSymbol &candidate) {
+        return candidate.qualifiedName == QStringLiteral("recovered::Canvas");
+      });
+  QVERIFY(rescanned != second.symbols.cend());
+  QCOMPARE(rescanned->operations.at(0).id, symbol->operations.at(0).id);
+  QCOMPARE(rescanned->operations.at(1).id, symbol->operations.at(1).id);
+}
+
 void CoreTests::cppImportCombinesSelectedSourceFolders() {
   if (!CppImportService::available())
     QSKIP("This build was configured without libclang");
@@ -2530,6 +2645,121 @@ void CoreTests::diagramCompartmentVisibilityPersistsAndIsUndoable() {
   QCOMPARE(findElement(loaded.project, firstElementId)->attributes.size(), 1);
 }
 
+void CoreTests::structuredOperationsAndSignatureModesPersist() {
+  const ModelOperation parsed = modelOperationFromSignature(
+      QStringLiteral("# calculate(input: Request): Result const"),
+      QStringLiteral("operation-calculate"));
+  QCOMPARE(parsed.name, QStringLiteral("calculate"));
+  QVERIFY(parsed.visibility == MemberVisibility::Protected);
+  QCOMPARE(parsed.parameters.size(), 1);
+  QCOMPARE(parsed.parameters.first().name, QStringLiteral("input"));
+  QCOMPARE(parsed.parameters.first().type, QStringLiteral("Request"));
+  QCOMPARE(parsed.returnType, QStringLiteral("Result"));
+  QCOMPARE(parsed.modifiers, QStringList{QStringLiteral("const")});
+  QCOMPARE(modelOperationSignature(parsed),
+           QStringLiteral("# calculate(input: Request): Result const"));
+  QCOMPARE(modelOperationSignature(parsed,
+                                   OperationSignatureMode::NameAndReturnType),
+           QStringLiteral("# calculate(): Result"));
+  QCOMPARE(modelOperationSignature(parsed, OperationSignatureMode::NameOnly),
+           QStringLiteral("# calculate()"));
+
+  ModelOperation first = modelOperationFromSignature(
+      QStringLiteral("+ first(): void"), QStringLiteral("operation-first"));
+  ModelOperation second = modelOperationFromSignature(
+      QStringLiteral("+ second(): int"), QStringLiteral("operation-second"));
+  second.sourceFile = QStringLiteral("source.cpp");
+  second.sourceLine = 42;
+  const QList<ModelOperation> reordered = modelOperationsFromText(
+      QStringLiteral("+ second(): int\n+ first(): void"), {first, second});
+  QCOMPARE(reordered.at(0).id, second.id);
+  QCOMPARE(reordered.at(1).id, first.id);
+  const QList<ModelOperation> editedAndReduced = modelOperationsFromText(
+      QStringLiteral("+ second(): long"), {first, second});
+  QCOMPARE(editedAndReduced.size(), 1);
+  QCOMPARE(editedAndReduced.first().id, second.id);
+  QCOMPARE(editedAndReduced.first().sourceFile, second.sourceFile);
+  QCOMPARE(editedAndReduced.first().sourceLine, second.sourceLine);
+  QCOMPARE(editedAndReduced.first().returnType, QStringLiteral("long"));
+
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString elementId =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const QString nodeId = controller.data().diagrams.first().nodes.first().id;
+  controller.selectObject(elementId, QStringLiteral("element"));
+  controller.setSelectedOperations(
+      QStringLiteral("# calculate(input: Request): Result const"));
+
+  const ModelOperation &edited =
+      findElement(controller.data(), elementId)->operations.first();
+  QCOMPARE(edited.name, QStringLiteral("calculate"));
+  QVERIFY(!edited.id.isEmpty());
+
+  controller.setDiagramOperationSignatureMode(diagramId,
+                                              QStringLiteral("name-only"));
+  QVERIFY(controller.data().diagrams.first().operationSignatureMode ==
+          OperationSignatureMode::NameOnly);
+  controller.setNodesOperationSignatureMode(
+      diagramId, {nodeId}, QStringLiteral("name-and-return-type"));
+  QVERIFY(
+      controller.data().diagrams.first().nodes.first().operationSignatureMode ==
+      std::optional(OperationSignatureMode::NameAndReturnType));
+  controller.undo();
+  QVERIFY(
+      !controller.data().diagrams.first().nodes.first().operationSignatureMode);
+  controller.redo();
+
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(temporary.path(), controller.data()).ok);
+  const LoadOutcome loaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(loaded.ok);
+  QCOMPARE(loaded.project, controller.data());
+
+  // A schema-3 string signature is upgraded to a structured record with a
+  // deterministic identity and remains editable after loading.
+  const QString modelPath =
+      QDir(temporary.path()).filePath(QStringLiteral("model/model.json5"));
+  QFile modelFile(modelPath);
+  QVERIFY(modelFile.open(QIODevice::ReadOnly));
+  const auto parsedModel = Json5::parse(modelFile.readAll());
+  modelFile.close();
+  QVERIFY2(parsedModel, qPrintable(parsedModel.error));
+  QJsonObject model = parsedModel.document.object();
+  QJsonArray elements = model.value(QStringLiteral("elements")).toArray();
+  QJsonObject element = elements.first().toObject();
+  element.insert(
+      QStringLiteral("operations"),
+      QJsonArray{QStringLiteral("# calculate(input: Request): Result const")});
+  elements[0] = element;
+  model.insert(QStringLiteral("elements"), elements);
+  writeTestFile(modelPath, Json5::serialize(QJsonDocument(std::move(model))));
+
+  const QString manifestPath =
+      QDir(temporary.path()).filePath(QStringLiteral("manifest.json5"));
+  QFile manifestFile(manifestPath);
+  QVERIFY(manifestFile.open(QIODevice::ReadOnly));
+  const auto parsedManifest = Json5::parse(manifestFile.readAll());
+  manifestFile.close();
+  QVERIFY2(parsedManifest, qPrintable(parsedManifest.error));
+  QJsonObject manifest = parsedManifest.document.object();
+  manifest.insert(QStringLiteral("schemaVersion"), 3);
+  writeTestFile(manifestPath,
+                Json5::serialize(QJsonDocument(std::move(manifest))));
+
+  const LoadOutcome migrated = ProjectSerializer::load(temporary.path());
+  QVERIFY(migrated.ok);
+  QVERIFY(migrated.migrated);
+  const auto *migratedElement = findElement(migrated.project, elementId);
+  QVERIFY(migratedElement);
+  QCOMPARE(migratedElement->operations.size(), 1);
+  QCOMPARE(migratedElement->operations.first().id,
+           elementId + QStringLiteral(":operation:1"));
+  QCOMPARE(migratedElement->operations.first().name,
+           QStringLiteral("calculate"));
+}
+
 void CoreTests::diagramFiltersPersistMatchAndUndo() {
   ProjectData project = createStarterProject(QStringLiteral("Filtered"));
   ModelElement service;
@@ -2538,7 +2768,9 @@ void CoreTests::diagramFiltersPersistMatchAndUndo() {
   service.type = ElementType::Class;
   service.stereotypeIds = {stereotype_catalog::kApiStereotypeId};
   service.attributes = {QStringLiteral("- repository: Repository")};
-  service.operations = {QStringLiteral("+ serializeInvoice(): string")};
+  service.operations = {modelOperationFromSignature(
+      QStringLiteral("+ serializeInvoice(): string"),
+      QStringLiteral("operation-serialize-invoice"))};
 
   ModelElement localStruct;
   localStruct.id = QStringLiteral("local-struct");
@@ -3872,10 +4104,11 @@ void CoreTests::textCommandsUndoRedo() {
   QCOMPARE(findElement(controller.data(), elementId)->attributes.at(1),
            QStringLiteral("+ second: int"));
 
-  const QStringList originalOperations =
+  const QList<ModelOperation> originalOperations =
       findElement(controller.data(), elementId)->operations;
   controller.setSelectedOperations(QStringLiteral("+ start(): void"));
-  QCOMPARE(findElement(controller.data(), elementId)->operations,
+  QCOMPARE(modelOperationSignatures(
+               findElement(controller.data(), elementId)->operations),
            QStringList{QStringLiteral("+ start(): void")});
   controller.undo();
   QCOMPARE(findElement(controller.data(), elementId)->operations,
@@ -4152,7 +4385,8 @@ void CoreTests::relationshipAndDiagramDeletionUndoRedo() {
   const QString firstDiagram = controller.data().diagrams.first().id;
   const QString firstElement =
       controller.addElement(QStringLiteral("class"), firstDiagram);
-  controller.addElement(QStringLiteral("class"), firstDiagram);
+  const QString secondElement =
+      controller.addElement(QStringLiteral("class"), firstDiagram);
   const auto nodes = controller.data().diagrams.first().nodes;
   const QString connectorId = controller.createRelationship(
       firstDiagram, nodes.at(0).id, nodes.at(1).id,
@@ -4163,13 +4397,71 @@ void CoreTests::relationshipAndDiagramDeletionUndoRedo() {
   const QString relationshipId = connector->relationshipId;
   QVERIFY(findRelationship(controller.data(), relationshipId)->name.isEmpty());
 
+  const QModelIndex relationshipIndex = controller.treeModel()->indexForObject(
+      relationshipId, QStringLiteral("relationship"));
+  QVERIFY(relationshipIndex.isValid());
+  QCOMPARE(controller.treeModel()
+               ->data(relationshipIndex.parent(), ProjectTreeModel::IdRole)
+               .toString(),
+           firstElement);
+  QCOMPARE(controller.treeModel()
+               ->data(relationshipIndex, ProjectTreeModel::TypeRole)
+               .toString(),
+           QStringLiteral("association"));
+  controller.treeModel()->setRelationshipsVisible(false);
+  QVERIFY(!controller.treeModel()
+               ->indexForObject(relationshipId, QStringLiteral("relationship"))
+               .isValid());
+  QVERIFY(controller.treeModel()
+              ->indexForObject(firstElement, QStringLiteral("element"))
+              .isValid());
+  controller.treeModel()->setRelationshipsVisible(true);
+  const QModelIndex visibleRelationshipIndex =
+      controller.treeModel()->indexForObject(relationshipId,
+                                             QStringLiteral("relationship"));
+  QVERIFY(visibleRelationshipIndex.isValid());
+
+  // Project-tree deletion is the explicit semantic operation. It removes the
+  // relationship and all of its connector presentations, and remains
+  // independently undoable.
+  const QString relationshipTreeItem =
+      controller.treeModel()->browserItemsJsonForIndexes(
+          {visibleRelationshipIndex});
+  QVERIFY(relationshipTreeItem.contains(QStringLiteral("\"relationship\"")));
+  const ProjectData beforeTreeRelationshipDeletion = controller.data();
+  controller.deleteBrowserItems(relationshipTreeItem);
+  QVERIFY(!findRelationship(controller.data(), relationshipId));
+  QVERIFY(controller.data().diagrams.first().connectors.isEmpty());
+  controller.undo();
+  QCOMPARE(controller.data(), beforeTreeRelationshipDeletion);
+
   controller.editText(relationshipId, QStringLiteral("name"), -1,
                       QStringLiteral("owns"));
   QCOMPARE(findRelationship(controller.data(), relationshipId)->name,
            QStringLiteral("owns"));
+  const QModelIndex namedRelationshipIndex =
+      controller.treeModel()->indexForObject(relationshipId,
+                                             QStringLiteral("relationship"));
+  QVERIFY(namedRelationshipIndex.isValid());
+  QCOMPARE(controller.treeModel()
+               ->data(namedRelationshipIndex, Qt::DisplayRole)
+               .toString(),
+           QStringLiteral("owns \u2192 %1")
+               .arg(findElement(controller.data(), secondElement)
+                        ->name.section(QStringLiteral("::"), -1)));
   controller.editText(relationshipId, QStringLiteral("name"), -1,
                       QStringLiteral("   "));
   QVERIFY(findRelationship(controller.data(), relationshipId)->name.isEmpty());
+  const QModelIndex unnamedRelationshipIndex =
+      controller.treeModel()->indexForObject(relationshipId,
+                                             QStringLiteral("relationship"));
+  QVERIFY(unnamedRelationshipIndex.isValid());
+  const QString unnamedRelationshipLabel =
+      controller.treeModel()
+          ->data(unnamedRelationshipIndex, Qt::DisplayRole)
+          .toString();
+  QVERIFY(unnamedRelationshipLabel.startsWith(QStringLiteral("\u2192 ")));
+  QVERIFY(!unnamedRelationshipLabel.contains(QStringLiteral("association")));
   controller.undo();
   QCOMPARE(findRelationship(controller.data(), relationshipId)->name,
            QStringLiteral("owns"));
@@ -4826,6 +5118,23 @@ void CoreTests::relationshipTypesAndPresentationRemoval() {
   }
 
   const int relationshipCount = controller.data().relationships.size();
+  const ProjectData beforeConnectorRemoval = controller.data();
+  const QString removedConnectorId =
+      controller.data().diagrams.first().connectors.at(2).id;
+  const QString retainedRelationshipId =
+      controller.data().diagrams.first().connectors.at(2).relationshipId;
+  controller.removeConnectorPresentations(diagramId, {removedConnectorId});
+  QCOMPARE(controller.data().relationships.size(), relationshipCount);
+  QVERIFY(findRelationship(controller.data(), retainedRelationshipId));
+  QCOMPARE(controller.data().diagrams.first().connectors.size(),
+           types.size() - 1);
+  QVERIFY(
+      !findConnector(controller.data().diagrams.first(), removedConnectorId));
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Remove connector from diagram"));
+  controller.undo();
+  QCOMPARE(controller.data(), beforeConnectorRemoval);
+
   QSet<QString> relationshipIds;
   for (const auto &relationship : controller.data().relationships)
     relationshipIds.insert(relationship.id);
@@ -5098,6 +5407,9 @@ void CoreTests::applicationPreferencesPersist() {
              ApplicationSettings::defaultProjectTreeColumns());
     QCOMPARE(settings.projectTreeColumnWidths(),
              ApplicationSettings::defaultProjectTreeColumnWidths());
+    QVERIFY(settings.projectTreeRelationshipsVisible());
+    QCOMPARE(settings.sourceEditorCommand(), QStringLiteral("code"));
+    QVERIFY(!settings.sourceEditorDoubleClickEnabled());
     QVERIFY(settings.automaticUpdateChecksEnabled());
     QCOMPARE(settings.relationshipGestureKeys(),
              ApplicationSettings::defaultRelationshipGestureKeys());
@@ -5119,6 +5431,10 @@ void CoreTests::applicationPreferencesPersist() {
     projectTreeWidths.insert(QStringLiteral("name"), 333);
     projectTreeWidths.insert(QStringLiteral("sourceFile"), 20);
     settings.setProjectTreeColumnWidths(projectTreeWidths);
+    settings.setProjectTreeRelationshipsVisible(false);
+    settings.setSourceEditorCommand(
+        QStringLiteral("\"C:/Program Files/VS Code/Code.exe\" --new-window"));
+    settings.setSourceEditorDoubleClickEnabled(true);
     QCOMPARE(settings.projectTreeColumnWidths().value(QStringLiteral("name")),
              QVariant(333));
     QCOMPARE(
@@ -5234,6 +5550,11 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(
         restored.projectTreeColumnWidths().value(QStringLiteral("sourceFile")),
         QVariant(48));
+    QVERIFY(!restored.projectTreeRelationshipsVisible());
+    QCOMPARE(
+        restored.sourceEditorCommand(),
+        QStringLiteral("\"C:/Program Files/VS Code/Code.exe\" --new-window"));
+    QVERIFY(restored.sourceEditorDoubleClickEnabled());
     QVERIFY(!restored.automaticUpdateChecksEnabled());
     const QDateTime initialCheck =
         QDateTime(QDate(2026, 7, 1), QTime(12, 0), Qt::UTC);
@@ -5281,8 +5602,92 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(restored.packageReassignmentPolicy(), QStringLiteral("ask"));
     QCOMPARE(restored.relationshipGestureKeys(),
              ApplicationSettings::defaultRelationshipGestureKeys());
+    QVERIFY(restored.projectTreeRelationshipsVisible());
+    QCOMPARE(restored.sourceEditorCommand(), QStringLiteral("code"));
+    QVERIFY(!restored.sourceEditorDoubleClickEnabled());
     QVERIFY(restored.automaticUpdateChecksEnabled());
   }
+}
+
+void CoreTests::sourceEditorNavigationUsesImportedLocations() {
+  IsolatedSettingsScope settingsScope;
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+
+  const QString sourceDirectory =
+      QDir(temporary.path()).filePath(QStringLiteral("sources"));
+  QVERIFY(QDir().mkpath(sourceDirectory));
+  const QString sourceFile =
+      QDir(sourceDirectory).filePath(QStringLiteral("model.hpp"));
+  writeTestFile(sourceFile, QByteArrayLiteral("#pragma once\n"));
+
+  ProjectData project = createStarterProject(QStringLiteral("Source model"));
+  ModelElement imported;
+  imported.id = QStringLiteral("element-imported");
+  imported.name = QStringLiteral("demo::Imported");
+  imported.extra.insert(
+      QStringLiteral("sourceBinding"),
+      QJsonObject{{QStringLiteral("file"), QStringLiteral("sources/model.hpp")},
+                  {QStringLiteral("line"), 12},
+                  {QStringLiteral("column"), 4}});
+  ModelOperation operation = modelOperationFromSignature(
+      QStringLiteral("+ execute(): void"), QStringLiteral("operation-execute"));
+  operation.sourceFile = sourceFile;
+  operation.sourceLine = 20;
+  operation.sourceColumn = 7;
+  imported.operations.append(operation);
+  project.elements.append(imported);
+
+  ModelElement manual;
+  manual.id = QStringLiteral("element-manual");
+  manual.name = QStringLiteral("Manual");
+  project.elements.append(manual);
+
+  Relationship relationship;
+  relationship.id = QStringLiteral("relationship-imported");
+  relationship.sourceId = imported.id;
+  relationship.targetId = manual.id;
+  relationship.extra.insert(QStringLiteral("sourceBinding"),
+                            QJsonObject{{QStringLiteral("file"), sourceFile},
+                                        {QStringLiteral("line"), 31},
+                                        {QStringLiteral("column"), 2}});
+  project.relationships.append(relationship);
+
+  QVERIFY(ProjectSerializer::save(temporary.path(), project).ok);
+  ProjectController controller;
+  QVERIFY(controller.openProject(QUrl::fromLocalFile(temporary.path())));
+  ApplicationSettings settings;
+  SourceEditorController sourceEditor(&controller, &settings);
+
+  const QVariantMap elementLocation =
+      sourceEditor.sourceLocation(QStringLiteral("element"), imported.id);
+  QCOMPARE(
+      QDir::cleanPath(elementLocation.value(QStringLiteral("file")).toString()),
+      QDir::cleanPath(sourceFile));
+  QCOMPARE(elementLocation.value(QStringLiteral("line")).toInt(), 12);
+  QCOMPARE(elementLocation.value(QStringLiteral("column")).toInt(), 4);
+  QVERIFY(elementLocation.value(QStringLiteral("exists")).toBool());
+  QVERIFY(sourceEditor.canOpenObject(QStringLiteral("element"), imported.id));
+
+  const QVariantMap operationLocation =
+      sourceEditor.sourceLocation(QStringLiteral("element"), imported.id, 0);
+  QCOMPARE(operationLocation.value(QStringLiteral("file")).toString(),
+           sourceFile);
+  QCOMPARE(operationLocation.value(QStringLiteral("line")).toInt(), 20);
+  QCOMPARE(operationLocation.value(QStringLiteral("column")).toInt(), 7);
+
+  const QVariantMap relationshipLocation = sourceEditor.sourceLocation(
+      QStringLiteral("relationship"), relationship.id);
+  QCOMPARE(relationshipLocation.value(QStringLiteral("line")).toInt(), 31);
+  QCOMPARE(relationshipLocation.value(QStringLiteral("column")).toInt(), 2);
+  QVERIFY(sourceEditor.canOpenObject(QStringLiteral("relationship"),
+                                     relationship.id));
+
+  QVERIFY(!sourceEditor.canOpenObject(QStringLiteral("element"), manual.id));
+  QSignalSpy attention(controller.diagnostics(),
+                       &DiagnosticModel::attentionAdded);
+  QVERIFY(!sourceEditor.openObject(QStringLiteral("element"), manual.id));
+  QCOMPARE(attention.count(), 1);
 }
 
 void CoreTests::updateManifestValidationAndVersionComparison() {

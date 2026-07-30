@@ -208,6 +208,9 @@ public:
                                     const QString &presentationId) const;
   bool wrapPresentationInPackage(const QString &diagramId,
                                  const QString &presentationId);
+  Q_INVOKABLE void
+  removeConnectorPresentations(const QString &diagramId,
+                               const QStringList &connectorIds);
   Q_INVOKABLE void removePresentations(const QString &diagramId,
                                        const QStringList &nodeIds);
   Q_INVOKABLE void removeContainerPresentation(const QString &diagramId,
@@ -240,6 +243,8 @@ public:
   Q_INVOKABLE void setDiagramCompartmentVisible(const QString &diagramId,
                                                 const QString &compartment,
                                                 bool visible);
+  Q_INVOKABLE void setDiagramOperationSignatureMode(const QString &diagramId,
+                                                    const QString &mode);
   Q_INVOKABLE void setNodeCompartmentVisibility(const QString &diagramId,
                                                 const QString &nodeId,
                                                 const QString &compartment,
@@ -248,6 +253,9 @@ public:
                                                  const QStringList &nodeIds,
                                                  const QString &compartment,
                                                  const QString &visibility);
+  Q_INVOKABLE void setNodesOperationSignatureMode(const QString &diagramId,
+                                                  const QStringList &nodeIds,
+                                                  const QString &mode);
   void updatePresentationGeometries(const QString &diagramId,
                                     const QVariantList &geometries,
                                     const QString &description);

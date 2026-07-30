@@ -340,6 +340,29 @@ private:
   QList<ContainerChildrenChange> m_membershipChanges;
 };
 
+// Removes only connector presentations from one diagram. The semantic
+// relationships remain in the project and can therefore be presented again
+// on this or another diagram.
+class RemoveConnectorPresentationsCommand final : public ProjectCommand {
+public:
+  RemoveConnectorPresentationsCommand(ProjectController *controller,
+                                      const ProjectData &project,
+                                      QString diagramId,
+                                      const QSet<QString> &connectorIds);
+
+private:
+  struct PositionedConnector {
+    qsizetype index;
+    ConnectorPresentation value;
+  };
+
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  QList<PositionedConnector> m_connectors;
+};
+
 class RemoveContainerPresentationCommand final : public ProjectCommand {
 public:
   RemoveContainerPresentationCommand(ProjectController *controller,
@@ -509,6 +532,23 @@ private:
   bool m_after;
 };
 
+class SetDiagramOperationSignatureModeCommand final : public ProjectCommand {
+public:
+  SetDiagramOperationSignatureModeCommand(ProjectController *controller,
+                                          QString diagramId,
+                                          OperationSignatureMode before,
+                                          OperationSignatureMode after);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, OperationSignatureMode value);
+
+  QString m_diagramId;
+  OperationSignatureMode m_before;
+  OperationSignatureMode m_after;
+};
+
 class SetDiagramFilterCommand final : public ProjectCommand {
 public:
   SetDiagramFilterCommand(ProjectController *controller, QString diagramId,
@@ -544,6 +584,27 @@ private:
   QString m_diagramId;
   bool m_attributesCompartment;
   QList<NodeCompartmentVisibilityChange> m_changes;
+};
+
+struct NodeOperationSignatureModeChange {
+  QString nodeId;
+  std::optional<OperationSignatureMode> before;
+  std::optional<OperationSignatureMode> after;
+};
+
+class SetNodeOperationSignatureModeCommand final : public ProjectCommand {
+public:
+  SetNodeOperationSignatureModeCommand(
+      ProjectController *controller, QString diagramId,
+      QList<NodeOperationSignatureModeChange> changes);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, bool forward);
+
+  QString m_diagramId;
+  QList<NodeOperationSignatureModeChange> m_changes;
 };
 
 class CreateRelationshipCommand final : public ProjectCommand {
@@ -705,7 +766,7 @@ private:
   QString m_after;
 };
 
-enum class ElementListProperty { Attributes, Operations, Literals };
+enum class ElementListProperty { Attributes, Literals };
 
 class SetElementListCommand final : public ProjectCommand {
 public:
@@ -722,6 +783,23 @@ private:
   ElementListProperty m_property;
   QStringList m_before;
   QStringList m_after;
+};
+
+class SetElementOperationsCommand final : public ProjectCommand {
+public:
+  SetElementOperationsCommand(ProjectController *controller, QString elementId,
+                              QList<ModelOperation> before,
+                              QList<ModelOperation> after,
+                              const QString &description);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, const QList<ModelOperation> &value);
+
+  QString m_elementId;
+  QList<ModelOperation> m_before;
+  QList<ModelOperation> m_after;
 };
 
 enum class RelationshipTextProperty {

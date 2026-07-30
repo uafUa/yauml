@@ -71,10 +71,9 @@ QString stereotypeDisplay(const QStringList &ids,
 
 QStringList normalizedTreeColumns(const QStringList &candidate) {
   static const QStringList allowed{
-      QStringLiteral("name"), QStringLiteral("sourceDirectory"),
-      QStringLiteral("sourceFile"),
-      QStringLiteral("stereotypes"), QStringLiteral("type"),
-      QStringLiteral("qualifiedName")};
+      QStringLiteral("name"),       QStringLiteral("sourceDirectory"),
+      QStringLiteral("sourceFile"), QStringLiteral("stereotypes"),
+      QStringLiteral("type"),       QStringLiteral("qualifiedName")};
   QStringList normalized{QStringLiteral("name")};
   for (const QString &column : candidate) {
     if (column == QStringLiteral("sourcePath")) {
@@ -147,6 +146,7 @@ void ProjectTreeModel::rebuildTree() {
   m_folderNodes.clear();
   m_namespaceNodes.clear();
   m_diagramNodes.clear();
+  m_relationshipNodes.clear();
 
   m_invisibleRoot = createNode();
   const auto attach = [](TreeNode *parent, TreeNode *child) {
@@ -170,6 +170,19 @@ void ProjectTreeModel::rebuildTree() {
   QHash<QString, QString> stereotypeNamesById;
   for (const auto &definition : m_controller->data().stereotypeDefinitions)
     stereotypeNamesById.insert(definition.id, definition.name);
+  const auto assignSourceColumns = [&](TreeNode *node,
+                                       const QJsonObject &sourceBinding) {
+    node->sourcePath = projectRelativeSourcePath(
+        m_controller->data(),
+        sourceBinding.value(QStringLiteral("file")).toString());
+    if (node->sourcePath.isEmpty())
+      return;
+    const QFileInfo sourceInfo(node->sourcePath);
+    node->sourceDirectory = QDir::fromNativeSeparators(sourceInfo.path());
+    if (node->sourceDirectory == QStringLiteral("."))
+      node->sourceDirectory.clear();
+    node->sourceFile = sourceInfo.fileName();
+  };
   std::vector<TreeNode *> elementOrder;
   for (const auto &element : m_controller->data().elements) {
     TreeNode *node = createNode();
@@ -182,16 +195,7 @@ void ProjectTreeModel::rebuildTree() {
     node->qualifiedPath = element.name;
     const QJsonObject sourceBinding =
         element.extra.value(QStringLiteral("sourceBinding")).toObject();
-    node->sourcePath = projectRelativeSourcePath(
-        m_controller->data(),
-        sourceBinding.value(QStringLiteral("file")).toString());
-    if (!node->sourcePath.isEmpty()) {
-      const QFileInfo sourceInfo(node->sourcePath);
-      node->sourceDirectory = QDir::fromNativeSeparators(sourceInfo.path());
-      if (node->sourceDirectory == QStringLiteral("."))
-        node->sourceDirectory.clear();
-      node->sourceFile = sourceInfo.fileName();
-    }
+    assignSourceColumns(node, sourceBinding);
     node->stereotypes =
         stereotypeDisplay(element.stereotypeIds, stereotypeNamesById);
     node->nested = !element.enclosingTypeId.isEmpty();
@@ -347,6 +351,44 @@ void ProjectTreeModel::rebuildTree() {
   for (TreeNode *node : elementOrder)
     attach(cycleSafeParent(node), node);
 
+  // Relationships are semantic model objects, but their connector
+  // presentations are diagram-local. Showing each relationship beneath its
+  // source type gives users an explicit place to select, inspect, and delete
+  // the semantic object without conflating that action with removing a
+  // connector from a diagram.
+  for (const auto &relationship : m_controller->data().relationships) {
+    TreeNode *sourceNode = m_elementNodes.value(relationship.sourceId, nullptr);
+    if (!sourceNode)
+      continue;
+    const TreeNode *targetNode =
+        m_elementNodes.value(relationship.targetId, nullptr);
+    const QString targetLabel =
+        targetNode ? targetNode->label : relationship.targetId;
+    const QString relationshipType = toString(relationship.type);
+    const QString relationshipName = relationship.name.trimmed();
+    const QString sourceRole = relationship.sourceEnd.role.trimmed();
+    const QString displayName =
+        !relationshipName.isEmpty() ? relationshipName : sourceRole;
+
+    TreeNode *node = createNode();
+    node->label =
+        displayName.isEmpty()
+            ? QStringLiteral("\u2192 %1").arg(targetLabel)
+            : QStringLiteral("%1 \u2192 %2").arg(displayName, targetLabel);
+    node->objectId = relationship.id;
+    node->kind = QStringLiteral("relationship");
+    node->objectType = relationshipType;
+    node->qualifiedPath = QStringLiteral("%1 \u2014 %2")
+                              .arg(sourceNode->qualifiedPath, node->label);
+    node->stereotypes =
+        stereotypeDisplay(relationship.stereotypeIds, stereotypeNamesById);
+    assignSourceColumns(
+        node,
+        relationship.extra.value(QStringLiteral("sourceBinding")).toObject());
+    m_relationshipNodes.insert(relationship.id, node);
+    attach(sourceNode, node);
+  }
+
   QHash<QString, int> browserOrderRank;
   for (const QString &key : m_controller->data().browserItemOrder)
     if (!browserOrderRank.contains(key))
@@ -410,6 +452,9 @@ bool ProjectTreeModel::updateVisibleChildren(
     TreeNode *node, const QRegularExpression &expression, bool filtering) {
   node->visibleChildren.clear();
   for (TreeNode *child : node->children) {
+    if (!m_relationshipsVisible &&
+        child->kind == QStringLiteral("relationship"))
+      continue;
     const bool descendantMatches =
         updateVisibleChildren(child, expression, filtering);
     const bool childMatches =
@@ -539,6 +584,8 @@ QModelIndex ProjectTreeModel::indexForObject(const QString &objectId,
     return indexForNode(m_namespaceNodes.value(objectId, nullptr));
   if (kind == QStringLiteral("diagram"))
     return indexForNode(m_diagramNodes.value(objectId, nullptr));
+  if (kind == QStringLiteral("relationship"))
+    return indexForNode(m_relationshipNodes.value(objectId, nullptr));
   return {};
 }
 
@@ -582,7 +629,8 @@ QString ProjectTreeModel::browserItemsJsonForIndexes(
     const TreeNode *node = nodeForIndex(item);
     if (!node || (node->kind != QStringLiteral("element") &&
                   node->kind != QStringLiteral("folder") &&
-                  node->kind != QStringLiteral("diagram")))
+                  node->kind != QStringLiteral("diagram") &&
+                  node->kind != QStringLiteral("relationship")))
       continue;
     const QString key = node->kind + u':' + node->objectId;
     if (seen.contains(key))
@@ -612,7 +660,8 @@ void ProjectTreeModel::selectWithModifiers(QItemSelectionModel *selectionModel,
 
   const QString kind = data(item, KindRole).toString();
   if (kind != QStringLiteral("element") &&
-      kind != QStringLiteral("namespace") && kind != QStringLiteral("folder")) {
+      kind != QStringLiteral("namespace") && kind != QStringLiteral("folder") &&
+      kind != QStringLiteral("relationship")) {
     selectionModel->clearSelection();
     selectionModel->setCurrentIndex(item, QItemSelectionModel::NoUpdate);
     m_selectionAnchor = {};
@@ -748,6 +797,21 @@ void ProjectTreeModel::setColumns(const QStringList &columns) {
   m_selectionAnchor = {};
   endResetModel();
   emit columnsChanged();
+}
+
+bool ProjectTreeModel::relationshipsVisible() const {
+  return m_relationshipsVisible;
+}
+
+void ProjectTreeModel::setRelationshipsVisible(bool visible) {
+  if (m_relationshipsVisible == visible)
+    return;
+  m_relationshipsVisible = visible;
+  m_selectionAnchor = {};
+  beginResetModel();
+  rebuildVisibleTree();
+  endResetModel();
+  emit relationshipsVisibleChanged();
 }
 
 void ProjectTreeModel::reset() {

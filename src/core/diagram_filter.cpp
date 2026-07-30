@@ -1,5 +1,6 @@
 #include "core/diagram_filter.h"
 
+#include "core/model_operation.h"
 #include <QRegularExpression>
 #include <QSet>
 #include <algorithm>
@@ -113,8 +114,10 @@ bool matchesElement(const ProjectData &project, const ModelElement &element,
                          element.operations.size() * 2);
     for (const QString &attribute : element.attributes)
       memberValues.append({attribute, memberName(attribute)});
-    for (const QString &operation : element.operations)
-      memberValues.append({operation, memberName(operation)});
+    for (const auto &operation : element.operations) {
+      const QString signature = modelOperationSignature(operation);
+      memberValues.append({signature, operation.name});
+    }
     const bool match = matchesWildcard(expression, memberValues);
     if (match == filter.excludeMemberMatches)
       return false;

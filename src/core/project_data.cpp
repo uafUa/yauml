@@ -134,6 +134,89 @@ ConnectorRouting connectorRoutingFromString(const QString &value, bool *ok) {
   return ConnectorRouting::Straight;
 }
 
+QString toString(MemberVisibility visibility) {
+  switch (visibility) {
+  case MemberVisibility::Public:
+    return QStringLiteral("public");
+  case MemberVisibility::Protected:
+    return QStringLiteral("protected");
+  case MemberVisibility::Private:
+    return QStringLiteral("private");
+  case MemberVisibility::Package:
+    return QStringLiteral("package");
+  }
+  return QStringLiteral("public");
+}
+
+MemberVisibility memberVisibilityFromString(const QString &value, bool *ok) {
+  if (ok)
+    *ok = true;
+  if (value == QStringLiteral("public"))
+    return MemberVisibility::Public;
+  if (value == QStringLiteral("protected"))
+    return MemberVisibility::Protected;
+  if (value == QStringLiteral("private"))
+    return MemberVisibility::Private;
+  if (value == QStringLiteral("package"))
+    return MemberVisibility::Package;
+  if (ok)
+    *ok = false;
+  return MemberVisibility::Public;
+}
+
+QString toString(OperationKind kind) {
+  switch (kind) {
+  case OperationKind::Method:
+    return QStringLiteral("method");
+  case OperationKind::Constructor:
+    return QStringLiteral("constructor");
+  case OperationKind::Destructor:
+    return QStringLiteral("destructor");
+  }
+  return QStringLiteral("method");
+}
+
+OperationKind operationKindFromString(const QString &value, bool *ok) {
+  if (ok)
+    *ok = true;
+  if (value == QStringLiteral("method"))
+    return OperationKind::Method;
+  if (value == QStringLiteral("constructor"))
+    return OperationKind::Constructor;
+  if (value == QStringLiteral("destructor"))
+    return OperationKind::Destructor;
+  if (ok)
+    *ok = false;
+  return OperationKind::Method;
+}
+
+QString toString(OperationSignatureMode mode) {
+  switch (mode) {
+  case OperationSignatureMode::Full:
+    return QStringLiteral("full");
+  case OperationSignatureMode::NameAndReturnType:
+    return QStringLiteral("name-and-return-type");
+  case OperationSignatureMode::NameOnly:
+    return QStringLiteral("name-only");
+  }
+  return QStringLiteral("full");
+}
+
+OperationSignatureMode operationSignatureModeFromString(const QString &value,
+                                                        bool *ok) {
+  if (ok)
+    *ok = true;
+  if (value == QStringLiteral("full"))
+    return OperationSignatureMode::Full;
+  if (value == QStringLiteral("name-and-return-type"))
+    return OperationSignatureMode::NameAndReturnType;
+  if (value == QStringLiteral("name-only"))
+    return OperationSignatureMode::NameOnly;
+  if (ok)
+    *ok = false;
+  return OperationSignatureMode::Full;
+}
+
 QString newId() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 
 ProjectData createStarterProject(const QString &name) {

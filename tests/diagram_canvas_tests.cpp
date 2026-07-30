@@ -16,6 +16,7 @@
 #include <QKeyEvent>
 #include <QMouseEvent>
 #include <QSignalSpy>
+#include <QTemporaryDir>
 #include <QtTest>
 
 using namespace yauml;
@@ -141,6 +142,7 @@ private slots:
   void connectorToolboxEditsRoutingAndAnnotations();
   void presentationToolboxTracksNodesContainersAndPriorities();
   void inPlaceNameEditorUsesRenderedName();
+  void diagramDoubleClickCanNavigateToImportedSource();
   void connectorEndpointsDragToReattachAndCancel();
   void connectorPortsSnapAndRemainFreelyPlaceable();
   void liveDragSnappingIsUndoableAndAltSuppressesIt();
@@ -531,19 +533,24 @@ void DiagramCanvasTests::
   QCOMPARE(canvas.selectedNodeCount(), 1);
   QCOMPARE(canvas.selectedConnectorCount(), 0);
 
-  // Delete follows the visible connector selection and remains one undo step.
+  // Delete follows the visible connector selection, removes only these
+  // diagram presentations, and keeps the semantic relationships available to
+  // other diagrams and the project tree.
   canvas.press({315.0, 140.0});
   canvas.release({315.0, 140.0});
   canvas.press({565.0, 140.0}, Qt::ControlModifier);
   canvas.release({565.0, 140.0}, Qt::ControlModifier);
   QCOMPARE(canvas.selectedConnectorCount(), 2);
   canvas.key(Qt::Key_Delete);
-  QVERIFY(!findRelationship(controller.data(), firstRelationshipId));
-  QVERIFY(!findRelationship(controller.data(), secondRelationshipId));
-  QCOMPARE(controller.undoText(), QStringLiteral("Delete relationships"));
+  QVERIFY(findRelationship(controller.data(), firstRelationshipId));
+  QVERIFY(findRelationship(controller.data(), secondRelationshipId));
+  QVERIFY(controller.data().diagrams.first().connectors.isEmpty());
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Remove connectors from diagram"));
   controller.undo();
   QVERIFY(findRelationship(controller.data(), firstRelationshipId));
   QVERIFY(findRelationship(controller.data(), secondRelationshipId));
+  QCOMPARE(controller.data().diagrams.first().connectors.size(), 2);
 }
 
 void DiagramCanvasTests::lassoStartsOnEmptyContainerBody() {
@@ -1582,6 +1589,47 @@ void DiagramCanvasTests::inPlaceNameEditorUsesRenderedName() {
   canvas.doubleClick(header);
   QCOMPARE(edits.count(), 1);
   QCOMPARE(edits.takeFirst().at(3).toString(), QStringLiteral("Service"));
+}
+
+void DiagramCanvasTests::diagramDoubleClickCanNavigateToImportedSource() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  ProjectData project = createStarterProject(QStringLiteral("Source model"));
+  ModelElement imported;
+  imported.id = QStringLiteral("element-imported");
+  imported.name = QStringLiteral("Imported");
+  imported.extra.insert(
+      QStringLiteral("sourceBinding"),
+      QJsonObject{{QStringLiteral("file"), QStringLiteral("Imported.hpp")},
+                  {QStringLiteral("line"), 3},
+                  {QStringLiteral("column"), 1}});
+  project.elements.append(imported);
+  NodePresentation node;
+  node.id = QStringLiteral("node-imported");
+  node.elementId = imported.id;
+  node.geometry = QRectF(50.0, 50.0, 220.0, 120.0);
+  project.diagrams.first().nodes.append(node);
+  QVERIFY(ProjectSerializer::save(temporary.path(), project).ok);
+
+  ProjectController controller;
+  QVERIFY(controller.openProject(QUrl::fromLocalFile(temporary.path())));
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  const QPointF header(190.0, 92.0);
+
+  QSignalSpy edits(&canvas, &DiagramCanvas::editRequested);
+  QSignalSpy navigation(&canvas, &DiagramCanvas::sourceNavigationRequested);
+  canvas.doubleClick(header);
+  QCOMPARE(edits.count(), 1);
+  QCOMPARE(navigation.count(), 0);
+
+  edits.clear();
+  canvas.setSourceEditorDoubleClickEnabled(true);
+  canvas.doubleClick(header);
+  QCOMPARE(edits.count(), 0);
+  QCOMPARE(navigation.count(), 1);
+  QCOMPARE(navigation.first().at(0).toString(), imported.id);
+  QCOMPARE(navigation.first().at(1).toInt(), -1);
 }
 
 void DiagramCanvasTests::connectorEndpointsDragToReattachAndCancel() {
