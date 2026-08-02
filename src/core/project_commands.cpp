@@ -457,9 +457,17 @@ DeleteBrowserFolderCommand::DeleteBrowserFolderCommand(
       const auto &container = diagram.containers.at(index);
       if (container.subjectKind == QStringLiteral("folder") &&
           container.subjectId == folderId) {
-        m_diagramContainers.append(
-            {diagram.id, index, container,
-             promoteContainerInOwner(diagram, container)});
+        QList<PositionedAttachment> noteAttachments;
+        for (qsizetype attachmentIndex = 0;
+             attachmentIndex < diagram.noteAttachments.size();
+             ++attachmentIndex) {
+          const auto &attachment = diagram.noteAttachments.at(attachmentIndex);
+          if (attachment.targetPresentationId == container.id)
+            noteAttachments.append({attachmentIndex, attachment});
+        }
+        m_diagramContainers.append({diagram.id, index, container,
+                                    promoteContainerInOwner(diagram, container),
+                                    std::move(noteAttachments)});
         break;
       }
     }
@@ -470,6 +478,11 @@ void DeleteBrowserFolderCommand::execute(ProjectData &project) {
   applyParentChanges(project, true);
   for (const auto &record : m_diagramContainers) {
     if (auto *diagram = findDiagram(project, record.diagramId)) {
+      for (auto attachment = record.noteAttachments.crbegin();
+           attachment != record.noteAttachments.crend(); ++attachment) {
+        removeRecordedValue(diagram->noteAttachments, attachment->index,
+                            attachment->value.id);
+      }
       if (record.ownerChange)
         applyMembershipChanges(*diagram, {*record.ownerChange}, true);
       removeRecordedValue(diagram->containers, record.index, record.value.id);
@@ -495,6 +508,10 @@ void DeleteBrowserFolderCommand::revert(ProjectData &project) {
       insertAtRecordedPosition(diagram->containers, record.index, record.value);
       if (record.ownerChange)
         applyMembershipChanges(*diagram, {*record.ownerChange}, false);
+      for (const auto &attachment : record.noteAttachments) {
+        insertAtRecordedPosition(diagram->noteAttachments, attachment.index,
+                                 attachment.value);
+      }
     }
   }
   applyParentChanges(project, false);
@@ -691,6 +708,140 @@ void AddContainerPresentationsCommand::revert(ProjectData &project) {
   }
 }
 
+AddNotesCommand::AddNotesCommand(ProjectController *controller,
+                                 const ProjectData &project, QString diagramId,
+                                 QList<NotePresentation> notes,
+                                 QList<NoteAttachment> attachments,
+                                 QString description)
+    : ProjectCommand(controller, std::move(description)),
+      m_diagramId(std::move(diagramId)) {
+  const auto *diagram = findDiagram(project, m_diagramId);
+  Q_ASSERT(diagram);
+  if (!diagram)
+    return;
+  qsizetype noteIndex = diagram->notes.size();
+  for (auto &note : notes)
+    m_notes.append({noteIndex++, std::move(note)});
+  qsizetype attachmentIndex = diagram->noteAttachments.size();
+  for (auto &attachment : attachments)
+    m_attachments.append({attachmentIndex++, std::move(attachment)});
+}
+
+void AddNotesCommand::execute(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    for (const auto &note : m_notes)
+      insertAtRecordedPosition(diagram->notes, note.index, note.value);
+    for (const auto &attachment : m_attachments)
+      insertAtRecordedPosition(diagram->noteAttachments, attachment.index,
+                               attachment.value);
+  }
+}
+
+void AddNotesCommand::revert(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    for (auto attachment = m_attachments.crbegin();
+         attachment != m_attachments.crend(); ++attachment)
+      removeRecordedValue(diagram->noteAttachments, attachment->index,
+                          attachment->value.id);
+    for (auto note = m_notes.crbegin(); note != m_notes.crend(); ++note)
+      removeRecordedValue(diagram->notes, note->index, note->value.id);
+  }
+}
+
+EditNoteTextCommand::EditNoteTextCommand(ProjectController *controller,
+                                         QString diagramId, QString noteId,
+                                         QString before, QString after)
+    : ProjectCommand(controller, QStringLiteral("Edit note")),
+      m_diagramId(std::move(diagramId)), m_noteId(std::move(noteId)),
+      m_before(std::move(before)), m_after(std::move(after)) {}
+
+void EditNoteTextCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void EditNoteTextCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void EditNoteTextCommand::apply(ProjectData &project, const QString &text) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    if (auto *note = findNote(*diagram, m_noteId))
+      note->text = text;
+}
+
+RemoveNotesCommand::RemoveNotesCommand(ProjectController *controller,
+                                       const ProjectData &project,
+                                       QString diagramId,
+                                       const QSet<QString> &noteIds)
+    : ProjectCommand(controller, noteIds.size() == 1
+                                     ? QStringLiteral("Remove note")
+                                     : QStringLiteral("Remove notes")),
+      m_diagramId(std::move(diagramId)) {
+  const auto *diagram = findDiagram(project, m_diagramId);
+  Q_ASSERT(diagram);
+  if (!diagram)
+    return;
+  for (qsizetype index = 0; index < diagram->notes.size(); ++index)
+    if (noteIds.contains(diagram->notes.at(index).id))
+      m_notes.append({index, diagram->notes.at(index)});
+  for (qsizetype index = 0; index < diagram->noteAttachments.size(); ++index)
+    if (noteIds.contains(diagram->noteAttachments.at(index).noteId))
+      m_attachments.append({index, diagram->noteAttachments.at(index)});
+}
+
+void RemoveNotesCommand::execute(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    for (auto item = m_attachments.crbegin(); item != m_attachments.crend();
+         ++item)
+      removeRecordedValue(diagram->noteAttachments, item->index,
+                          item->value.id);
+    for (auto item = m_notes.crbegin(); item != m_notes.crend(); ++item)
+      removeRecordedValue(diagram->notes, item->index, item->value.id);
+  }
+}
+
+void RemoveNotesCommand::revert(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    for (const auto &item : m_notes)
+      insertAtRecordedPosition(diagram->notes, item.index, item.value);
+    for (const auto &item : m_attachments)
+      insertAtRecordedPosition(diagram->noteAttachments, item.index,
+                               item.value);
+  }
+}
+
+RemoveNoteAttachmentsCommand::RemoveNoteAttachmentsCommand(
+    ProjectController *controller, const ProjectData &project,
+    QString diagramId, const QSet<QString> &attachmentIds)
+    : ProjectCommand(controller,
+                     attachmentIds.size() == 1
+                         ? QStringLiteral("Remove note attachment")
+                         : QStringLiteral("Remove note attachments")),
+      m_diagramId(std::move(diagramId)) {
+  const auto *diagram = findDiagram(project, m_diagramId);
+  Q_ASSERT(diagram);
+  if (!diagram)
+    return;
+  for (qsizetype index = 0; index < diagram->noteAttachments.size(); ++index)
+    if (attachmentIds.contains(diagram->noteAttachments.at(index).id))
+      m_attachments.append({index, diagram->noteAttachments.at(index)});
+}
+
+void RemoveNoteAttachmentsCommand::execute(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    for (auto item = m_attachments.crbegin(); item != m_attachments.crend();
+         ++item)
+      removeRecordedValue(diagram->noteAttachments, item->index,
+                          item->value.id);
+}
+
+void RemoveNoteAttachmentsCommand::revert(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    for (const auto &item : m_attachments)
+      insertAtRecordedPosition(diagram->noteAttachments, item.index,
+                               item.value);
+}
+
 RemovePresentationsCommand::RemovePresentationsCommand(
     ProjectController *controller, const ProjectData &project,
     QString diagramId, const QSet<QString> &nodeIds)
@@ -720,6 +871,11 @@ RemovePresentationsCommand::RemovePresentationsCommand(
                          removedElementIds.contains(relationship->targetId)))
       m_connectors.append({index, connector});
   }
+  for (qsizetype index = 0; index < diagram->noteAttachments.size(); ++index) {
+    const auto &attachment = diagram->noteAttachments.at(index);
+    if (nodeIds.contains(attachment.targetPresentationId))
+      m_noteAttachments.append({index, attachment});
+  }
   m_membershipChanges = membershipChangesForRemoval(*diagram, nodeIds);
 }
 
@@ -727,6 +883,9 @@ void RemovePresentationsCommand::execute(ProjectData &project) {
   auto *diagram = findDiagram(project, m_diagramId);
   if (!diagram)
     return;
+  for (auto item = m_noteAttachments.crbegin();
+       item != m_noteAttachments.crend(); ++item)
+    removeRecordedValue(diagram->noteAttachments, item->index, item->value.id);
   for (auto item = m_connectors.crbegin(); item != m_connectors.crend(); ++item)
     removeRecordedValue(diagram->connectors, item->index, item->value.id);
   for (auto item = m_nodes.crbegin(); item != m_nodes.crend(); ++item)
@@ -742,6 +901,8 @@ void RemovePresentationsCommand::revert(ProjectData &project) {
     insertAtRecordedPosition(diagram->nodes, item.index, item.value);
   for (const auto &item : m_connectors)
     insertAtRecordedPosition(diagram->connectors, item.index, item.value);
+  for (const auto &item : m_noteAttachments)
+    insertAtRecordedPosition(diagram->noteAttachments, item.index, item.value);
   applyMembershipChanges(*diagram, m_membershipChanges, false);
 }
 
@@ -795,12 +956,20 @@ RemoveContainerPresentationCommand::RemoveContainerPresentationCommand(
     return;
   m_container = diagram->containers.at(m_index);
   m_ownerChange = promoteContainerInOwner(*diagram, m_container);
+  for (qsizetype index = 0; index < diagram->noteAttachments.size(); ++index) {
+    const auto &attachment = diagram->noteAttachments.at(index);
+    if (attachment.targetPresentationId == m_container.id)
+      m_noteAttachments.append({index, attachment});
+  }
 }
 
 void RemoveContainerPresentationCommand::execute(ProjectData &project) {
   auto *diagram = findDiagram(project, m_diagramId);
   if (!diagram || m_index < 0)
     return;
+  for (auto item = m_noteAttachments.crbegin();
+       item != m_noteAttachments.crend(); ++item)
+    removeRecordedValue(diagram->noteAttachments, item->index, item->value.id);
   if (m_ownerChange)
     applyMembershipChanges(*diagram, {*m_ownerChange}, true);
   removeRecordedValue(diagram->containers, m_index, m_container.id);
@@ -811,6 +980,8 @@ void RemoveContainerPresentationCommand::revert(ProjectData &project) {
   if (!diagram || m_index < 0)
     return;
   insertAtRecordedPosition(diagram->containers, m_index, m_container);
+  for (const auto &item : m_noteAttachments)
+    insertAtRecordedPosition(diagram->noteAttachments, item.index, item.value);
   if (m_ownerChange)
     applyMembershipChanges(*diagram, {*m_ownerChange}, false);
 }
@@ -900,7 +1071,8 @@ DeleteElementCommand::DeleteElementCommand(ProjectController *controller,
   }
 
   for (const auto &diagram : project.diagrams) {
-    DiagramRecords records{diagram.id, {}, {}, {}, std::nullopt, std::nullopt};
+    DiagramRecords records{diagram.id, {},           {},          {},
+                           {},         std::nullopt, std::nullopt};
     QSet<QString> removedNodeIds;
     for (qsizetype index = 0; index < diagram.nodes.size(); ++index) {
       const auto &node = diagram.nodes.at(index);
@@ -926,7 +1098,16 @@ DeleteElementCommand::DeleteElementCommand(ProjectController *controller,
         break;
       }
     }
+    QSet<QString> removedPresentationIds = removedNodeIds;
+    if (records.container)
+      removedPresentationIds.insert(records.container->value.id);
+    for (qsizetype index = 0; index < diagram.noteAttachments.size(); ++index) {
+      const auto &attachment = diagram.noteAttachments.at(index);
+      if (removedPresentationIds.contains(attachment.targetPresentationId))
+        records.noteAttachments.append({index, attachment});
+    }
     if (!records.nodes.isEmpty() || !records.connectors.isEmpty() ||
+        !records.noteAttachments.isEmpty() ||
         !records.membershipChanges.isEmpty() || records.container)
       m_diagrams.append(std::move(records));
   }
@@ -967,6 +1148,10 @@ void DeleteElementCommand::execute(ProjectData &project) {
       element->enclosingTypeId = change.after;
   for (const auto &records : m_diagrams) {
     if (auto *diagram = findDiagram(project, records.diagramId)) {
+      for (auto item = records.noteAttachments.crbegin();
+           item != records.noteAttachments.crend(); ++item)
+        removeRecordedValue(diagram->noteAttachments, item->index,
+                            item->value.id);
       for (auto item = records.connectors.crbegin();
            item != records.connectors.crend(); ++item)
         removeRecordedValue(diagram->connectors, item->index, item->value.id);
@@ -1021,6 +1206,9 @@ void DeleteElementCommand::revert(ProjectData &project) {
       applyMembershipChanges(*diagram, records.membershipChanges, false);
       for (const auto &item : records.connectors)
         insertAtRecordedPosition(diagram->connectors, item.index, item.value);
+      for (const auto &item : records.noteAttachments)
+        insertAtRecordedPosition(diagram->noteAttachments, item.index,
+                                 item.value);
     }
   }
 }
@@ -1053,6 +1241,8 @@ void UpdatePresentationGeometriesCommand::apply(ProjectData &project,
       node->geometry = forward ? change.after : change.before;
     else if (auto *container = findContainer(*diagram, change.presentationId))
       container->geometry = forward ? change.after : change.before;
+    else if (auto *note = findNote(*diagram, change.presentationId))
+      note->geometry = forward ? change.after : change.before;
   }
   applyMembershipChanges(*diagram, m_membershipChanges, forward);
   for (const auto &change : m_packageChanges)

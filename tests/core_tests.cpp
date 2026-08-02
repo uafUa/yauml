@@ -122,13 +122,16 @@ private slots:
   void diagramDropSizingModes();
   void diagramLabelsReflectPackageContext();
   void projectTreeExtendedSelection();
-  void projectTreeIncrementalWildcardSearch();
+  void projectTreeIncrementalWildcardFilter();
+  void projectTreeNonFilteringWildcardFind();
   void projectTreeDeletionAndOrdering();
   void projectTreeQualifiedHierarchy();
   void projectTreeConfigurableColumns();
+  void projectTreeBrowserItemPlacement();
   void nestedTypeReassignmentIsSemanticAndUndoable();
   void browserFoldersPersistAndReorganize();
   void folderPresentationsPersistAndRemainPresentationOnly();
+  void diagramNotesPersistRemainPresentationOnlyAndUndo();
   void packagePresentationsAreSemanticAndDiagramMovesArePresentational();
   void nestedPackagePresentationDetachesWithoutSemanticMove();
   void emptyPackageFramesAndAncestorAwareWrappingAreUndoable();
@@ -3019,7 +3022,7 @@ void CoreTests::projectTreeExtendedSelection() {
            QStringList({firstElement, secondElement, thirdElement}));
 }
 
-void CoreTests::projectTreeIncrementalWildcardSearch() {
+void CoreTests::projectTreeIncrementalWildcardFilter() {
   ProjectController controller;
   const auto addNamedElement = [&](const QString &type, const QString &name) {
     const QString id = controller.addElement(type);
@@ -3039,12 +3042,12 @@ void CoreTests::projectTreeIncrementalWildcardSearch() {
   controller.renameDiagram(diagramId, QStringLiteral("API Overview"));
 
   ProjectTreeModel *tree = controller.treeModel();
-  QSignalSpy patternChanged(tree, &ProjectTreeModel::searchPatternChanged);
+  QSignalSpy patternChanged(tree, &ProjectTreeModel::filterPatternChanged);
   QCOMPARE(tree->rowCount(), 2);
 
-  tree->setSearchPattern(QStringLiteral("inner"));
+  tree->setFilterPattern(QStringLiteral("inner"));
   QCOMPARE(patternChanged.count(), 1);
-  QCOMPARE(tree->searchPattern(), QStringLiteral("inner"));
+  QCOMPARE(tree->filterPattern(), QStringLiteral("inner"));
   QCOMPARE(tree->rowCount(), 1);
   const QModelIndex modelRoot = tree->index(0, 0);
   QCOMPARE(tree->data(modelRoot, Qt::DisplayRole).toString(),
@@ -3064,20 +3067,20 @@ void CoreTests::projectTreeIncrementalWildcardSearch() {
   QCOMPARE(tree->elementIdsForIndexes({demoNamespace}),
            QStringList({outer, inner, service}));
 
-  tree->setSearchPattern(QStringLiteral("*serv?ce"));
+  tree->setFilterPattern(QStringLiteral("*serv?ce"));
   QVERIFY(tree->indexForObject(service, QStringLiteral("element")).isValid());
   QVERIFY(!tree->indexForObject(inner, QStringLiteral("element")).isValid());
   QVERIFY(!tree->indexForObject(other, QStringLiteral("element")).isValid());
 
   // Qualified paths can be searched even though tree rows show only their
   // unqualified labels.
-  tree->setSearchPattern(QStringLiteral("DEMO::*"));
+  tree->setFilterPattern(QStringLiteral("DEMO::*"));
   QVERIFY(tree->indexForObject(outer, QStringLiteral("element")).isValid());
   QVERIFY(tree->indexForObject(inner, QStringLiteral("element")).isValid());
   QVERIFY(tree->indexForObject(service, QStringLiteral("element")).isValid());
   QVERIFY(!tree->indexForObject(other, QStringLiteral("element")).isValid());
 
-  tree->setSearchPattern(QStringLiteral("api overview"));
+  tree->setFilterPattern(QStringLiteral("api overview"));
   QCOMPARE(tree->rowCount(), 1);
   const QModelIndex diagramRoot = tree->index(0, 0);
   QCOMPARE(tree->data(diagramRoot, Qt::DisplayRole).toString(),
@@ -3085,17 +3088,79 @@ void CoreTests::projectTreeIncrementalWildcardSearch() {
   QVERIFY(tree->indexForObject(diagramId, QStringLiteral("diagram")).isValid());
   QVERIFY(!tree->indexForObject(outer, QStringLiteral("element")).isValid());
 
-  tree->setSearchPattern(QStringLiteral("no such item"));
+  tree->setFilterPattern(QStringLiteral("no such item"));
   QCOMPARE(tree->rowCount(), 0);
   QVERIFY(
       !tree->indexForObject(diagramId, QStringLiteral("diagram")).isValid());
 
-  tree->setSearchPattern({});
+  tree->setFilterPattern({});
   QCOMPARE(tree->rowCount(), 2);
   QVERIFY(tree->indexForObject(outer, QStringLiteral("element")).isValid());
   QVERIFY(tree->indexForObject(other, QStringLiteral("element")).isValid());
   QVERIFY(tree->indexForObject(diagramId, QStringLiteral("diagram")).isValid());
   QCOMPARE(patternChanged.count(), 6);
+}
+
+void CoreTests::projectTreeNonFilteringWildcardFind() {
+  ProjectController controller;
+  const auto addNamedElement = [&](const QString &type, const QString &name) {
+    const QString id = controller.addElement(type);
+    controller.selectObject(id, QStringLiteral("element"));
+    controller.setSelectedName(name);
+    return id;
+  };
+  const QString outer =
+      addNamedElement(QStringLiteral("class"), QStringLiteral("demo::Outer"));
+  const QString inner = addNamedElement(QStringLiteral("struct"),
+                                        QStringLiteral("demo::Outer::Inner"));
+  const QString service =
+      addNamedElement(QStringLiteral("class"), QStringLiteral("demo::Service"));
+  const QString cppImportPreview = addNamedElement(
+      QStringLiteral("class"), QStringLiteral("demo::CppImportPreview"));
+  addNamedElement(QStringLiteral("enum"), QStringLiteral("other::Thing"));
+  const QString diagramId = controller.data().diagrams.first().id;
+  controller.renameDiagram(diagramId, QStringLiteral("API Overview"));
+
+  ProjectTreeModel *tree = controller.treeModel();
+  const auto matchKeys = [](const QVariantList &matches) {
+    QStringList keys;
+    for (const QVariant &match : matches) {
+      const QVariantMap item = match.toMap();
+      keys.append(item.value(QStringLiteral("kind")).toString() + u':' +
+                  item.value(QStringLiteral("objectId")).toString());
+    }
+    return keys;
+  };
+
+  const int unfilteredRootCount = tree->rowCount();
+  QCOMPARE(matchKeys(tree->findMatches(QStringLiteral("inn?r"))),
+           QStringList({QStringLiteral("element:") + inner}));
+  // A parent name is present in every descendant's qualified path. Find should
+  // stop on the parent itself unless an explicit wildcard requests a subtree.
+  QCOMPARE(matchKeys(tree->findMatches(QStringLiteral("Outer"))),
+           QStringList({QStringLiteral("element:") + outer}));
+  QCOMPARE(matchKeys(tree->findMatches(QStringLiteral("demo::Outer"))),
+           QStringList({QStringLiteral("element:") + outer}));
+  QCOMPARE(matchKeys(tree->findMatches(QStringLiteral("cpp"))),
+           QStringList({QStringLiteral("element:") + cppImportPreview}));
+  QCOMPARE(tree->rowCount(), unfilteredRootCount);
+  QVERIFY(tree->indexForObject(service, QStringLiteral("element")).isValid());
+
+  // Find searches names, not hidden metadata. Filtering remains the tool for
+  // locating nodes by type, stereotype, or source information.
+  QVERIFY(tree->findMatches(QStringLiteral("struct")).isEmpty());
+  QCOMPARE(matchKeys(tree->findMatches(QStringLiteral("API*"))),
+           QStringList({QStringLiteral("diagram:") + diagramId}));
+  QVERIFY(tree->findMatches(QString{}).isEmpty());
+
+  // An active filter defines the visible search scope. Find itself remains
+  // non-filtering and cannot navigate to rows hidden by that explicit filter.
+  tree->setFilterPattern(QStringLiteral("demo::*"));
+  QCOMPARE(matchKeys(tree->findMatches(QStringLiteral("*er"))),
+           QStringList({QStringLiteral("element:") + outer,
+                        QStringLiteral("element:") + inner}));
+  QVERIFY(tree->findMatches(QStringLiteral("thing")).isEmpty());
+  QVERIFY(tree->indexForObject(service, QStringLiteral("element")).isValid());
 }
 
 void CoreTests::projectTreeDeletionAndOrdering() {
@@ -3345,6 +3410,58 @@ void CoreTests::projectTreeConfigurableColumns() {
   QCOMPARE(tree->columns(), QStringList({QStringLiteral("name"),
                                          QStringLiteral("stereotypes")}));
   QCOMPARE(tree->columnCount(), 2);
+}
+
+void CoreTests::projectTreeBrowserItemPlacement() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString first = controller.addElement(QStringLiteral("class"));
+  const QString second = controller.addElement(QStringLiteral("struct"));
+  const QString folder = controller.addBrowserFolder(
+      QStringLiteral("model"), {}, QStringLiteral("Architecture"));
+  const QString subfolder = controller.addBrowserFolder(
+      QStringLiteral("folder"), folder, QStringLiteral("Details"));
+  const auto itemJson = [](const QString &kind, const QString &id) {
+    return QString::fromUtf8(
+        QJsonDocument(QJsonArray{QJsonObject{{QStringLiteral("kind"), kind},
+                                             {QStringLiteral("id"), id}}})
+            .toJson(QJsonDocument::Compact));
+  };
+  QVERIFY(
+      controller.moveBrowserItems(itemJson(QStringLiteral("element"), first),
+                                  QStringLiteral("folder"), folder));
+  QVERIFY(
+      controller.moveBrowserItems(itemJson(QStringLiteral("element"), second),
+                                  QStringLiteral("folder"), subfolder));
+
+  // Project-tree double-click and drag placement share this entry point. A
+  // folder must create its recursive frame and element presentation hierarchy.
+  QCOMPARE(controller.addBrowserItemToDiagram(diagramId,
+                                              QStringLiteral("folder"), folder,
+                                              QStringLiteral("content")),
+           4);
+  const Diagram &diagram = controller.data().diagrams.first();
+  QCOMPARE(diagram.containers.size(), 2);
+  QCOMPARE(diagram.nodes.size(), 2);
+  const auto hasContainer = [&](const QString &subjectId) {
+    return std::any_of(diagram.containers.cbegin(), diagram.containers.cend(),
+                       [&](const ContainerPresentation &container) {
+                         return container.subjectKind ==
+                                    QStringLiteral("folder") &&
+                                container.subjectId == subjectId;
+                       });
+  };
+  QVERIFY(hasContainer(folder));
+  QVERIFY(hasContainer(subfolder));
+
+  controller.undo();
+  QVERIFY(controller.data().diagrams.first().containers.isEmpty());
+  QVERIFY(controller.data().diagrams.first().nodes.isEmpty());
+  QCOMPARE(controller.addBrowserItemToDiagram(diagramId,
+                                              QStringLiteral("element"), first,
+                                              QStringLiteral("content")),
+           1);
+  QCOMPARE(controller.data().diagrams.first().nodes.first().elementId, first);
 }
 
 void CoreTests::nestedTypeReassignmentIsSemanticAndUndoable() {
@@ -3616,6 +3733,122 @@ void CoreTests::folderPresentationsPersistAndRemainPresentationOnly() {
   const LoadOutcome loaded = ProjectSerializer::load(temporary.path());
   QVERIFY(loaded.ok);
   QCOMPARE(loaded.project, controller.data());
+}
+
+void CoreTests::diagramNotesPersistRemainPresentationOnlyAndUndo() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString elementId =
+      controller.addElementAt(QStringLiteral("class"), diagramId, 80.0, 90.0);
+  const auto *initialDiagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(initialDiagram);
+  const auto node =
+      std::find_if(initialDiagram->nodes.cbegin(), initialDiagram->nodes.cend(),
+                   [&](const NodePresentation &candidate) {
+                     return candidate.elementId == elementId;
+                   });
+  QVERIFY(node != initialDiagram->nodes.cend());
+  const QString nodeId = node->id;
+
+  const qsizetype semanticElementCount = controller.data().elements.size();
+  const QString noteId = controller.addNote(diagramId, 330.0, 210.0);
+  QVERIFY(!noteId.isEmpty());
+  QCOMPARE(controller.data().elements.size(), semanticElementCount);
+  QCOMPARE(controller.data().diagrams.first().notes.size(), 1);
+  QVERIFY(!controller.treeModel()
+               ->indexForObject(noteId, QStringLiteral("note"))
+               .isValid());
+
+  const QString markdown = QStringLiteral("**Important**\n\n* Review API");
+  controller.setNoteText(diagramId, noteId, markdown);
+  QCOMPARE(findNote(*findDiagram(controller.data(), diagramId), noteId)->text,
+           markdown);
+  controller.undo();
+  QCOMPARE(findNote(*findDiagram(controller.data(), diagramId), noteId)->text,
+           QStringLiteral("Note"));
+  controller.redo();
+
+  const QString attachmentId =
+      controller.addNoteAttachment(diagramId, noteId, nodeId);
+  QVERIFY(!attachmentId.isEmpty());
+  QCOMPARE(controller.data().diagrams.first().noteAttachments.size(), 1);
+  // Repeating the same note-target attachment is idempotent.
+  QCOMPARE(controller.addNoteAttachment(diagramId, noteId, nodeId),
+           attachmentId);
+
+  const QRectF before =
+      findNote(*findDiagram(controller.data(), diagramId), noteId)->geometry;
+  const QRectF after = before.translated(25.0, -15.0);
+  controller.updatePresentationGeometries(
+      diagramId,
+      {QVariantMap{{QStringLiteral("id"), noteId},
+                   {QStringLiteral("x"), after.x()},
+                   {QStringLiteral("y"), after.y()},
+                   {QStringLiteral("width"), after.width()},
+                   {QStringLiteral("height"), after.height()}}},
+      QStringLiteral("Move note"));
+  QCOMPARE(
+      findNote(*findDiagram(controller.data(), diagramId), noteId)->geometry,
+      after);
+  controller.undo();
+  QCOMPARE(
+      findNote(*findDiagram(controller.data(), diagramId), noteId)->geometry,
+      before);
+  controller.redo();
+
+  controller.removePresentations(diagramId, {nodeId});
+  QVERIFY(findDiagram(controller.data(), diagramId)->noteAttachments.isEmpty());
+  controller.undo();
+  QCOMPARE(findDiagram(controller.data(), diagramId)->noteAttachments.size(),
+           1);
+  QVERIFY(ProjectSerializer::validate(controller.data()).isEmpty());
+
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(temporary.path(), controller.data()).ok);
+  const LoadOutcome loaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(loaded.ok);
+  QCOMPARE(loaded.project, controller.data());
+
+  // Folder deletion removes its diagram frame. Attachments targeting that
+  // frame must follow the frame through the same undoable command.
+  const QString folderId = controller.addBrowserFolder(
+      QStringLiteral("model"), {}, QStringLiteral("Note target"));
+  const QString folderSubject = QString::fromUtf8(
+      QJsonDocument(QJsonArray{QJsonObject{
+                        {QStringLiteral("kind"), QStringLiteral("folder")},
+                        {QStringLiteral("id"), folderId}}})
+          .toJson(QJsonDocument::Compact));
+  QCOMPARE(controller.addTreeItemsToDiagram(diagramId, {}, folderSubject, 520.0,
+                                            180.0),
+           1);
+  const auto *folderDiagram = findDiagram(controller.data(), diagramId);
+  const auto folderContainer = std::find_if(
+      folderDiagram->containers.cbegin(), folderDiagram->containers.cend(),
+      [&](const ContainerPresentation &container) {
+        return container.subjectKind == QStringLiteral("folder") &&
+               container.subjectId == folderId;
+      });
+  QVERIFY(folderContainer != folderDiagram->containers.cend());
+  QVERIFY(!controller.addNoteAttachment(diagramId, noteId, folderContainer->id)
+               .isEmpty());
+  QCOMPARE(findDiagram(controller.data(), diagramId)->noteAttachments.size(),
+           2);
+  controller.deleteBrowserFolder(folderId);
+  QCOMPARE(findDiagram(controller.data(), diagramId)->noteAttachments.size(),
+           1);
+  controller.undo();
+  QCOMPARE(findDiagram(controller.data(), diagramId)->noteAttachments.size(),
+           2);
+  QVERIFY(ProjectSerializer::validate(controller.data()).isEmpty());
+
+  controller.removeNotes(diagramId, {noteId});
+  QVERIFY(findDiagram(controller.data(), diagramId)->notes.isEmpty());
+  QVERIFY(findDiagram(controller.data(), diagramId)->noteAttachments.isEmpty());
+  controller.undo();
+  QCOMPARE(findDiagram(controller.data(), diagramId)->notes.size(), 1);
+  QCOMPARE(findDiagram(controller.data(), diagramId)->noteAttachments.size(),
+           2);
 }
 
 void CoreTests::
@@ -4650,6 +4883,8 @@ void CoreTests::bulkConnectorEndpointReattachmentIsOrderedAndUndoable() {
   const QStringList selected{lowConnector, highConnector, middleConnector,
                              upperHighConnector};
   QVERIFY(controller.canReattachConnectorEnds(diagramId, selected));
+  QVERIFY(
+      !controller.canReattachConnectorEndsToFacingSides(diagramId, selected));
   const ProjectData before = controller.data();
   controller.reattachConnectorEnds(diagramId, selected, QStringLiteral("left"));
 
@@ -4758,6 +4993,10 @@ void CoreTests::bulkConnectorEndpointReattachmentIsOrderedAndUndoable() {
   parallelController.addElement(QStringLiteral("class"), parallelDiagramId);
   parallelController.addElement(QStringLiteral("class"), parallelDiagramId);
   const auto parallelNodes = parallelController.data().diagrams.first().nodes;
+  parallelController.updateNodeGeometry(
+      parallelDiagramId, parallelNodes.at(0).id, 100.0, 200.0, 160.0, 100.0);
+  parallelController.updateNodeGeometry(
+      parallelDiagramId, parallelNodes.at(1).id, 500.0, 260.0, 160.0, 100.0);
   const QString firstParallel = parallelController.createRelationship(
       parallelDiagramId, parallelNodes.at(0).id, parallelNodes.at(1).id,
       QStringLiteral("association"));
@@ -4767,6 +5006,8 @@ void CoreTests::bulkConnectorEndpointReattachmentIsOrderedAndUndoable() {
   const QStringList parallelSelection{firstParallel, secondParallel};
   QVERIFY(parallelController.canReattachConnectorEnds(parallelDiagramId,
                                                       parallelSelection));
+  QVERIFY(parallelController.canReattachConnectorEndsToFacingSides(
+      parallelDiagramId, parallelSelection));
   parallelController.reattachConnectorEnds(parallelDiagramId, parallelSelection,
                                            QStringLiteral("top"));
   const auto &parallelDiagram = parallelController.data().diagrams.first();
@@ -4782,6 +5023,38 @@ void CoreTests::bulkConnectorEndpointReattachmentIsOrderedAndUndoable() {
   QVERIFY(second->targetAnchor.side == ConnectorSide::Top);
   QVERIFY(first->sourceAnchor.offset < second->sourceAnchor.offset);
   QVERIFY(first->targetAnchor.offset < second->targetAnchor.offset);
+
+  // The convenience operation chooses the shorter opposite side pair while
+  // preserving the same geometry-based endpoint order on both rectangles.
+  // Explicit side commands above deliberately retain their old behavior.
+  const ProjectData beforeFacing = parallelController.data();
+  parallelController.reattachConnectorEnds(parallelDiagramId, parallelSelection,
+                                           QStringLiteral("facing"));
+  const ProjectData afterFacing = parallelController.data();
+  const auto &facingDiagram = afterFacing.diagrams.first();
+  QCOMPARE(facingDiagram.nodes.at(0).verticalPortSnapPoints, 3);
+  QCOMPARE(facingDiagram.nodes.at(1).verticalPortSnapPoints, 3);
+  const auto *facingFirst = findConnector(facingDiagram, firstParallel);
+  const auto *facingSecond = findConnector(facingDiagram, secondParallel);
+  QVERIFY(facingFirst);
+  QVERIFY(facingSecond);
+  QVERIFY(facingFirst->sourceAnchor.side == ConnectorSide::Right);
+  QVERIFY(facingFirst->targetAnchor.side == ConnectorSide::Left);
+  QVERIFY(facingSecond->sourceAnchor.side == ConnectorSide::Right);
+  QVERIFY(facingSecond->targetAnchor.side == ConnectorSide::Left);
+  QVERIFY(!qFuzzyCompare(facingFirst->sourceAnchor.offset,
+                         facingSecond->sourceAnchor.offset));
+  QVERIFY(!qFuzzyCompare(facingFirst->targetAnchor.offset,
+                         facingSecond->targetAnchor.offset));
+  QCOMPARE(facingFirst->sourceAnchor.offset < facingSecond->sourceAnchor.offset,
+           facingFirst->targetAnchor.offset <
+               facingSecond->targetAnchor.offset);
+  QCOMPARE(parallelController.undoText(),
+           QStringLiteral("Reattach connector ends to facing sides"));
+  parallelController.undo();
+  QCOMPARE(parallelController.data(), beforeFacing);
+  parallelController.redo();
+  QCOMPARE(parallelController.data(), afterFacing);
 }
 
 void CoreTests::bulkConnectorEndpointShiftPreservesSpacingAndGrowsGrid() {
@@ -5230,6 +5503,19 @@ void CoreTests::multipleDiagramWorkspace() {
   const QString first = controller.data().diagrams.first().id;
   const QString second = controller.addDiagram();
   QCOMPARE(workspace.diagramIdsForHost(workspace.mainHostId()).size(), 2);
+
+  workspace.setActiveDiagramId(second);
+  QSignalSpy hostsChanged(&workspace, &WorkspaceController::hostsChanged);
+  controller.addElement(QStringLiteral("class"), second);
+  const NodePresentation &secondDiagramNode =
+      findDiagram(controller.data(), second)->nodes.first();
+  controller.updateNodeGeometry(second, secondDiagramNode.id,
+                                secondDiagramNode.geometry.x(),
+                                secondDiagramNode.geometry.y(), 360.0, 240.0);
+  // Geometry-only commands such as Fit to content must not rebuild an
+  // unchanged tab model or disturb the active non-first diagram.
+  QCOMPARE(hostsChanged.count(), 0);
+  QCOMPARE(workspace.activeDiagramId(), second);
 
   const QString host = workspace.detachDiagram(second, 300, 200);
   QVERIFY(!host.isEmpty());

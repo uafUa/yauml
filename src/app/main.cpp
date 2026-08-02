@@ -20,6 +20,8 @@
 #include <QTimer>
 #include <QWindow>
 
+#include <cstdio>
+
 namespace {
 
 QString previousProductIdentity() {
@@ -87,6 +89,15 @@ int main(int argc, char *argv[]) {
   }
 
   QQmlApplicationEngine engine;
+  if (application.arguments().contains(QStringLiteral("--smoke-test"))) {
+    QObject::connect(&engine, &QQmlEngine::warnings, &application,
+                     [](const QList<QQmlError> &warnings) {
+                       for (const auto &warning : warnings)
+                         std::fprintf(stderr, "%s\n",
+                                      qPrintable(warning.toString()));
+                       std::fflush(stderr);
+                     });
+  }
   engine.rootContext()->setContextProperty(QStringLiteral("projectController"),
                                            &project);
   engine.rootContext()->setContextProperty(
@@ -191,6 +202,14 @@ int main(int argc, char *argv[]) {
                                          "cancelDropdown") ||
               !preferences || !tabs ||
               !QMetaObject::invokeMethod(preferences, "open")) {
+            std::fprintf(stderr,
+                         "UI smoke setup failed: folder=%d style=%d "
+                         "stereotype=%d dropdown=%d preferences=%d tabs=%d\n",
+                         folderDialog != nullptr, styleDialog != nullptr,
+                         stereotypeDialog != nullptr,
+                         stereotypeDropdown != nullptr, preferences != nullptr,
+                         tabs != nullptr);
+            std::fflush(stderr);
             QCoreApplication::exit(1);
             return;
           }

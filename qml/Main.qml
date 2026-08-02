@@ -35,7 +35,11 @@ ApplicationWindow {
     onYChanged: if (geometryReady) workspaceController.updateMainWindowGeometry(x, y, width, height)
     onWidthChanged: if (geometryReady) workspaceController.updateMainWindowGeometry(x, y, width, height)
     onHeightChanged: if (geometryReady) workspaceController.updateMainWindowGeometry(x, y, width, height)
-    onLeftPanelVisibleChanged: workspaceController.projectTreeVisible = leftPanelVisible
+    onLeftPanelVisibleChanged: {
+        workspaceController.projectTreeVisible = leftPanelVisible
+        if (!leftPanelVisible && projectTreeFindPopup.opened)
+            projectTreeFindPopup.close()
+    }
     onRightPanelVisibleChanged: workspaceController.propertiesVisible = rightPanelVisible
 
     function finishClose() {
@@ -396,6 +400,26 @@ ApplicationWindow {
                          projectController.selectedId)
     }
 
+    Shortcut {
+        sequences: [StandardKey.Find]
+        context: Qt.ApplicationShortcut
+        onActivated: projectTreeFindPopup.openForFind()
+    }
+
+    Shortcut {
+        sequences: [StandardKey.FindNext]
+        context: Qt.ApplicationShortcut
+        enabled: projectTreeFindPopup.opened
+        onActivated: projectTreeFindPopup.advance(1)
+    }
+
+    Shortcut {
+        sequences: [StandardKey.FindPrevious]
+        context: Qt.ApplicationShortcut
+        enabled: projectTreeFindPopup.opened
+        onActivated: projectTreeFindPopup.advance(-1)
+    }
+
     header: ToolBar {
         RowLayout {
             anchors.fill: parent
@@ -495,6 +519,7 @@ ApplicationWindow {
                     }
                 }
                 RowLayout {
+                    id: projectTreeFilterRow
                     Layout.fillWidth: true
                     Layout.leftMargin: 6
                     Layout.rightMargin: 4
@@ -503,26 +528,26 @@ ApplicationWindow {
                     spacing: 2
 
                     TextField {
-                        id: projectTreeSearch
-                        objectName: "projectTreeSearch"
+                        id: projectTreeFilter
+                        objectName: "projectTreeFilter"
                         Layout.fillWidth: true
-                        placeholderText: qsTr("Search (* and ? wildcards)")
-                        text: projectController.treeModel.searchPattern
-                        Accessible.name: qsTr("Search project tree")
+                        placeholderText: qsTr("Filter tree (* and ? wildcards)")
+                        text: projectController.treeModel.filterPattern
+                        Accessible.name: qsTr("Filter project tree")
                         onTextChanged:
-                            projectController.treeModel.searchPattern = text
+                            projectController.treeModel.filterPattern = text
                         Keys.onEscapePressed: clear()
                     }
                     ToolButton {
-                        objectName: "clearProjectTreeSearch"
+                        objectName: "clearProjectTreeFilter"
                         text: "×"
-                        visible: projectTreeSearch.text.length > 0
-                        Accessible.name: qsTr("Clear project-tree search")
+                        visible: projectTreeFilter.text.length > 0
+                        Accessible.name: qsTr("Clear project-tree filter")
                         ToolTip.visible: hovered
-                        ToolTip.text: qsTr("Clear search")
+                        ToolTip.text: qsTr("Clear filter")
                         onClicked: {
-                            projectTreeSearch.clear()
-                            projectTreeSearch.forceActiveFocus()
+                            projectTreeFilter.clear()
+                            projectTreeFilter.forceActiveFocus()
                         }
                     }
                     CatalogToolButton {
@@ -616,6 +641,24 @@ ApplicationWindow {
                     resizableColumns: true
                     clip: true
 
+                    delegate: HorizontalHeaderViewDelegate {
+                        id: projectTreeHeaderDelegate
+
+                        // Keep the platform header styling and only overlay a
+                        // quiet boundary. Explicit parenting prevents Control
+                        // from moving the line into its content item.
+                        Rectangle {
+                            parent: projectTreeHeaderDelegate
+                            anchors.top: parent.top
+                            anchors.right: parent.right
+                            anchors.bottom: parent.bottom
+                            width: 1
+                            color: uiTheme.overlayBorder
+                            opacity: 0.32
+                            z: 2
+                        }
+                    }
+
                     MouseArea {
                         anchors.fill: parent
                         acceptedButtons: Qt.RightButton
@@ -676,8 +719,24 @@ ApplicationWindow {
                         })
                     }
                     function toggleBranch(row) {
-                        if (row >= 0)
-                            toggleExpanded(row)
+                        if (row < 0)
+                            return
+                        if (projectTree.isExpanded(row))
+                            projectTree.collapse(row)
+                        else
+                            projectTree.expand(row)
+                    }
+                    function toggleBranchForObject(objectId, kind) {
+                        // Delegate rows are flattened view coordinates and may
+                        // change as neighboring branches open or close. Resolve
+                        // the current row from the stable model identity at the
+                        // moment of the click.
+                        const itemIndex =
+                                projectController.treeModel.indexForObject(
+                                    objectId, kind)
+                        if (!itemIndex.valid)
+                            return
+                        toggleBranch(projectTree.rowAtIndex(itemIndex))
                     }
                     function selectedBrowserItemsJson() {
                         return projectController.treeModel.browserItemsJsonForIndexes(
@@ -751,6 +810,8 @@ ApplicationWindow {
                             Qt.callLater(function() {
                                 projectTree.expandRecursively()
                                 projectTree.revealProjectSelection(true)
+                                if (projectTreeFindPopup.opened)
+                                    projectTreeFindPopup.refreshMatches(true)
                             })
                         }
                     }
@@ -849,16 +910,22 @@ ApplicationWindow {
                             }
                         }
                         onDoubleClicked: {
-                            if (kind === "element") {
-                                projectController.selectObject(objectId, kind)
-                                projectController.addSelectedToDiagram(
+                            if (kind === "element"
+                                    || kind === "folder"
+                                    || kind === "namespace") {
+                                if (kind === "element")
+                                    projectController.selectObject(objectId, kind)
+                                projectController.addBrowserItemToDiagram(
                                             workspaceController.activeDiagramId,
+                                            kind, objectId,
                                             applicationSettings.diagramItemSizingMode)
                             } else if (kind === "diagram") {
                                 workspaceController.activeDiagramId = objectId
                             } else if (treeDelegate.isTreeNode
                                        && treeDelegate.hasChildren) {
-                                projectTree.toggleBranch(treeDelegate.row)
+                                projectTree.toggleBranchForObject(
+                                            treeDelegate.objectId,
+                                            treeDelegate.kind)
                             }
                         }
 
@@ -872,25 +939,57 @@ ApplicationWindow {
                         // Ctrl/Shift row selection remains under our control.
                         // Restore the standard disclosure-arrow behavior with a
                         // dedicated hit target that does not change selection.
+                        // Keep it as a top-level delegate child: parenting it
+                        // inside the style's indicator leaves later row-wide
+                        // drag/drop layers above it and makes the arrow inert.
                         MouseArea {
-                            parent: treeDelegate.indicator
-                            anchors.fill: parent
+                            id: disclosureArea
+                            // Control's default property reparents visual
+                            // children into contentItem.  The indicator's x is
+                            // expressed in delegate coordinates, so leaving
+                            // this implicit shifts the hit target away from the
+                            // painted arrow.  Keep both in the same coordinate
+                            // system explicitly.
+                            parent: treeDelegate
+                            x: treeDelegate.indicator
+                               ? treeDelegate.indicator.x : 0
+                            y: 0
+                            width: treeDelegate.indicator
+                                   ? Math.max(20,
+                                              treeDelegate.indicator.width) : 20
+                            height: treeDelegate.height
+                            z: 20
                             enabled: treeDelegate.isTreeNode
                                      && treeDelegate.hasChildren
-                                     && treeDelegate.column === 0
                             acceptedButtons: Qt.LeftButton
                             preventStealing: true
                             cursorShape: Qt.PointingHandCursor
-                            onClicked: projectTree.toggleBranch(treeDelegate.row)
+                            Accessible.role: Accessible.Button
+                            Accessible.name: (treeDelegate.expanded
+                                              ? qsTr("Collapse %1")
+                                              : qsTr("Expand %1"))
+                                             .arg(treeDelegate.name)
+                            onClicked: projectTree.toggleBranchForObject(
+                                           treeDelegate.objectId,
+                                           treeDelegate.kind)
                         }
 
                         DragHandler {
                             target: null
-                            enabled: treeDelegate.column === 0
-                                     && (treeDelegate.kind === "element"
-                                         || treeDelegate.kind === "namespace"
-                                         || treeDelegate.kind === "folder")
-                            grabPermissions: PointerHandler.CanTakeOverFromAnything
+                            // Every visible column represents the same browser
+                            // row. Starting a drag from metadata must therefore
+                            // behave like starting it from the name cell.
+                            enabled: treeDelegate.kind === "element"
+                                     || treeDelegate.kind === "namespace"
+                                     || treeDelegate.kind === "folder"
+                            // Starting QDrag transfers the native mouse grab
+                            // away from this handler. Include the approval and
+                            // cancellation flags so TreeView's flick gesture
+                            // cannot win and pan the whole browser instead.
+                            grabPermissions:
+                                PointerHandler.CanTakeOverFromAnything
+                                | PointerHandler.ApprovesTakeOverByAnything
+                                | PointerHandler.ApprovesCancellation
                             onActiveChanged: {
                                 if (!active)
                                     return
@@ -916,12 +1015,16 @@ ApplicationWindow {
                             anchors.bottom: parent.bottom
                             anchors.topMargin: 7
                             anchors.bottomMargin: 7
-                            enabled: treeDelegate.column === 0
-                                     && (treeDelegate.kind === "namespace"
-                                         || treeDelegate.kind === "element"
-                                         || treeDelegate.kind === "folder"
-                                         || (treeDelegate.kind === "root"
-                                             && treeDelegate.objectId === "model"))
+                            // A row remains one semantic drop target even when
+                            // optional metadata columns are visible. Restricting
+                            // this area to column zero made a drop silently fail
+                            // whenever the pointer happened to be over Source,
+                            // Stereotypes, or another metadata cell.
+                            enabled: treeDelegate.kind === "namespace"
+                                     || treeDelegate.kind === "element"
+                                     || treeDelegate.kind === "folder"
+                                     || (treeDelegate.kind === "root"
+                                         && treeDelegate.objectId === "model")
                             keys: [projectTree.browserItemsMimeType]
                             onEntered: treeDelegate.browserDropActive = true
                             onExited: treeDelegate.browserDropActive = false
@@ -1063,15 +1166,6 @@ ApplicationWindow {
                         }
                     }
                 }
-            }
-        }
-
-        Shortcut {
-            sequences: [StandardKey.Find]
-            onActivated: {
-                root.leftPanelVisible = true
-                projectTreeSearch.forceActiveFocus()
-                projectTreeSearch.selectAll()
             }
         }
 
@@ -1349,6 +1443,191 @@ ApplicationWindow {
                     }
                     Item { Layout.fillHeight: true; Layout.minimumHeight: 20 }
                 }
+            }
+        }
+    }
+
+    Popup {
+        id: projectTreeFindPopup
+        objectName: "projectTreeFindPopup"
+        parent: root.contentItem
+        modal: false
+        focus: true
+        padding: 6
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        property var matches: []
+        property int currentMatchIndex: -1
+        readonly property string matchStatus: {
+            if (projectTreeFindInput.text.trim().length === 0)
+                return qsTr("Type to find")
+            if (matches.length === 0)
+                return qsTr("No matches")
+            return qsTr("%1 of %2").arg(currentMatchIndex + 1)
+                                     .arg(matches.length)
+        }
+
+        function openForFind() {
+            root.leftPanelVisible = true
+            Qt.callLater(function() {
+                const point = projectTreeFilterRow.mapToItem(
+                                root.contentItem, 0,
+                                projectTreeFilterRow.height)
+                projectTreeFindPopup.x = point.x
+                projectTreeFindPopup.y = point.y
+                projectTreeFindPopup.width = Math.max(
+                            340, projectTreeFilterRow.width)
+                if (!projectTreeFindPopup.opened)
+                    projectTreeFindPopup.open()
+                projectTreeFindPopup.refreshMatches(true)
+                projectTreeFindInput.forceActiveFocus()
+                projectTreeFindInput.selectAll()
+            })
+        }
+
+        function refreshMatches(preserveCurrent) {
+            let previousId = ""
+            let previousKind = ""
+            if (preserveCurrent && currentMatchIndex >= 0
+                    && currentMatchIndex < matches.length) {
+                previousId = matches[currentMatchIndex].objectId
+                previousKind = matches[currentMatchIndex].kind
+            }
+
+            const updatedMatches = projectController.treeModel.findMatches(
+                                     projectTreeFindInput.text)
+            matches = updatedMatches
+            currentMatchIndex = -1
+            if (matches.length === 0)
+                return
+            if (previousId.length > 0) {
+                for (let index = 0; index < matches.length; ++index) {
+                    if (matches[index].objectId === previousId
+                            && matches[index].kind === previousKind) {
+                        currentMatchIndex = index
+                        break
+                    }
+                }
+            }
+            if (currentMatchIndex < 0)
+                currentMatchIndex = 0
+            selectCurrentMatch()
+        }
+
+        function advance(delta) {
+            if (matches.length === 0) {
+                refreshMatches(false)
+                if (matches.length === 0)
+                    return
+            }
+            currentMatchIndex = (currentMatchIndex + delta + matches.length)
+                              % matches.length
+            selectCurrentMatch()
+        }
+
+        function selectCurrentMatch() {
+            if (currentMatchIndex < 0 || currentMatchIndex >= matches.length)
+                return
+            const match = matches[currentMatchIndex]
+            const expectedId = match.objectId
+            const expectedKind = match.kind
+            const itemIndex = projectController.treeModel.indexForObject(
+                                expectedId, expectedKind)
+            if (!itemIndex.valid)
+                return
+            projectTree.expandToIndex(itemIndex)
+            Qt.callLater(function() {
+                if (projectTreeFindPopup.currentMatchIndex < 0
+                        || projectTreeFindPopup.currentMatchIndex
+                           >= projectTreeFindPopup.matches.length)
+                    return
+                const current = projectTreeFindPopup.matches[
+                                projectTreeFindPopup.currentMatchIndex]
+                if (current.objectId !== expectedId
+                        || current.kind !== expectedKind)
+                    return
+                const currentIndex = projectController.treeModel.indexForObject(
+                                     expectedId, expectedKind)
+                if (!currentIndex.valid)
+                    return
+                projectTreeSelection.select(
+                            currentIndex,
+                            ItemSelectionModel.ClearAndSelect
+                            | ItemSelectionModel.Rows)
+                projectTreeSelection.setCurrentIndex(
+                            currentIndex, ItemSelectionModel.NoUpdate)
+                projectTree.selectionOriginatesFromTree = true
+                if (expectedKind === "diagram")
+                    workspaceController.activeDiagramId = expectedId
+                if (expectedKind === "element"
+                        || expectedKind === "diagram"
+                        || expectedKind === "relationship")
+                    projectController.selectObject(expectedId, expectedKind)
+                else
+                    projectController.clearSelection()
+                Qt.callLater(function() {
+                    projectTree.selectionOriginatesFromTree = false
+                })
+                const row = projectTree.rowAtIndex(currentIndex)
+                if (row >= 0)
+                    projectTree.positionViewAtRow(row, TableView.Contain)
+            })
+        }
+
+        background: Rectangle {
+            color: uiTheme.surface
+            border.color: uiTheme.overlayBorder
+            radius: 3
+        }
+
+        contentItem: RowLayout {
+            spacing: 4
+            TextField {
+                id: projectTreeFindInput
+                objectName: "projectTreeFindInput"
+                Layout.fillWidth: true
+                placeholderText: qsTr("Find (* and ? wildcards)")
+                Accessible.name: qsTr("Find in project tree")
+                onTextEdited: projectTreeFindPopup.refreshMatches(true)
+                Keys.onPressed: function(event) {
+                    if (event.key === Qt.Key_Return
+                            || event.key === Qt.Key_Enter) {
+                        projectTreeFindPopup.advance(
+                                    event.modifiers & Qt.ShiftModifier ? -1 : 1)
+                        event.accepted = true
+                    } else if (event.key === Qt.Key_Escape) {
+                        projectTreeFindPopup.close()
+                        event.accepted = true
+                    }
+                }
+            }
+            Label {
+                text: projectTreeFindPopup.matchStatus
+                color: uiTheme.mutedText
+                Layout.minimumWidth: 70
+                horizontalAlignment: Text.AlignHCenter
+            }
+            ToolButton {
+                text: "↑"
+                enabled: projectTreeFindPopup.matches.length > 0
+                Accessible.name: qsTr("Previous match")
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Previous match (Shift+F3)")
+                onClicked: projectTreeFindPopup.advance(-1)
+            }
+            ToolButton {
+                text: "↓"
+                enabled: projectTreeFindPopup.matches.length > 0
+                Accessible.name: qsTr("Next match")
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Next match (F3)")
+                onClicked: projectTreeFindPopup.advance(1)
+            }
+            ToolButton {
+                text: "×"
+                Accessible.name: qsTr("Close find")
+                ToolTip.visible: hovered
+                ToolTip.text: qsTr("Close find (Esc)")
+                onClicked: projectTreeFindPopup.close()
             }
         }
     }

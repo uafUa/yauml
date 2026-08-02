@@ -128,6 +128,7 @@ private slots:
   void contextualSelectAllUsesContainerScope();
   void diagramFiltersHideInteractionAndSelection();
   void clippedChildIsOnlyInteractiveInsideContainer();
+  void fullyClippedNodesDoNotExposeConnectors();
   void arrangementAndNudgingAreUndoableTransactions();
   void contextCreationUsesTheClickedDiagramAndPosition();
   void packageCreationUsesAContainerFrame();
@@ -149,6 +150,7 @@ private slots:
   void allCornerResizeHandlesAreInteractive();
   void folderContainerMovesDescendantsAndResizesIndependently();
   void nestedPackageDiagramMovesRemainPresentational();
+  void notesSelectEditMoveLassoAndAttach();
 };
 
 void DiagramCanvasTests::arrangementGeometryRulesAreDeterministic() {
@@ -486,6 +488,7 @@ void DiagramCanvasTests::
   // The two connectors share the middle presentation. Reattachment changes
   // only the two ends on that presentation and remains one undoable action.
   QVERIFY(canvas.canReattachSelectedConnectorEnds());
+  QVERIFY(!canvas.canReattachSelectedConnectorEndsToFacingSides());
   const ProjectData beforeReattachment = controller.data();
   canvas.reattachSelectedConnectorEnds(QStringLiteral("bottom"));
   const auto *reattachedFirst =
@@ -787,6 +790,102 @@ void DiagramCanvasTests::clippedChildIsOnlyInteractiveInsideContainer() {
   const QPointF visiblePoint(frame.right() - 10.0, nodeTop + 20.0);
   canvas.drag(visiblePoint + viewPan, visiblePoint + viewPan);
   QCOMPARE(canvas.selectedNodeCount(), 1);
+}
+
+void DiagramCanvasTests::fullyClippedNodesDoNotExposeConnectors() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString outerType =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const QString innerType =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  const QStringList initialNodeIds = {
+      controller.data().diagrams.first().nodes.at(0).id,
+      controller.data().diagrams.first().nodes.at(1).id};
+  QVERIFY(!controller
+               .createRelationship(diagramId, initialNodeIds.at(0),
+                                   initialNodeIds.at(1),
+                                   QStringLiteral("containment"))
+               .isEmpty());
+  controller.removePresentations(diagramId, initialNodeIds);
+  QVERIFY(controller.data().diagrams.first().nodes.isEmpty());
+  QVERIFY(controller.data().diagrams.first().connectors.isEmpty());
+  QCOMPARE(controller.data().relationships.size(), 1);
+
+  const QString packageId = controller.addElement(QStringLiteral("package"));
+  const QString folderId = controller.addBrowserFolder(
+      QStringLiteral("element"), packageId, QStringLiteral("Nested types"));
+  const auto browserItemJson = [](const QString &kind, const QString &id) {
+    return QString::fromUtf8(
+        QJsonDocument(QJsonArray{QJsonObject{{QStringLiteral("kind"), kind},
+                                             {QStringLiteral("id"), id}}})
+            .toJson(QJsonDocument::Compact));
+  };
+  QVERIFY(controller.moveBrowserItems(
+      browserItemJson(QStringLiteral("element"), outerType),
+      QStringLiteral("folder"), folderId));
+  QVERIFY(controller.moveBrowserItems(
+      browserItemJson(QStringLiteral("element"), innerType),
+      QStringLiteral("folder"), folderId));
+
+  QCOMPARE(controller.addEmptyPackageToDiagram(diagramId, packageId), 1);
+  QCOMPARE(controller.addTreeItemsToDiagram(
+               diagramId, {outerType, innerType},
+               browserItemJson(QStringLiteral("folder"), folderId), 520.0,
+               260.0),
+           3);
+
+  const Diagram &clippedDiagram = controller.data().diagrams.first();
+  QCOMPARE(clippedDiagram.nodes.size(), 2);
+  QCOMPARE(clippedDiagram.connectors.size(), 1);
+  QCOMPARE(clippedDiagram.containers.size(), 2);
+  const auto packageFrame = std::find_if(
+      clippedDiagram.containers.cbegin(), clippedDiagram.containers.cend(),
+      [&](const ContainerPresentation &container) {
+        return container.subjectKind == QStringLiteral("package") &&
+               container.subjectId == packageId;
+      });
+  const auto folderFrame = std::find_if(
+      clippedDiagram.containers.cbegin(), clippedDiagram.containers.cend(),
+      [&](const ContainerPresentation &container) {
+        return container.subjectKind == QStringLiteral("folder") &&
+               container.subjectId == folderId;
+      });
+  QVERIFY(packageFrame != clippedDiagram.containers.cend());
+  QVERIFY(folderFrame != clippedDiagram.containers.cend());
+  const ui::DiagramClipLayout clippedLayout(clippedDiagram);
+  for (const auto &node : clippedDiagram.nodes) {
+    const ui::PresentationClip clip = clippedLayout.clipFor(node.id);
+    QVERIFY(clip.active);
+    QVERIFY(node.geometry.intersected(clip.rect).isEmpty());
+  }
+
+  const QPointF routeMiddle = (clippedDiagram.nodes.at(0).geometry.center() +
+                               clippedDiagram.nodes.at(1).geometry.center()) /
+                              2.0;
+  const QPointF viewPan(30.0, 30.0);
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  canvas.drag(routeMiddle + viewPan - QPointF(8.0, 8.0),
+              routeMiddle + viewPan + QPointF(8.0, 8.0));
+  QCOMPARE(canvas.selectedConnectorCount(), 0);
+
+  // The semantic and presentation relationships remain intact. Once the
+  // namespace frame reveals its child folder, the connector is visible and
+  // interactive again.
+  const QRectF expandedPackage =
+      folderFrame->geometry.adjusted(-20.0, -50.0, 20.0, 20.0);
+  controller.updatePresentationGeometries(
+      diagramId,
+      {QVariantMap{{QStringLiteral("id"), packageFrame->id},
+                   {QStringLiteral("x"), expandedPackage.x()},
+                   {QStringLiteral("y"), expandedPackage.y()},
+                   {QStringLiteral("width"), expandedPackage.width()},
+                   {QStringLiteral("height"), expandedPackage.height()}}},
+      QStringLiteral("Expand namespace for connector test"));
+  canvas.drag(routeMiddle + viewPan - QPointF(8.0, 8.0),
+              routeMiddle + viewPan + QPointF(8.0, 8.0));
+  QCOMPARE(canvas.selectedConnectorCount(), 1);
 }
 
 void DiagramCanvasTests::arrangementAndNudgingAreUndoableTransactions() {
@@ -2077,6 +2176,65 @@ void DiagramCanvasTests::nestedPackageDiagramMovesRemainPresentational() {
   QVERIFY(currentParent);
   QVERIFY(!currentParent->childPresentationIds.contains(childFrame->id));
   QVERIFY(ProjectSerializer::validate(controller.data()).isEmpty());
+}
+
+void DiagramCanvasTests::notesSelectEditMoveLassoAndAttach() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString elementId =
+      controller.addElement(QStringLiteral("class"), diagramId);
+  useStandardInteractionGeometry(controller);
+  const auto *initialDiagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(initialDiagram);
+  const auto node =
+      std::find_if(initialDiagram->nodes.cbegin(), initialDiagram->nodes.cend(),
+                   [&](const NodePresentation &candidate) {
+                     return candidate.elementId == elementId;
+                   });
+  QVERIFY(node != initialDiagram->nodes.cend());
+  const QString nodeId = node->id;
+  const QString noteId = controller.addNote(diagramId, 500.0, 250.0);
+  QVERIFY(!noteId.isEmpty());
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  QSignalSpy noteEdits(&canvas, &DiagramCanvas::noteEditRequested);
+  const QPointF viewPan(30.0, 30.0);
+  const QRectF initialGeometry =
+      findNote(*findDiagram(controller.data(), diagramId), noteId)->geometry;
+
+  canvas.doubleClick(initialGeometry.center() + viewPan);
+  QCOMPARE(canvas.selectedNoteCount(), 1);
+  QCOMPARE(noteEdits.size(), 1);
+  QCOMPARE(noteEdits.first().at(0).toString(), noteId);
+
+  canvas.drag(initialGeometry.center() + viewPan,
+              initialGeometry.center() + viewPan + QPointF(40.0, 25.0));
+  QCOMPARE(
+      findNote(*findDiagram(controller.data(), diagramId), noteId)->geometry,
+      initialGeometry.translated(40.0, 25.0));
+  controller.undo();
+  QCOMPARE(
+      findNote(*findDiagram(controller.data(), diagramId), noteId)->geometry,
+      initialGeometry);
+
+  canvas.clearCanvasSelection();
+  canvas.drag(initialGeometry.topRight() + viewPan + QPointF(5.0, -5.0),
+              initialGeometry.bottomLeft() + viewPan + QPointF(-5.0, 5.0));
+  QCOMPARE(canvas.selectedNoteCount(), 1);
+  QCOMPARE(canvas.selectedNodeCount(), 0);
+
+  QVERIFY(canvas.startSelectedNoteAttachment());
+  const auto *currentNode =
+      findNode(*findDiagram(controller.data(), diagramId), nodeId);
+  QVERIFY(currentNode);
+  canvas.press(currentNode->geometry.center() + viewPan);
+  QCOMPARE(findDiagram(controller.data(), diagramId)->noteAttachments.size(),
+           1);
+  QCOMPARE(findDiagram(controller.data(), diagramId)
+               ->noteAttachments.first()
+               .targetPresentationId,
+           nodeId);
 }
 
 QTEST_MAIN(DiagramCanvasTests)

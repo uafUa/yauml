@@ -165,11 +165,16 @@ private:
     BrowserParent before;
     BrowserParent after;
   };
+  struct PositionedAttachment {
+    qsizetype index;
+    NoteAttachment value;
+  };
   struct DiagramContainer {
     QString diagramId;
     qsizetype index;
     ContainerPresentation value;
     std::optional<ContainerChildrenChange> ownerChange;
+    QList<PositionedAttachment> noteAttachments;
   };
 
   void execute(ProjectData &project) override;
@@ -315,6 +320,92 @@ private:
   QList<PresentationGeometryChange> m_geometryChanges;
 };
 
+// Notes and their dashed attachments form one diagram-only annotation slice.
+// Keeping them in a dedicated command avoids coupling annotation editing to
+// semantic model commands while still providing compact undo/redo records.
+class AddNotesCommand final : public ProjectCommand {
+public:
+  AddNotesCommand(ProjectController *controller, const ProjectData &project,
+                  QString diagramId, QList<NotePresentation> notes,
+                  QList<NoteAttachment> attachments = {},
+                  QString description = QStringLiteral("Add note"));
+
+private:
+  struct PositionedNote {
+    qsizetype index;
+    NotePresentation value;
+  };
+  struct PositionedAttachment {
+    qsizetype index;
+    NoteAttachment value;
+  };
+
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  QList<PositionedNote> m_notes;
+  QList<PositionedAttachment> m_attachments;
+};
+
+class EditNoteTextCommand final : public ProjectCommand {
+public:
+  EditNoteTextCommand(ProjectController *controller, QString diagramId,
+                      QString noteId, QString before, QString after);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, const QString &text);
+
+  QString m_diagramId;
+  QString m_noteId;
+  QString m_before;
+  QString m_after;
+};
+
+class RemoveNotesCommand final : public ProjectCommand {
+public:
+  RemoveNotesCommand(ProjectController *controller, const ProjectData &project,
+                     QString diagramId, const QSet<QString> &noteIds);
+
+private:
+  struct PositionedNote {
+    qsizetype index;
+    NotePresentation value;
+  };
+  struct PositionedAttachment {
+    qsizetype index;
+    NoteAttachment value;
+  };
+
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  QList<PositionedNote> m_notes;
+  QList<PositionedAttachment> m_attachments;
+};
+
+class RemoveNoteAttachmentsCommand final : public ProjectCommand {
+public:
+  RemoveNoteAttachmentsCommand(ProjectController *controller,
+                               const ProjectData &project, QString diagramId,
+                               const QSet<QString> &attachmentIds);
+
+private:
+  struct PositionedAttachment {
+    qsizetype index;
+    NoteAttachment value;
+  };
+
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  QList<PositionedAttachment> m_attachments;
+};
+
 class RemovePresentationsCommand final : public ProjectCommand {
 public:
   RemovePresentationsCommand(ProjectController *controller,
@@ -330,6 +421,10 @@ private:
     qsizetype index;
     ConnectorPresentation value;
   };
+  struct PositionedAttachment {
+    qsizetype index;
+    NoteAttachment value;
+  };
 
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
@@ -337,6 +432,7 @@ private:
   QString m_diagramId;
   QList<PositionedNode> m_nodes;
   QList<PositionedConnector> m_connectors;
+  QList<PositionedAttachment> m_noteAttachments;
   QList<ContainerChildrenChange> m_membershipChanges;
 };
 
@@ -377,6 +473,11 @@ private:
   ContainerPresentation m_container;
   qsizetype m_index = -1;
   std::optional<ContainerChildrenChange> m_ownerChange;
+  struct PositionedAttachment {
+    qsizetype index;
+    NoteAttachment value;
+  };
+  QList<PositionedAttachment> m_noteAttachments;
 };
 
 class DeleteDiagramCommand final : public ProjectCommand {
@@ -437,10 +538,15 @@ private:
     qsizetype index;
     ConnectorPresentation value;
   };
+  struct PositionedAttachment {
+    qsizetype index;
+    NoteAttachment value;
+  };
   struct DiagramRecords {
     QString diagramId;
     QList<PositionedNode> nodes;
     QList<PositionedConnector> connectors;
+    QList<PositionedAttachment> noteAttachments;
     QList<ContainerChildrenChange> membershipChanges;
     std::optional<PositionedContainer> container;
     std::optional<ContainerChildrenChange> containerOwnerChange;

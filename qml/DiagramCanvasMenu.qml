@@ -25,6 +25,15 @@ Menu {
             canvas.createElementAtContextPosition(type)
     }
 
+    function createNote() {
+        if (!canvasAvailable)
+            return
+        if (createAtViewportCenter)
+            canvas.createNoteAtViewportCenter()
+        else
+            canvas.createNoteAtContextPosition()
+    }
+
     title: qsTr("Diagram")
     enabled: canvasAvailable
 
@@ -62,6 +71,10 @@ Menu {
             text: qsTr("Enumeration")
             onTriggered: root.createElement("enumeration")
         }
+    }
+    MenuItem {
+        text: qsTr("New note")
+        onTriggered: root.createNote()
     }
     MenuSeparator {}
     Menu {

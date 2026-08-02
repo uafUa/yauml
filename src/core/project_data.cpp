@@ -328,4 +328,21 @@ const ConnectorPresentation *findConnector(const Diagram &diagram,
   return findById(diagram.connectors, id);
 }
 
+NotePresentation *findNote(Diagram &diagram, const QString &id) {
+  return findById(diagram.notes, id);
+}
+
+const NotePresentation *findNote(const Diagram &diagram, const QString &id) {
+  return findById(diagram.notes, id);
+}
+
+NoteAttachment *findNoteAttachment(Diagram &diagram, const QString &id) {
+  return findById(diagram.noteAttachments, id);
+}
+
+const NoteAttachment *findNoteAttachment(const Diagram &diagram,
+                                         const QString &id) {
+  return findById(diagram.noteAttachments, id);
+}
+
 } // namespace yauml

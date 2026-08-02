@@ -7,6 +7,7 @@
 #include <QPersistentModelIndex>
 #include <QRegularExpression>
 #include <QSet>
+#include <QVariant>
 #include <memory>
 #include <vector>
 
@@ -16,8 +17,8 @@ class ProjectController;
 
 class ProjectTreeModel final : public QAbstractItemModel {
   Q_OBJECT
-  Q_PROPERTY(QString searchPattern READ searchPattern WRITE setSearchPattern
-                 NOTIFY searchPatternChanged)
+  Q_PROPERTY(QString filterPattern READ filterPattern WRITE setFilterPattern
+                 NOTIFY filterPatternChanged)
   Q_PROPERTY(
       QStringList columns READ columns WRITE setColumns NOTIFY columnsChanged)
   Q_PROPERTY(bool relationshipsVisible READ relationshipsVisible WRITE
@@ -50,6 +51,7 @@ public:
   QHash<int, QByteArray> roleNames() const override;
   Q_INVOKABLE QModelIndex indexForObject(const QString &objectId,
                                          const QString &kind) const;
+  Q_INVOKABLE QVariantList findMatches(const QString &pattern) const;
   Q_INVOKABLE QStringList
   elementIdsForIndexes(const QModelIndexList &indexes) const;
   Q_INVOKABLE QString
@@ -60,8 +62,8 @@ public:
                            const QModelIndex &item,
                            Qt::KeyboardModifiers modifiers);
   Q_INVOKABLE void startTreeDrag(const QModelIndexList &indexes);
-  QString searchPattern() const;
-  void setSearchPattern(const QString &pattern);
+  QString filterPattern() const;
+  void setFilterPattern(const QString &pattern);
   QStringList columns() const;
   void setColumns(const QStringList &columns);
   bool relationshipsVisible() const;
@@ -71,7 +73,7 @@ public slots:
   void reset();
 
 signals:
-  void searchPatternChanged();
+  void filterPatternChanged();
   void columnsChanged();
   void relationshipsVisibleChanged();
 
@@ -86,10 +88,15 @@ private:
   bool updateVisibleChildren(TreeNode *node,
                              const QRegularExpression &expression,
                              bool filtering);
+  bool nodeMatches(const TreeNode *node,
+                   const QRegularExpression &expression) const;
+  bool findNodeMatches(const TreeNode *node,
+                       const QRegularExpression &expression,
+                       const QRegularExpression &qualifiedPathExpression) const;
   void collectElementIds(const TreeNode *node, QSet<QString> &ids) const;
 
   ProjectController *m_controller;
-  QString m_searchPattern;
+  QString m_filterPattern;
   QStringList m_columns{QStringLiteral("name")};
   bool m_relationshipsVisible = true;
   QPersistentModelIndex m_selectionAnchor;

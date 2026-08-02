@@ -76,6 +76,16 @@ constexpr std::array kColorRoles = {
                         &UiPalette::selectionOverlay},
     ColorRoleDescriptor{"connector", "Connector", "Diagram",
                         &UiPalette::connector},
+    ColorRoleDescriptor{"noteFill", "Note fill", "Diagram",
+                        &UiPalette::noteFill},
+    ColorRoleDescriptor{"noteFold", "Note folded corner", "Diagram",
+                        &UiPalette::noteFold},
+    ColorRoleDescriptor{"noteBorder", "Note border", "Diagram",
+                        &UiPalette::noteBorder},
+    ColorRoleDescriptor{"noteText", "Note text", "Diagram",
+                        &UiPalette::noteText},
+    ColorRoleDescriptor{"noteAttachment", "Note attachment", "Diagram",
+                        &UiPalette::noteAttachment},
     ColorRoleDescriptor{"containerFill", "Folder frame fill", "Diagram",
                         &UiPalette::containerFill},
     ColorRoleDescriptor{"containerHeaderFill", "Folder frame header", "Diagram",
@@ -144,6 +154,11 @@ UiPalette makeDefaultPalette() {
   value.alignmentGuide = QColor(QStringLiteral("#d23c8e"));
   value.selectionOverlay = QColor(23, 105, 210, 28);
   value.connector = QColor(QStringLiteral("#52606d"));
+  value.noteFill = QColor(QStringLiteral("#fff4a8"));
+  value.noteFold = QColor(QStringLiteral("#eadb78"));
+  value.noteBorder = QColor(QStringLiteral("#d4c66f"));
+  value.noteText = QColor(QStringLiteral("#3e3a22"));
+  value.noteAttachment = QColor(QStringLiteral("#6c6752"));
   value.containerFill = QColor(226, 239, 255, 92);
   value.containerHeaderFill = QColor(196, 220, 246, 176);
   value.containerBorder = QColor(QStringLiteral("#7392b2"));
@@ -212,7 +227,7 @@ UiPalette uiPalette() {
 
 UiTheme::UiTheme(QObject *parent) : QObject(parent) { load(); }
 
-#define YAUML_THEME_GETTER(name)                                                \
+#define YAUML_THEME_GETTER(name)                                               \
   QColor UiTheme::name() const { return uiPalette().name; }
 
 YAUML_THEME_GETTER(accent)
@@ -243,6 +258,11 @@ YAUML_THEME_GETTER(canvasGrid)
 YAUML_THEME_GETTER(alignmentGuide)
 YAUML_THEME_GETTER(selectionOverlay)
 YAUML_THEME_GETTER(connector)
+YAUML_THEME_GETTER(noteFill)
+YAUML_THEME_GETTER(noteFold)
+YAUML_THEME_GETTER(noteBorder)
+YAUML_THEME_GETTER(noteText)
+YAUML_THEME_GETTER(noteAttachment)
 YAUML_THEME_GETTER(containerFill)
 YAUML_THEME_GETTER(containerHeaderFill)
 YAUML_THEME_GETTER(containerBorder)

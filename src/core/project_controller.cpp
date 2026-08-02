@@ -969,6 +969,47 @@ ConnectorSideFrame connectorSideFrame(const QRectF &geometry,
   return {center, {1.0, 0.0}, {0.0, 1.0}};
 }
 
+struct FacingConnectorSides {
+  ConnectorSide first = ConnectorSide::Automatic;
+  ConnectorSide second = ConnectorSide::Automatic;
+};
+
+FacingConnectorSides
+shortestFacingConnectorSides(const NodePresentation &first,
+                             const NodePresentation &second) {
+  const QPointF firstCenter = first.geometry.center();
+  const QPointF secondCenter = second.geometry.center();
+  const bool firstIsLeft = firstCenter.x() <= secondCenter.x();
+  const FacingConnectorSides horizontal =
+      firstIsLeft
+          ? FacingConnectorSides{ConnectorSide::Right, ConnectorSide::Left}
+          : FacingConnectorSides{ConnectorSide::Left, ConnectorSide::Right};
+  const bool firstIsAbove = firstCenter.y() <= secondCenter.y();
+  const FacingConnectorSides vertical =
+      firstIsAbove
+          ? FacingConnectorSides{ConnectorSide::Bottom, ConnectorSide::Top}
+          : FacingConnectorSides{ConnectorSide::Top, ConnectorSide::Bottom};
+
+  const auto squaredSideCenterDistance = [&](FacingConnectorSides sides) {
+    const QPointF firstPoint = anchorPoint(first.geometry, {sides.first, 0.5});
+    const QPointF secondPoint =
+        anchorPoint(second.geometry, {sides.second, 0.5});
+    const QPointF delta = secondPoint - firstPoint;
+    return QPointF::dotProduct(delta, delta);
+  };
+  const qreal horizontalDistance = squaredSideCenterDistance(horizontal);
+  const qreal verticalDistance = squaredSideCenterDistance(vertical);
+  if (!qFuzzyCompare(horizontalDistance, verticalDistance))
+    return horizontalDistance < verticalDistance ? horizontal : vertical;
+
+  // Prefer the axis with the larger center displacement when the two facing
+  // pairs are equally short. This keeps the result deterministic for square
+  // and partially overlapping presentations.
+  const QPointF centerDelta = secondCenter - firstCenter;
+  return std::abs(centerDelta.x()) >= std::abs(centerDelta.y()) ? horizontal
+                                                                : vertical;
+}
+
 struct ShiftEndpoint {
   qsizetype connectorIndex = -1;
   bool source = false;
@@ -2449,26 +2490,31 @@ void ProjectController::addSelectedToDiagram(const QString &diagramId,
                                              const QString &sizingMode) {
   if (m_selectedKind != QStringLiteral("element"))
     return;
-  const ModelElement *element = findElement(m_data, m_selectedId);
-  if (element && element->type == ElementType::Package) {
-    const QModelIndex packageIndex =
-        m_treeModel->indexForObject(m_selectedId, QStringLiteral("element"));
-    const QStringList containedElements =
-        m_treeModel->elementIdsForIndexes({packageIndex});
-    QJsonObject subject;
-    subject.insert(QStringLiteral("kind"), QStringLiteral("element"));
-    subject.insert(QStringLiteral("id"), m_selectedId);
-    addTreeItemsToDiagram(
-        diagramId, containedElements,
-        QString::fromUtf8(
-            QJsonDocument(QJsonArray{subject}).toJson(QJsonDocument::Compact)),
-        std::numeric_limits<qreal>::quiet_NaN(),
-        std::numeric_limits<qreal>::quiet_NaN(), sizingMode);
-    return;
-  }
-  addElementsToDiagram(diagramId, {m_selectedId},
-                       std::numeric_limits<qreal>::quiet_NaN(),
-                       std::numeric_limits<qreal>::quiet_NaN(), sizingMode);
+  addBrowserItemToDiagram(diagramId, m_selectedKind, m_selectedId, sizingMode);
+}
+
+int ProjectController::addBrowserItemToDiagram(const QString &diagramId,
+                                               const QString &kind,
+                                               const QString &id,
+                                               const QString &sizingMode) {
+  if (kind != QStringLiteral("element") && kind != QStringLiteral("folder") &&
+      kind != QStringLiteral("namespace"))
+    return 0;
+
+  const QModelIndex itemIndex = m_treeModel->indexForObject(id, kind);
+  if (!itemIndex.isValid())
+    return 0;
+
+  // Resolve through the tree model so folder, package, nested-type, and legacy
+  // namespace rows use exactly the same recursive subject expansion as a
+  // project-tree drag. The complete placement remains one undo step.
+  const QStringList elementIds = m_treeModel->elementIdsForIndexes({itemIndex});
+  const QString subjectsJson =
+      m_treeModel->browserItemsJsonForIndexes({itemIndex});
+  return addTreeItemsToDiagram(diagramId, elementIds, subjectsJson,
+                               std::numeric_limits<qreal>::quiet_NaN(),
+                               std::numeric_limits<qreal>::quiet_NaN(),
+                               sizingMode);
 }
 
 int ProjectController::addElementsToDiagram(const QString &diagramId,
@@ -3164,10 +3210,100 @@ bool ProjectController::wrapPresentationInPackage(
   return true;
 }
 
+QString ProjectController::addNote(const QString &diagramId, qreal centerX,
+                                   qreal centerY) {
+  if (!findDiagram(m_data, diagramId))
+    return {};
+  constexpr qreal width = 180.0;
+  constexpr qreal height = 140.0;
+  NotePresentation note;
+  note.id = newId();
+  note.text = QStringLiteral("Note");
+  note.geometry =
+      QRectF(centerX - width / 2.0, centerY - height / 2.0, width, height);
+  const QString id = note.id;
+  pushCommand(std::make_unique<AddNotesCommand>(
+      this, m_data, diagramId, QList<NotePresentation>{std::move(note)}));
+  return id;
+}
+
+void ProjectController::setNoteText(const QString &diagramId,
+                                    const QString &noteId,
+                                    const QString &text) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *note = diagram ? findNote(*diagram, noteId) : nullptr;
+  if (!note)
+    return;
+  QString normalized = text;
+  normalized.replace(QStringLiteral("\r\n"), QStringLiteral("\n"));
+  normalized.replace(u'\r', u'\n');
+  if (normalized == note->text)
+    return;
+  pushCommand(std::make_unique<EditNoteTextCommand>(
+      this, diagramId, noteId, note->text, std::move(normalized)));
+}
+
+QString
+ProjectController::addNoteAttachment(const QString &diagramId,
+                                     const QString &noteId,
+                                     const QString &targetPresentationId) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || !findNote(*diagram, noteId) ||
+      (!findNode(*diagram, targetPresentationId) &&
+       !findContainer(*diagram, targetPresentationId)))
+    return {};
+  for (const auto &attachment : diagram->noteAttachments)
+    if (attachment.noteId == noteId &&
+        attachment.targetPresentationId == targetPresentationId)
+      return attachment.id;
+
+  NoteAttachment attachment;
+  attachment.id = newId();
+  attachment.noteId = noteId;
+  attachment.targetPresentationId = targetPresentationId;
+  const QString id = attachment.id;
+  pushCommand(std::make_unique<AddNotesCommand>(
+      this, m_data, diagramId, QList<NotePresentation>{},
+      QList<NoteAttachment>{std::move(attachment)},
+      QStringLiteral("Attach note")));
+  return id;
+}
+
+void ProjectController::removeNotes(const QString &diagramId,
+                                    const QStringList &noteIds) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || noteIds.isEmpty())
+    return;
+  const QSet<QString> requested(noteIds.cbegin(), noteIds.cend());
+  QSet<QString> valid;
+  for (const auto &note : diagram->notes)
+    if (requested.contains(note.id))
+      valid.insert(note.id);
+  if (valid.isEmpty())
+    return;
+  pushCommand(
+      std::make_unique<RemoveNotesCommand>(this, m_data, diagramId, valid));
+  clearSelection();
+}
+
+void ProjectController::removeNoteAttachments(const QString &diagramId,
+                                              const QString &noteId) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram)
+    return;
+  QSet<QString> ids;
+  for (const auto &attachment : diagram->noteAttachments)
+    if (attachment.noteId == noteId)
+      ids.insert(attachment.id);
+  if (!ids.isEmpty())
+    pushCommand(std::make_unique<RemoveNoteAttachmentsCommand>(this, m_data,
+                                                               diagramId, ids));
+}
+
 QString ProjectController::transferDiagramPresentations(
     const QString &sourceDiagramId, const QString &requestedTargetDiagramId,
     const QStringList &nodeIds, const QStringList &containerIds, bool move,
-    const QString &newDiagramName) {
+    const QString &newDiagramName, const QStringList &noteIds) {
   const auto *source = findDiagram(m_data, sourceDiagramId);
   if (!source)
     return {};
@@ -3183,6 +3319,7 @@ QString ProjectController::transferDiagramPresentations(
   const QSet<QString> requestedNodes(nodeIds.cbegin(), nodeIds.cend());
   const QSet<QString> requestedContainers(containerIds.cbegin(),
                                           containerIds.cend());
+  const QSet<QString> requestedNotes(noteIds.cbegin(), noteIds.cend());
   QSet<QString> includedNodeIds;
   QSet<QString> includedContainerIds;
   const auto includeContainer = [&](const auto &self,
@@ -3206,7 +3343,12 @@ QString ProjectController::transferDiagramPresentations(
   for (const auto &container : source->containers)
     if (requestedContainers.contains(container.id))
       includeContainer(includeContainer, container.id);
-  if (includedNodeIds.isEmpty() && includedContainerIds.isEmpty())
+  QStringList orderedNoteIds;
+  for (const auto &note : source->notes)
+    if (requestedNotes.contains(note.id))
+      orderedNoteIds.append(note.id);
+  if (includedNodeIds.isEmpty() && includedContainerIds.isEmpty() &&
+      orderedNoteIds.isEmpty())
     return {};
 
   QStringList orderedNodeIds;
@@ -3258,7 +3400,7 @@ QString ProjectController::transferDiagramPresentations(
   const QString description =
       move ? QStringLiteral("Move presentations to diagram")
            : QStringLiteral("Copy presentations to diagram");
-  const bool groupedCommand = move || createTarget;
+  const bool groupedCommand = move || createTarget || !orderedNoteIds.isEmpty();
   if (groupedCommand)
     m_undoStack.beginMacro(description);
 
@@ -3283,12 +3425,16 @@ QString ProjectController::transferDiagramPresentations(
   QHash<QString, QString> clonedIdBySourceId;
   QList<NodePresentation> clonedNodes;
   QList<ContainerPresentation> clonedContainers;
+  QList<NotePresentation> clonedNotes;
+  QList<NoteAttachment> clonedNoteAttachments;
   clonedNodes.reserve(orderedNodeIds.size());
   clonedContainers.reserve(orderedContainerIds.size());
   for (const QString &containerId : orderedContainerIds)
     clonedIdBySourceId.insert(containerId, newId());
   for (const QString &nodeId : orderedNodeIds)
     clonedIdBySourceId.insert(nodeId, newId());
+  for (const QString &noteId : orderedNoteIds)
+    clonedIdBySourceId.insert(noteId, newId());
 
   QSet<QString> includedElementIds;
   for (const QString &nodeId : orderedNodeIds) {
@@ -3313,6 +3459,28 @@ QString ProjectController::transferDiagramPresentations(
         clone.childPresentationIds.append(clonedChildId);
     }
     clonedContainers.append(std::move(clone));
+  }
+  for (const QString &noteId : orderedNoteIds) {
+    const auto *sourceNote = findNote(*source, noteId);
+    if (!sourceNote)
+      continue;
+    NotePresentation clone = *sourceNote;
+    clone.id = clonedIdBySourceId.value(noteId);
+    clonedNotes.append(std::move(clone));
+  }
+  for (const auto &attachment : source->noteAttachments) {
+    const QString clonedNoteId = clonedIdBySourceId.value(attachment.noteId);
+    const QString clonedTargetId =
+        clonedIdBySourceId.value(attachment.targetPresentationId);
+    // An attachment is copied only when both of its diagram-local endpoints
+    // are part of the transferred slice; otherwise it would dangle.
+    if (clonedNoteId.isEmpty() || clonedTargetId.isEmpty())
+      continue;
+    NoteAttachment clone = attachment;
+    clone.id = newId();
+    clone.noteId = clonedNoteId;
+    clone.targetPresentationId = clonedTargetId;
+    clonedNoteAttachments.append(std::move(clone));
   }
 
   QList<ConnectorPresentation> clonedConnectors;
@@ -3352,14 +3520,20 @@ QString ProjectController::transferDiagramPresentations(
   const QList<NodePortSnapPointChange> portChanges =
       existingNodePortChanges(m_data, *target, prospective, newNodeIds);
 
-  pushCommand(std::make_unique<AddContainerPresentationsCommand>(
-      this, m_data, targetDiagramId, std::move(clonedContainers),
-      std::move(clonedNodes), std::move(clonedConnectors),
-      QList<ContainerChildrenChange>{}, portChanges,
-      QList<PresentationGeometryChange>{}, description));
+  if (!clonedContainers.isEmpty() || !clonedNodes.isEmpty() ||
+      !clonedConnectors.isEmpty())
+    pushCommand(std::make_unique<AddContainerPresentationsCommand>(
+        this, m_data, targetDiagramId, std::move(clonedContainers),
+        std::move(clonedNodes), std::move(clonedConnectors),
+        QList<ContainerChildrenChange>{}, portChanges,
+        QList<PresentationGeometryChange>{}, description));
+  if (!clonedNotes.isEmpty())
+    pushCommand(std::make_unique<AddNotesCommand>(
+        this, m_data, targetDiagramId, std::move(clonedNotes),
+        std::move(clonedNoteAttachments), description));
   if (move)
     removeDiagramPresentations(sourceDiagramId, orderedNodeIds,
-                               orderedContainerIds);
+                               orderedContainerIds, orderedNoteIds);
   if (groupedCommand)
     m_undoStack.endMacro();
   return targetDiagramId;
@@ -3414,7 +3588,7 @@ void ProjectController::removeContainerPresentation(
 
 void ProjectController::removeDiagramPresentations(
     const QString &diagramId, const QStringList &nodeIds,
-    const QStringList &containerIds) {
+    const QStringList &containerIds, const QStringList &noteIds) {
   const auto *diagram = findDiagram(m_data, diagramId);
   if (!diagram)
     return;
@@ -3432,16 +3606,27 @@ void ProjectController::removeDiagramPresentations(
     if (requestedContainerIds.contains(container.id))
       validContainerIds.append(container.id);
 
+  const QSet<QString> requestedNoteIds(noteIds.cbegin(), noteIds.cend());
+  QStringList validNoteIds;
+  for (const auto &note : diagram->notes)
+    if (requestedNoteIds.contains(note.id))
+      validNoteIds.append(note.id);
+
   const qsizetype selectionSize =
-      validNodeIds.size() + validContainerIds.size();
+      validNodeIds.size() + validContainerIds.size() + validNoteIds.size();
   if (selectionSize == 0)
     return;
-  if (validContainerIds.isEmpty()) {
+  if (validContainerIds.isEmpty() && validNoteIds.isEmpty()) {
     removePresentations(diagramId, validNodeIds.values());
     return;
   }
-  if (validNodeIds.isEmpty() && validContainerIds.size() == 1) {
+  if (validNodeIds.isEmpty() && validNoteIds.isEmpty() &&
+      validContainerIds.size() == 1) {
     removeContainerPresentation(diagramId, validContainerIds.constFirst());
+    return;
+  }
+  if (validNodeIds.isEmpty() && validContainerIds.isEmpty()) {
+    removeNotes(diagramId, validNoteIds);
     return;
   }
 
@@ -3452,6 +3637,10 @@ void ProjectController::removeDiagramPresentations(
   if (!validNodeIds.isEmpty())
     pushCommand(std::make_unique<RemovePresentationsCommand>(
         this, m_data, diagramId, validNodeIds));
+  if (!validNoteIds.isEmpty())
+    pushCommand(std::make_unique<RemoveNotesCommand>(
+        this, m_data, diagramId,
+        QSet<QString>(validNoteIds.cbegin(), validNoteIds.cend())));
   for (const QString &containerId : validContainerIds) {
     const auto *currentDiagram = findDiagram(m_data, diagramId);
     if (currentDiagram && findContainer(*currentDiagram, containerId))
@@ -3809,13 +3998,16 @@ void ProjectController::commitPresentationChanges(
     const QString presentationId = map.value(QStringLiteral("id")).toString();
     const auto *node = findNode(*diagram, presentationId);
     const auto *container = findContainer(*diagram, presentationId);
-    if (!node && !container)
+    const auto *note = findNote(*diagram, presentationId);
+    if (!node && !container && !note)
       continue;
     const qreal minimumWidth = container
                                    ? presentation_layout::kMinimumContainerWidth
-                                   : presentation_layout::kMinimumNodeWidth;
+                               : note ? 80.0
+                                      : presentation_layout::kMinimumNodeWidth;
     const qreal minimumHeight =
         container ? presentation_layout::kMinimumContainerHeight
+        : note    ? 60.0
                   : presentation_layout::kMinimumNodeHeight;
     const QRectF geometry(
         map.value(QStringLiteral("x")).toDouble(),
@@ -3826,7 +4018,10 @@ void ProjectController::commitPresentationChanges(
     if (existing == changeIndex.cend()) {
       changeIndex.insert(presentationId, static_cast<int>(changes.size()));
       changes.append({presentationId,
-                      node ? node->geometry : container->geometry, geometry});
+                      node        ? node->geometry
+                      : container ? container->geometry
+                                  : note->geometry,
+                      geometry});
     } else {
       changes[*existing].after = geometry;
     }
@@ -4050,12 +4245,23 @@ bool ProjectController::canReattachConnectorEnds(
               .isEmpty();
 }
 
+bool ProjectController::canReattachConnectorEndsToFacingSides(
+    const QString &diagramId, const QStringList &connectorIds) const {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  return diagram &&
+         commonConnectorEndpointNodes(m_data, *diagram, connectorIds).size() ==
+             2;
+}
+
 void ProjectController::reattachConnectorEnds(const QString &diagramId,
                                               const QStringList &connectorIds,
                                               const QString &side) {
+  const bool useFacingSides = side == QStringLiteral("facing");
   bool sideOk = false;
-  const ConnectorSide parsedSide = connectorSideFromString(side, &sideOk);
-  if (!sideOk || parsedSide == ConnectorSide::Automatic) {
+  const ConnectorSide parsedSide = useFacingSides
+                                       ? ConnectorSide::Automatic
+                                       : connectorSideFromString(side, &sideOk);
+  if (!useFacingSides && (!sideOk || parsedSide == ConnectorSide::Automatic)) {
     m_diagnostics.addError(
         QStringLiteral("command"),
         QStringLiteral("Cannot reattach connector ends to unknown side '%1'")
@@ -4071,6 +4277,14 @@ void ProjectController::reattachConnectorEnds(const QString &diagramId,
       commonConnectorEndpointNodes(m_data, *diagram, connectorIds);
   if (commonNodes.isEmpty())
     return;
+  if (useFacingSides && commonNodes.size() != 2)
+    return;
+
+  FacingConnectorSides facingSides;
+  if (useFacingSides) {
+    facingSides =
+        shortestFacingConnectorSides(*commonNodes.at(0), *commonNodes.at(1));
+  }
 
   const QSet<QString> selectedConnectorIds(connectorIds.cbegin(),
                                            connectorIds.cend());
@@ -4080,15 +4294,20 @@ void ProjectController::reattachConnectorEnds(const QString &diagramId,
     if (!nodeByElementId.contains(node.elementId))
       nodeByElementId.insert(node.elementId, &node);
 
-  const bool verticalSide =
-      parsedSide == ConnectorSide::Left || parsedSide == ConnectorSide::Right;
   QList<NodePortSnapPointChange> portChanges;
   QList<ConnectorEndpointAnchorChange> anchorChanges;
+  QHash<QString, int> facingConnectorOrder;
   bool materialChange = false;
 
   for (const auto *commonNode : commonNodes) {
+    const ConnectorSide nodeSide =
+        useFacingSides ? (commonNode == commonNodes.at(0) ? facingSides.first
+                                                          : facingSides.second)
+                       : parsedSide;
+    const bool verticalSide =
+        nodeSide == ConnectorSide::Left || nodeSide == ConnectorSide::Right;
     const ConnectorSideFrame sideFrame =
-        connectorSideFrame(commonNode->geometry, parsedSide);
+        connectorSideFrame(commonNode->geometry, nodeSide);
     QList<ReattachEndpoint> endpoints;
     QSet<QString> arrangedEndpointKeys;
     for (qsizetype connectorIndex = 0;
@@ -4135,29 +4354,52 @@ void ProjectController::reattachConnectorEnds(const QString &diagramId,
     if (endpoints.isEmpty())
       continue;
 
-    std::stable_sort(
-        endpoints.begin(), endpoints.end(),
-        [](const ReattachEndpoint &left, const ReattachEndpoint &right) {
-          constexpr qreal kAngleTolerance = 0.000000001;
-          constexpr qreal kDistanceTolerance = 0.000001;
-          if (std::abs(left.remoteAngle - right.remoteAngle) >
-              kAngleTolerance) {
-            return left.remoteAngle < right.remoteAngle;
-          }
-          // Collinear endpoints have the same angular position relative to
-          // the side normal. Distance is the remaining geometric distinction
-          // before the stable connector-identity fallback.
-          if (std::abs(left.remoteDistance - right.remoteDistance) >
-              kDistanceTolerance) {
-            return left.remoteDistance < right.remoteDistance;
-          }
-          if (left.connectorIndex != right.connectorIndex)
-            return left.connectorIndex < right.connectorIndex;
-          return left.source && !right.source;
-        });
+    if (useFacingSides && !facingConnectorOrder.isEmpty()) {
+      // Opposite sides use the same tangent direction (top to bottom or left
+      // to right). Reusing the first side's connector order on the second side
+      // prevents parallel relations from crossing each other.
+      std::stable_sort(
+          endpoints.begin(), endpoints.end(),
+          [&](const ReattachEndpoint &left, const ReattachEndpoint &right) {
+            const QString &leftId =
+                diagram->connectors.at(left.connectorIndex).id;
+            const QString &rightId =
+                diagram->connectors.at(right.connectorIndex).id;
+            return facingConnectorOrder.value(leftId) <
+                   facingConnectorOrder.value(rightId);
+          });
+    } else {
+      std::stable_sort(
+          endpoints.begin(), endpoints.end(),
+          [](const ReattachEndpoint &left, const ReattachEndpoint &right) {
+            constexpr qreal kAngleTolerance = 0.000000001;
+            constexpr qreal kDistanceTolerance = 0.000001;
+            if (std::abs(left.remoteAngle - right.remoteAngle) >
+                kAngleTolerance) {
+              return left.remoteAngle < right.remoteAngle;
+            }
+            // Collinear endpoints have the same angular position relative to
+            // the side normal. Distance is the remaining geometric distinction
+            // before the stable connector-identity fallback.
+            if (std::abs(left.remoteDistance - right.remoteDistance) >
+                kDistanceTolerance) {
+              return left.remoteDistance < right.remoteDistance;
+            }
+            if (left.connectorIndex != right.connectorIndex)
+              return left.connectorIndex < right.connectorIndex;
+            return left.source && !right.source;
+          });
+      if (useFacingSides) {
+        for (qsizetype index = 0; index < endpoints.size(); ++index) {
+          facingConnectorOrder.insert(
+              diagram->connectors.at(endpoints.at(index).connectorIndex).id,
+              static_cast<int>(index));
+        }
+      }
+    }
 
     const int beforePointCount =
-        connector_ports::snapPointCountForSide(*commonNode, parsedSide);
+        connector_ports::snapPointCountForSide(*commonNode, nodeSide);
     QList<qreal> occupiedBeforeOffsets;
     const auto collectOccupiedEndpoint =
         [&](const ConnectorPresentation &connector, bool source,
@@ -4170,7 +4412,7 @@ void ProjectController::reattachConnectorEnds(const QString &diagramId,
               source ? relationship.sourceId : relationship.targetId;
           const ConnectorAnchor &anchor =
               source ? connector.sourceAnchor : connector.targetAnchor;
-          if (elementId != commonNode->elementId || anchor.side != parsedSide) {
+          if (elementId != commonNode->elementId || anchor.side != nodeSide) {
             return;
           }
           bool attached = false;
@@ -4231,7 +4473,7 @@ void ProjectController::reattachConnectorEnds(const QString &diagramId,
       const ConnectorAnchor before =
           endpoint.source ? connector.sourceAnchor : connector.targetAnchor;
       ConnectorAnchor after = before;
-      after.side = parsedSide;
+      after.side = nodeSide;
       after.offset = assignedOffsets.at(index);
       anchorChanges.append(
           {connector.id, endpoint.source, before, std::move(after)});
@@ -4244,8 +4486,9 @@ void ProjectController::reattachConnectorEnds(const QString &diagramId,
     return;
   pushCommand(std::make_unique<UpdateConnectorEndsCommand>(
       this, diagramId, std::move(portChanges), std::move(anchorChanges),
-      QStringLiteral("Reattach connector ends to %1 side")
-          .arg(toString(parsedSide))));
+      useFacingSides ? QStringLiteral("Reattach connector ends to facing sides")
+                     : QStringLiteral("Reattach connector ends to %1 side")
+                           .arg(toString(parsedSide))));
 }
 
 bool ProjectController::canShiftConnectorEnds(

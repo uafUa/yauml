@@ -253,6 +253,32 @@ struct ConnectorPresentation {
   bool operator==(const ConnectorPresentation &) const = default;
 };
 
+// Notes are diagram-owned annotations rather than semantic model elements.
+// They deliberately have no project-tree identity and cannot own other
+// presentations. The text is stored as Markdown source so editing is lossless.
+struct NotePresentation {
+  QString id;
+  QString text;
+  QRectF geometry;
+  QJsonObject extra;
+
+  bool operator==(const NotePresentation &) const = default;
+};
+
+// A note attachment is also presentation-only. Keeping explicit perimeter
+// anchors in the format leaves room for manual endpoint placement without ever
+// turning the annotation into a UML relationship.
+struct NoteAttachment {
+  QString id;
+  QString noteId;
+  QString targetPresentationId;
+  ConnectorAnchor noteAnchor;
+  ConnectorAnchor targetAnchor;
+  QJsonObject extra;
+
+  bool operator==(const NoteAttachment &) const = default;
+};
+
 // A diagram filter changes only what is currently presented. It never removes
 // presentations or semantic elements, so clearing the filter restores the
 // exact diagram and connector layout.
@@ -279,6 +305,8 @@ struct Diagram {
   QList<ContainerPresentation> containers;
   QList<NodePresentation> nodes;
   QList<ConnectorPresentation> connectors;
+  QList<NotePresentation> notes;
+  QList<NoteAttachment> noteAttachments;
   QJsonObject extra;
 
   bool operator==(const Diagram &) const = default;
@@ -348,6 +376,11 @@ const ContainerPresentation *findContainer(const Diagram &diagram,
 ConnectorPresentation *findConnector(Diagram &diagram, const QString &id);
 const ConnectorPresentation *findConnector(const Diagram &diagram,
                                            const QString &id);
+NotePresentation *findNote(Diagram &diagram, const QString &id);
+const NotePresentation *findNote(const Diagram &diagram, const QString &id);
+NoteAttachment *findNoteAttachment(Diagram &diagram, const QString &id);
+const NoteAttachment *findNoteAttachment(const Diagram &diagram,
+                                         const QString &id);
 
 } // namespace yauml
 

@@ -15,9 +15,14 @@
 
 namespace yauml {
 
+namespace ui {
+class DiagramClipLayout;
+}
+
 struct ConnectorPresentation;
 struct ContainerPresentation;
 struct Diagram;
+struct NotePresentation;
 struct NodePresentation;
 
 class DiagramCanvas : public QQuickItem {
@@ -39,8 +44,14 @@ class DiagramCanvas : public QQuickItem {
                  canvasSelectionChanged)
   Q_PROPERTY(int selectedConnectorCount READ selectedConnectorCount NOTIFY
                  canvasSelectionChanged)
+  Q_PROPERTY(int selectedNoteCount READ selectedNoteCount NOTIFY
+                 canvasSelectionChanged)
+  Q_PROPERTY(bool noteSelected READ noteSelected NOTIFY canvasSelectionChanged)
   Q_PROPERTY(bool canReattachSelectedConnectorEnds READ
                  canReattachSelectedConnectorEnds NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(bool canReattachSelectedConnectorEndsToFacingSides READ
+                 canReattachSelectedConnectorEndsToFacingSides NOTIFY
+                     canvasSelectionChanged)
   Q_PROPERTY(bool canShiftSelectedConnectorEnds READ
                  canShiftSelectedConnectorEnds NOTIFY canvasSelectionChanged)
   Q_PROPERTY(bool connectorSelected READ connectorSelected NOTIFY
@@ -160,7 +171,10 @@ public:
   int selectedNodeCount() const;
   int selectedContainerCount() const;
   int selectedConnectorCount() const;
+  int selectedNoteCount() const;
+  bool noteSelected() const;
   bool canReattachSelectedConnectorEnds() const;
+  bool canReattachSelectedConnectorEndsToFacingSides() const;
   bool canShiftSelectedConnectorEnds() const;
   bool connectorSelected() const;
   bool containerSelected() const;
@@ -225,6 +239,11 @@ public:
                                   qreal y);
   Q_INVOKABLE void createElementAtContextPosition(const QString &type);
   Q_INVOKABLE void createElementAtViewportCenter(const QString &type);
+  Q_INVOKABLE QString createNoteAtContextPosition();
+  Q_INVOKABLE QString createNoteAtViewportCenter();
+  Q_INVOKABLE void editSelectedNote();
+  Q_INVOKABLE bool startSelectedNoteAttachment();
+  Q_INVOKABLE void removeSelectedNoteAttachments();
   Q_INVOKABLE void createRelationship(const QString &type);
   Q_INVOKABLE void cancelConnectorInteraction();
   Q_INVOKABLE void addBendPointAtContextPosition();
@@ -237,6 +256,7 @@ public:
   Q_INVOKABLE void editSelectedPresentationName();
   Q_INVOKABLE void setSelectedConnectorRouting(const QString &routing);
   Q_INVOKABLE void reattachSelectedConnectorEnds(const QString &side);
+  Q_INVOKABLE void reattachSelectedConnectorEndsToFacingSides();
   Q_INVOKABLE void shiftSelectedConnectorEnds(const QString &direction);
   Q_INVOKABLE void setSelectedPortSnapPoints(int horizontalPointCount,
                                              int verticalPointCount);
@@ -300,6 +320,9 @@ signals:
                                const QString &objectKind, qreal x, qreal y,
                                qreal width, qreal height);
   void sourceNavigationRequested(const QString &objectId, int operationIndex);
+  void noteEditRequested(const QString &noteId, const QString &text, qreal x,
+                         qreal y, qreal width, qreal height,
+                         qreal fontPixelSize);
 
 protected:
   QSGNode *updatePaintNode(QSGNode *oldNode,
@@ -326,7 +349,8 @@ private:
     MoveTargetPort,
     MoveBendPoint,
     MoveAnnotation,
-    CreateConnector
+    CreateConnector,
+    CreateNoteAttachment
   };
   enum class ResizeHandle { None, TopLeft, TopRight, BottomLeft, BottomRight };
   struct ConnectorEndpoints {
@@ -356,9 +380,12 @@ private:
   const Diagram *diagram() const;
   bool nodePassesFilter(const NodePresentation &node) const;
   bool connectorPassesFilter(const ConnectorPresentation &connector) const;
+  bool connectorPassesFilter(const ConnectorPresentation &connector,
+                             const ui::DiagramClipLayout &clipLayout) const;
   bool pruneFilteredSelection();
   QRectF nodeGeometry(const NodePresentation &node) const;
   QRectF containerGeometry(const ContainerPresentation &container) const;
+  QRectF noteGeometry(const NotePresentation &note) const;
   QRectF containerChildViewport(const ContainerPresentation &container) const;
   QRectF presentationClipRect(const QString &presentationId,
                               bool *hasClip) const;
@@ -376,6 +403,7 @@ private:
   hitContainer(const QPointF &scenePoint,
                const QSet<QString> &excludedPresentationIds) const;
   const ConnectorPresentation *hitConnector(const QPointF &scenePoint) const;
+  const NotePresentation *hitNote(const QPointF &scenePoint) const;
   TextHit hitText(const QPointF &scenePoint) const;
   AnnotationHit hitConnectorAnnotation(const QPointF &scenePoint) const;
   QRectF textLineRect(const QRectF &nodeRect, int line,
@@ -414,6 +442,9 @@ private:
   void updateConnectorGesture(const QPointF &scenePoint, bool suppressSnapping);
   void commitConnectorGesture(const QPointF &scenePoint, bool suppressSnapping);
   void cancelConnectorGesture();
+  void updateNoteAttachmentGesture(const QPointF &scenePoint);
+  void commitNoteAttachmentGesture(const QPointF &scenePoint);
+  void cancelNoteAttachmentGesture();
   QString relationshipTypeForGestureKey(const QKeyEvent &event) const;
   void commitGeometryPreview();
   void updateLassoSelection(const QPointF &scenePoint);
@@ -431,6 +462,8 @@ private:
   void createElementAt(const QString &type, const QPointF &sceneCenter);
   void selectNode(const QString &nodeId, bool toggle);
   void selectConnector(const QString &connectorId, bool toggle);
+  void selectNote(const QString &noteId, bool toggle);
+  void requestNoteEdit(const NotePresentation &note);
 
   ProjectController *m_project = nullptr;
   WorkspaceController *m_workspace = nullptr;
@@ -452,6 +485,8 @@ private:
   // selection-wide operations such as routing use the complete set.
   QSet<QString> m_selectedConnectors;
   QString m_selectedConnector;
+  QSet<QString> m_selectedNotes;
+  QString m_selectedNote;
   Interaction m_interaction = Interaction::None;
   QPointF m_pressView;
   QPointF m_pressScene;
@@ -466,6 +501,8 @@ private:
   QString m_lassoBaseContainer;
   QSet<QString> m_lassoBaseConnectors;
   QString m_lassoBaseConnector;
+  QSet<QString> m_lassoBaseNotes;
+  QString m_lassoBaseNote;
   int m_lassoBaseBendPoint = -1;
   Qt::KeyboardModifiers m_lassoModifiers = Qt::NoModifier;
   bool m_lassoActive = false;
@@ -501,6 +538,9 @@ private:
   QPointF m_connectorGestureTargetPoint;
   bool m_connectorGestureSourceSnapped = false;
   bool m_connectorGestureTargetSnapped = false;
+  QString m_noteAttachmentSourceNote;
+  QString m_noteAttachmentTargetPresentation;
+  QPointF m_noteAttachmentTargetPoint;
   Qt::KeyboardModifiers m_pressModifiers = Qt::NoModifier;
   bool m_sceneDirty = true;
   // Selection-only changes rebuild colored geometry but can retain the

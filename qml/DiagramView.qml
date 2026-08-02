@@ -8,6 +8,8 @@ Item {
     id: root
     required property string diagramId
     readonly property alias diagramCanvas: canvas
+    readonly property bool inPlaceEditorVisible:
+        editor.visible || noteEditor.visible
     property bool relationshipToolboxGestureActive: false
     property string relationshipToolboxNodeId
     property string relationshipToolboxEdge
@@ -358,7 +360,8 @@ Item {
         onContextMenuRequested: function(target, menuX, menuY) {
             const menu = target === "element" ? elementMenu
                        : target === "connector" ? connectorMenu
-                       : target === "container" ? containerMenu : canvasMenu
+                       : target === "container" ? containerMenu
+                       : target === "note" ? noteMenu : canvasMenu
             menu.x = menuX
             menu.y = menuY
             menu.open()
@@ -371,6 +374,7 @@ Item {
 
         onEditRequested: function(objectId, field, index, text, x, y, width, height,
                                   fontPixelSize, fontBold) {
+            noteEditor.visible = false
             editor.objectId = objectId
             editor.field = field
             editor.fieldIndex = index
@@ -401,6 +405,22 @@ Item {
                         "element", objectId, operationIndex)
         }
 
+        onNoteEditRequested: function(noteId, text, x, y, width, height,
+                                      fontPixelSize) {
+            editor.visible = false
+            noteEditor.noteId = noteId
+            noteEditor.originalText = text
+            noteEditor.text = text
+            noteEditor.x = Math.max(2, x)
+            noteEditor.y = Math.max(2, y)
+            noteEditor.width = Math.max(120, width)
+            noteEditor.height = Math.max(80, height)
+            noteEditor.font.pixelSize = fontPixelSize
+            noteEditor.visible = true
+            noteEditor.forceActiveFocus()
+            noteEditor.selectAll()
+        }
+
     }
 
     Connections {
@@ -414,7 +434,7 @@ Item {
         function onRelationshipToolboxCandidateChanged() {
             if (root.relationshipToolboxGestureActive)
                 return
-            if (canvas.relationshipToolboxCandidate && !editor.visible)
+            if (canvas.relationshipToolboxCandidate && !root.inPlaceEditorVisible)
                 root.latchRelationshipToolboxCandidate()
         }
 
@@ -639,6 +659,44 @@ Item {
         canvas: root.diagramCanvas
         onFilterRequested: root.openDiagramFilterDialog()
         onExportPngRequested: root.openPngExportDialog()
+    }
+
+    Menu {
+        id: noteMenu
+        title: canvas.selectedNoteCount > 1 ? qsTr("Notes") : qsTr("Note")
+        MenuItem {
+            text: qsTr("Edit note…")
+            enabled: canvas.selectedNoteCount === 1
+            onTriggered: canvas.editSelectedNote()
+        }
+        MenuItem {
+            text: qsTr("Attach to presentation…")
+            enabled: canvas.selectedNoteCount === 1
+            onTriggered: canvas.startSelectedNoteAttachment()
+        }
+        MenuItem {
+            text: qsTr("Remove attachments")
+            enabled: canvas.selectedNoteCount === 1
+            onTriggered: canvas.removeSelectedNoteAttachments()
+        }
+        MenuSeparator {}
+        CatalogMenuItem {
+            catalogId: "presentation.copyToDiagram"
+            text: qsTr("Copy selected to diagram…")
+            onTriggered: root.openPresentationTransferDialog(false)
+        }
+        CatalogMenuItem {
+            catalogId: "presentation.moveToDiagram"
+            text: qsTr("Move selected to diagram…")
+            onTriggered: root.openPresentationTransferDialog(true)
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: canvas.selectedNoteCount > 1
+                  ? qsTr("Remove notes from diagram")
+                  : qsTr("Remove note from diagram")
+            onTriggered: canvas.removeSelectedPresentations()
+        }
     }
 
     Menu {
@@ -956,6 +1014,13 @@ Item {
             title: qsTr("Reattach common ends")
             enabled: canvas.canReattachSelectedConnectorEnds
             CatalogMenuItem {
+                catalogId: "connector.reattachFacing"
+                text: qsTr("Facing sides")
+                enabled: canvas.canReattachSelectedConnectorEndsToFacingSides
+                onTriggered: canvas.reattachSelectedConnectorEndsToFacingSides()
+            }
+            MenuSeparator {}
+            CatalogMenuItem {
                 catalogId: "connector.reattachLeft"
                 text: qsTr("Left")
                 onTriggered: canvas.reattachSelectedConnectorEnds("left")
@@ -1059,7 +1124,7 @@ Item {
         catalogId: "arrange.fitToContent"
         text: qsTr("Fit to content")
         shortcut: "Ctrl+Shift+F"
-        enabled: root.visible && !editor.visible
+        enabled: root.visible && !root.inPlaceEditorVisible
                  && (canvas.selectedNodeCount > 0 || canvas.containerSelected)
         onTriggered: canvas.fitSelectionToContent()
     }
@@ -1069,7 +1134,7 @@ Item {
         catalogId: "arrange.alignLeft"
         text: qsTr("Left")
         shortcut: "Ctrl+Shift+Left"
-        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignLeft")
     }
     CatalogAction {
@@ -1077,7 +1142,7 @@ Item {
         catalogId: "arrange.alignHorizontalCenters"
         text: qsTr("Horizontal centers")
         shortcut: "Ctrl+Shift+H"
-        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignHorizontalCenter")
     }
     CatalogAction {
@@ -1085,7 +1150,7 @@ Item {
         catalogId: "arrange.alignRight"
         text: qsTr("Right")
         shortcut: "Ctrl+Shift+Right"
-        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignRight")
     }
     CatalogAction {
@@ -1093,7 +1158,7 @@ Item {
         catalogId: "arrange.alignTop"
         text: qsTr("Top")
         shortcut: "Ctrl+Shift+Up"
-        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignTop")
     }
     CatalogAction {
@@ -1101,7 +1166,7 @@ Item {
         catalogId: "arrange.alignVerticalCenters"
         text: qsTr("Vertical centers")
         shortcut: "Ctrl+Shift+V"
-        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignVerticalCenter")
     }
     CatalogAction {
@@ -1109,7 +1174,7 @@ Item {
         catalogId: "arrange.alignBottom"
         text: qsTr("Bottom")
         shortcut: "Ctrl+Shift+Down"
-        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignBottom")
     }
     CatalogAction {
@@ -1117,7 +1182,7 @@ Item {
         catalogId: "arrange.matchWidth"
         text: qsTr("Width")
         shortcut: "Ctrl+Alt+W"
-        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("matchWidth")
     }
     CatalogAction {
@@ -1125,7 +1190,7 @@ Item {
         catalogId: "arrange.matchHeight"
         text: qsTr("Height")
         shortcut: "Ctrl+Alt+H"
-        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("matchHeight")
     }
     CatalogAction {
@@ -1133,7 +1198,7 @@ Item {
         catalogId: "arrange.matchSize"
         text: qsTr("Width and height")
         shortcut: "Ctrl+Alt+E"
-        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
         onTriggered: canvas.arrangeSelection("matchSize")
     }
     CatalogAction {
@@ -1141,7 +1206,7 @@ Item {
         catalogId: "arrange.distributeHorizontally"
         text: qsTr("Distribute horizontally")
         shortcut: "Ctrl+Alt+Shift+H"
-        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 3
+        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 3
         onTriggered: canvas.arrangeSelection("distributeHorizontally")
     }
     CatalogAction {
@@ -1149,14 +1214,14 @@ Item {
         catalogId: "arrange.distributeVertically"
         text: qsTr("Distribute vertically")
         shortcut: "Ctrl+Alt+Shift+V"
-        enabled: root.visible && !editor.visible && canvas.selectedNodeCount >= 3
+        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 3
         onTriggered: canvas.arrangeSelection("distributeVertically")
     }
 
-    Shortcut { sequences: ["Ctrl+Shift+P"]; context: Qt.WindowShortcut; enabled: root.visible && !editor.visible; onActivated: canvas.createElementAtViewportCenter("package") }
-    Shortcut { sequences: ["Ctrl+Shift+C"]; context: Qt.WindowShortcut; enabled: root.visible && !editor.visible; onActivated: canvas.createElementAtViewportCenter("class") }
-    Shortcut { sequences: ["Ctrl+Shift+S"]; context: Qt.WindowShortcut; enabled: root.visible && !editor.visible; onActivated: canvas.createElementAtViewportCenter("struct") }
-    Shortcut { sequences: ["Ctrl+Shift+E"]; context: Qt.WindowShortcut; enabled: root.visible && !editor.visible; onActivated: canvas.createElementAtViewportCenter("enumeration") }
+    Shortcut { sequences: ["Ctrl+Shift+P"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible; onActivated: canvas.createElementAtViewportCenter("package") }
+    Shortcut { sequences: ["Ctrl+Shift+C"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible; onActivated: canvas.createElementAtViewportCenter("class") }
+    Shortcut { sequences: ["Ctrl+Shift+S"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible; onActivated: canvas.createElementAtViewportCenter("struct") }
+    Shortcut { sequences: ["Ctrl+Shift+E"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible; onActivated: canvas.createElementAtViewportCenter("enumeration") }
     Shortcut { sequences: ["Ctrl+Alt+D"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("dependency") }
     Shortcut { sequences: ["Ctrl+Alt+I"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("realization") }
     Shortcut { sequences: ["Ctrl+Alt+G"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("generalization") }
@@ -1167,9 +1232,9 @@ Item {
     Shortcut {
         sequences: ["Delete"]
         context: Qt.WindowShortcut
-        enabled: root.visible && !editor.visible
+        enabled: root.visible && !root.inPlaceEditorVisible
                  && (canvas.selectedNodeCount > 0 || canvas.containerSelected
-                     || canvas.connectorSelected)
+                     || canvas.connectorSelected || canvas.noteSelected)
         onActivated: canvas.bendPointSelected
                      ? canvas.removeSelectedBendPoint()
                      : canvas.connectorSelected
@@ -1179,7 +1244,7 @@ Item {
 
     ContextToolboxFrame {
         id: relationshipToolbox
-        candidate: canvas.relationshipToolboxCandidate && !editor.visible
+        candidate: canvas.relationshipToolboxCandidate && !root.inPlaceEditorVisible
                    && root.activeRelationshipToolboxActions.length > 0
         candidateKey: canvas.relationshipToolboxNodeId + ":"
                       + canvas.relationshipToolboxEdge
@@ -1282,7 +1347,7 @@ Item {
         id: arrangementToolbox
         candidate: canvas.arrangementToolboxCandidate
                    && canvas.selectedNodeCount >= 2
-                   && !editor.visible
+                   && !root.inPlaceEditorVisible
                    && root.activeArrangementToolboxActions.length > 0
         candidateKey: canvas.arrangementToolboxNodeId
         anchor: canvas.arrangementToolboxViewAnchor
@@ -1334,7 +1399,7 @@ Item {
         objectName: "connectorToolbox"
         candidate: canvas.connectorToolboxCandidate
                    && canvas.connectorSelected
-                   && !editor.visible
+                   && !root.inPlaceEditorVisible
                    && root.activeConnectorToolboxActions.length > 0
         candidateKey: canvas.connectorToolboxConnectorId
         anchor: canvas.connectorToolboxViewAnchor
@@ -1390,7 +1455,7 @@ Item {
         id: presentationToolbox
         objectName: "presentationToolbox"
         candidate: canvas.presentationToolboxCandidate
-                   && !editor.visible
+                   && !root.inPlaceEditorVisible
                    && root.presentationToolboxHasApplicableAction()
         candidateKey: canvas.presentationToolboxKind + ":"
                       + canvas.presentationToolboxPresentationId
@@ -1537,6 +1602,70 @@ Item {
                 onClicked: canvas.cancelConnectorInteraction()
             }
         }
+    }
+
+    ScrollView {
+        id: noteEditor
+        property string noteId
+        property string originalText
+        visible: false
+        z: 21
+        clip: true
+        background: Rectangle {
+            color: uiTheme.editorBackground
+            border.color: uiTheme.accent
+            border.width: 1
+        }
+
+        function commit() {
+            if (!visible)
+                return
+            const next = text
+            visible = false
+            if (next !== originalText)
+                projectController.setNoteText(root.diagramId, noteId, next)
+            canvas.forceActiveFocus()
+        }
+
+        function cancel() {
+            if (!visible)
+                return
+            text = originalText
+            visible = false
+            canvas.forceActiveFocus()
+        }
+
+        TextArea {
+            id: noteTextArea
+            text: noteEditor.originalText
+            selectByMouse: true
+            wrapMode: TextEdit.Wrap
+            padding: 4
+            background: null
+            Accessible.description:
+                qsTr("Markdown note. Ctrl+Enter accepts; Escape cancels.")
+
+            Keys.priority: Keys.BeforeItem
+            Keys.onPressed: function(event) {
+                if (event.key === Qt.Key_Escape) {
+                    noteEditor.cancel()
+                    event.accepted = true
+                } else if ((event.modifiers & Qt.ControlModifier)
+                           && (event.key === Qt.Key_Return
+                               || event.key === Qt.Key_Enter)) {
+                    noteEditor.commit()
+                    event.accepted = true
+                }
+            }
+            onActiveFocusChanged: {
+                if (noteEditor.visible && !activeFocus)
+                    noteEditor.commit()
+            }
+        }
+
+        property alias text: noteTextArea.text
+        function forceActiveFocus() { noteTextArea.forceActiveFocus() }
+        function selectAll() { noteTextArea.selectAll() }
     }
 
     TextField {

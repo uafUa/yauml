@@ -428,6 +428,11 @@
         contexts: ["relationship Routing menu"],
         svg: "route-orthogonal.svg",
       },
+      reattachFacing: {
+        label: "Reattach common connector ends to facing sides",
+        contexts: ["relationship context menu"],
+        svg: "",
+      },
       reattachLeft: {
         label: "Reattach common connector ends to the left side",
         contexts: ["relationship context menu"],

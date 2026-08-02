@@ -147,7 +147,18 @@ public:
   Q_INVOKABLE QString transferDiagramPresentations(
       const QString &sourceDiagramId, const QString &targetDiagramId,
       const QStringList &nodeIds, const QStringList &containerIds, bool move,
-      const QString &newDiagramName = {});
+      const QString &newDiagramName = {}, const QStringList &noteIds = {});
+  Q_INVOKABLE QString addNote(const QString &diagramId, qreal centerX,
+                              qreal centerY);
+  Q_INVOKABLE void setNoteText(const QString &diagramId, const QString &noteId,
+                               const QString &text);
+  Q_INVOKABLE QString addNoteAttachment(const QString &diagramId,
+                                        const QString &noteId,
+                                        const QString &targetPresentationId);
+  Q_INVOKABLE void removeNotes(const QString &diagramId,
+                               const QStringList &noteIds);
+  Q_INVOKABLE void removeNoteAttachments(const QString &diagramId,
+                                         const QString &noteId);
   Q_INVOKABLE QString addBrowserFolder(const QString &parentKind,
                                        const QString &parentId,
                                        const QString &name);
@@ -188,6 +199,9 @@ public:
   Q_INVOKABLE void
   addSelectedToDiagram(const QString &diagramId,
                        const QString &sizingMode = QStringLiteral("content"));
+  Q_INVOKABLE int addBrowserItemToDiagram(
+      const QString &diagramId, const QString &kind, const QString &id,
+      const QString &sizingMode = QStringLiteral("content"));
   Q_INVOKABLE int
   addElementsToDiagram(const QString &diagramId, const QStringList &elementIds,
                        qreal x, qreal y,
@@ -217,7 +231,8 @@ public:
                                                const QString &containerId);
   void removeDiagramPresentations(const QString &diagramId,
                                   const QStringList &nodeIds,
-                                  const QStringList &containerIds);
+                                  const QStringList &containerIds,
+                                  const QStringList &noteIds = {});
   Q_INVOKABLE void deleteSelected();
   Q_INVOKABLE void deleteDiagram(const QString &diagramId);
   Q_INVOKABLE void deleteRelationship(const QString &relationshipId);
@@ -299,6 +314,9 @@ public:
   Q_INVOKABLE bool
   canReattachConnectorEnds(const QString &diagramId,
                            const QStringList &connectorIds) const;
+  Q_INVOKABLE bool
+  canReattachConnectorEndsToFacingSides(const QString &diagramId,
+                                        const QStringList &connectorIds) const;
   Q_INVOKABLE void reattachConnectorEnds(const QString &diagramId,
                                          const QStringList &connectorIds,
                                          const QString &side);

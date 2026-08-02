@@ -711,6 +711,40 @@ QJsonObject connectorToJson(const ConnectorPresentation &connector,
   return object;
 }
 
+QJsonObject noteToJson(const NotePresentation &note) {
+  QJsonObject object = note.extra;
+  object.insert(QStringLiteral("id"), note.id);
+  object.insert(QStringLiteral("text"), note.text);
+  QJsonObject geometry;
+  geometry.insert(QStringLiteral("x"), note.geometry.x());
+  geometry.insert(QStringLiteral("y"), note.geometry.y());
+  geometry.insert(QStringLiteral("width"), note.geometry.width());
+  geometry.insert(QStringLiteral("height"), note.geometry.height());
+  object.insert(QStringLiteral("geometry"), geometry);
+  return object;
+}
+
+QJsonObject noteAttachmentToJson(const NoteAttachment &attachment) {
+  QJsonObject object = attachment.extra;
+  object.insert(QStringLiteral("id"), attachment.id);
+  object.insert(QStringLiteral("noteId"), attachment.noteId);
+  object.insert(QStringLiteral("targetPresentationId"),
+                attachment.targetPresentationId);
+  if (attachment.noteAnchor.side != ConnectorSide::Automatic ||
+      !attachment.noteAnchor.extra.isEmpty())
+    object.insert(QStringLiteral("noteAnchor"),
+                  anchorToJson(attachment.noteAnchor));
+  else
+    object.remove(QStringLiteral("noteAnchor"));
+  if (attachment.targetAnchor.side != ConnectorSide::Automatic ||
+      !attachment.targetAnchor.extra.isEmpty())
+    object.insert(QStringLiteral("targetAnchor"),
+                  anchorToJson(attachment.targetAnchor));
+  else
+    object.remove(QStringLiteral("targetAnchor"));
+  return object;
+}
+
 QByteArray manifestBytes(const ProjectData &project) {
   QJsonObject object = project.manifestExtra;
   object.insert(QStringLiteral("schemaVersion"), project.schemaVersion);
@@ -816,12 +850,26 @@ QByteArray diagramsBytes(const ProjectData &project) {
     for (const auto &connector : diagram.connectors)
       connectors.append(connectorToJson(
           connector, findRelationship(project, connector.relationshipId)));
+    QJsonArray notes;
+    for (const auto &note : diagram.notes)
+      notes.append(noteToJson(note));
+    QJsonArray noteAttachments;
+    for (const auto &attachment : diagram.noteAttachments)
+      noteAttachments.append(noteAttachmentToJson(attachment));
     if (!containers.isEmpty())
       object.insert(QStringLiteral("containers"), containers);
     else
       object.remove(QStringLiteral("containers"));
     object.insert(QStringLiteral("nodes"), nodes);
     object.insert(QStringLiteral("connectors"), connectors);
+    if (!notes.isEmpty())
+      object.insert(QStringLiteral("notes"), notes);
+    else
+      object.remove(QStringLiteral("notes"));
+    if (!noteAttachments.isEmpty())
+      object.insert(QStringLiteral("noteAttachments"), noteAttachments);
+    else
+      object.remove(QStringLiteral("noteAttachments"));
     diagrams.append(object);
   }
   root.insert(QStringLiteral("diagrams"), diagrams);
@@ -1409,6 +1457,74 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
            QStringLiteral("annotationPlacements")});
       diagram.connectors.append(connector);
     }
+    const QJsonValue notesValue = object.value(QStringLiteral("notes"));
+    if (!notesValue.isUndefined() && !notesValue.isArray())
+      outcome.diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral("Diagram notes must be an array"), diagram.id));
+    for (const auto &noteValue : notesValue.toArray()) {
+      if (!noteValue.isObject()) {
+        outcome.diagnostics.append(error(
+            QStringLiteral("validation"),
+            QStringLiteral("Diagram note must be an object"), diagram.id));
+        continue;
+      }
+      const QJsonObject noteObject = noteValue.toObject();
+      NotePresentation note;
+      note.id = noteObject.value(QStringLiteral("id")).toString();
+      const QJsonValue textValue = noteObject.value(QStringLiteral("text"));
+      if (!textValue.isUndefined() && !textValue.isString())
+        outcome.diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("Note text must be a string"), note.id));
+      note.text = textValue.toString();
+      const QJsonObject geometry =
+          noteObject.value(QStringLiteral("geometry")).toObject();
+      note.geometry = {geometry.value(QStringLiteral("x")).toDouble(),
+                       geometry.value(QStringLiteral("y")).toDouble(),
+                       geometry.value(QStringLiteral("width")).toDouble(),
+                       geometry.value(QStringLiteral("height")).toDouble()};
+      note.extra =
+          withoutKeys(noteObject, {QStringLiteral("id"), QStringLiteral("text"),
+                                   QStringLiteral("geometry")});
+      diagram.notes.append(std::move(note));
+    }
+    const QJsonValue noteAttachmentsValue =
+        object.value(QStringLiteral("noteAttachments"));
+    if (!noteAttachmentsValue.isUndefined() && !noteAttachmentsValue.isArray())
+      outcome.diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral("Diagram noteAttachments must be an array"),
+                diagram.id));
+    for (const auto &attachmentValue : noteAttachmentsValue.toArray()) {
+      if (!attachmentValue.isObject()) {
+        outcome.diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("Diagram note attachment must be an object"),
+                  diagram.id));
+        continue;
+      }
+      const QJsonObject attachmentObject = attachmentValue.toObject();
+      NoteAttachment attachment;
+      attachment.id = attachmentObject.value(QStringLiteral("id")).toString();
+      attachment.noteId =
+          attachmentObject.value(QStringLiteral("noteId")).toString();
+      attachment.targetPresentationId =
+          attachmentObject.value(QStringLiteral("targetPresentationId"))
+              .toString();
+      attachment.noteAnchor = readAnchor(
+          attachmentObject.value(QStringLiteral("noteAnchor")),
+          QStringLiteral("note"), attachment.id, outcome.diagnostics);
+      attachment.targetAnchor = readAnchor(
+          attachmentObject.value(QStringLiteral("targetAnchor")),
+          QStringLiteral("target"), attachment.id, outcome.diagnostics);
+      attachment.extra = withoutKeys(
+          attachmentObject,
+          {QStringLiteral("id"), QStringLiteral("noteId"),
+           QStringLiteral("targetPresentationId"), QStringLiteral("noteAnchor"),
+           QStringLiteral("targetAnchor")});
+      diagram.noteAttachments.append(std::move(attachment));
+    }
     const auto readDiagramVisibility = [&](const QString &key) {
       const QJsonValue value = object.value(key);
       if (value.isUndefined())
@@ -1447,7 +1563,8 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
          QStringLiteral("showAttributes"), QStringLiteral("showOperations"),
          QStringLiteral("operationSignatureMode"), QStringLiteral("filter"),
          QStringLiteral("containers"), QStringLiteral("nodes"),
-         QStringLiteral("connectors")});
+         QStringLiteral("connectors"), QStringLiteral("notes"),
+         QStringLiteral("noteAttachments")});
     project.diagrams.append(diagram);
   }
 
@@ -2080,6 +2197,20 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
             node.id));
       validateStyleReference(node.styleId, node.id);
     }
+    QSet<QString> noteIds;
+    for (const auto &note : diagram.notes) {
+      checkId(note.id, QStringLiteral("note presentation"));
+      noteIds.insert(note.id);
+      if (!std::isfinite(note.geometry.x()) ||
+          !std::isfinite(note.geometry.y()) ||
+          !std::isfinite(note.geometry.width()) ||
+          !std::isfinite(note.geometry.height()) ||
+          note.geometry.width() <= 0 || note.geometry.height() <= 0) {
+        diagnostics.append(error(
+            QStringLiteral("validation"),
+            QStringLiteral("Note presentation has invalid geometry"), note.id));
+      }
+    }
 
     QHash<QString, QString> ownerByChild;
     for (const auto &container : diagram.containers) {
@@ -2178,6 +2309,37 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
                     connector.id));
         }
       }
+    }
+    for (const auto &attachment : diagram.noteAttachments) {
+      checkId(attachment.id, QStringLiteral("note attachment"));
+      if (!noteIds.contains(attachment.noteId))
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("Diagram \"%1\" note attachment %2 references "
+                                 "missing note %3")
+                      .arg(diagram.name, attachment.id, attachment.noteId),
+                  attachment.id));
+      if (!presentationIds.contains(attachment.targetPresentationId))
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("Diagram \"%1\" note attachment %2 references "
+                                 "missing target presentation %3")
+                      .arg(diagram.name, attachment.id,
+                           attachment.targetPresentationId),
+                  attachment.id));
+      const auto checkAnchor = [&](const ConnectorAnchor &anchor,
+                                   const QString &name) {
+        if (anchor.side != ConnectorSide::Automatic &&
+            (anchor.offset < 0.0 || anchor.offset > 1.0))
+          diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral("Note attachment %1 anchor offset must be "
+                                   "between 0 and 1")
+                        .arg(name),
+                    attachment.id));
+      };
+      checkAnchor(attachment.noteAnchor, QStringLiteral("note"));
+      checkAnchor(attachment.targetAnchor, QStringLiteral("target"));
     }
   }
   return diagnostics;

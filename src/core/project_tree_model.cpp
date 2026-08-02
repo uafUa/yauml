@@ -87,6 +87,29 @@ QStringList normalizedTreeColumns(const QStringList &candidate) {
   }
   return normalized;
 }
+
+QRegularExpression wildcardExpression(const QString &pattern,
+                                      bool containsByDefault = true) {
+  QString wildcard = pattern;
+  if (containsByDefault && !wildcard.contains(u'*') && !wildcard.contains(u'?'))
+    wildcard = u'*' + wildcard + u'*';
+
+  QString expressionText;
+  expressionText.reserve(wildcard.size() * 2 + 6);
+  expressionText += QStringLiteral("^(?:");
+  for (const QChar character : wildcard) {
+    if (character == u'*')
+      expressionText += QStringLiteral(".*");
+    else if (character == u'?')
+      expressionText += u'.';
+    else
+      expressionText += QRegularExpression::escape(QString(character));
+  }
+  expressionText += QStringLiteral(")$");
+  return QRegularExpression(expressionText,
+                            QRegularExpression::CaseInsensitiveOption |
+                                QRegularExpression::UseUnicodePropertiesOption);
+}
 } // namespace
 
 struct ProjectTreeModel::TreeNode {
@@ -102,7 +125,7 @@ struct ProjectTreeModel::TreeNode {
   bool nested = false;
   TreeNode *parent = nullptr;
   std::vector<TreeNode *> children;
-  // Search changes only this derived view. The complete hierarchy remains in
+  // Filtering changes only this derived view. The complete hierarchy remains in
   // children so dragging a visible container still represents all descendants.
   std::vector<TreeNode *> visibleChildren;
 };
@@ -426,26 +449,13 @@ void ProjectTreeModel::rebuildTree() {
 }
 
 void ProjectTreeModel::rebuildVisibleTree() {
-  const QString pattern = m_searchPattern.trimmed();
+  const QString pattern = m_filterPattern.trimmed();
   if (pattern.isEmpty()) {
     updateVisibleChildren(m_invisibleRoot, {}, false);
     return;
   }
 
-  QString expressionText;
-  expressionText.reserve(pattern.size() * 2);
-  for (const QChar character : pattern) {
-    if (character == u'*')
-      expressionText += QStringLiteral(".*");
-    else if (character == u'?')
-      expressionText += u'.';
-    else
-      expressionText += QRegularExpression::escape(QString(character));
-  }
-  const QRegularExpression expression(
-      expressionText, QRegularExpression::CaseInsensitiveOption |
-                          QRegularExpression::UseUnicodePropertiesOption);
-  updateVisibleChildren(m_invisibleRoot, expression, true);
+  updateVisibleChildren(m_invisibleRoot, wildcardExpression(pattern), true);
 }
 
 bool ProjectTreeModel::updateVisibleChildren(
@@ -457,14 +467,42 @@ bool ProjectTreeModel::updateVisibleChildren(
       continue;
     const bool descendantMatches =
         updateVisibleChildren(child, expression, filtering);
-    const bool childMatches =
-        filtering && child->kind != QStringLiteral("root") &&
-        (expression.match(child->label).hasMatch() ||
-         expression.match(child->qualifiedPath).hasMatch());
+    const bool childMatches = filtering && nodeMatches(child, expression);
     if (!filtering || childMatches || descendantMatches)
       node->visibleChildren.push_back(child);
   }
   return !node->visibleChildren.empty();
+}
+
+bool ProjectTreeModel::nodeMatches(const TreeNode *node,
+                                   const QRegularExpression &expression) const {
+  if (!node || node->kind == QStringLiteral("root"))
+    return false;
+  const QStringList searchableText{
+      node->label,       node->qualifiedPath, node->objectType,
+      node->stereotypes, node->sourcePath,    node->sourceDirectory,
+      node->sourceFile,
+  };
+  return std::any_of(
+      searchableText.cbegin(), searchableText.cend(), [&](const QString &text) {
+        return !text.isEmpty() && expression.match(text).hasMatch();
+      });
+}
+
+bool ProjectTreeModel::findNodeMatches(
+    const TreeNode *node, const QRegularExpression &expression,
+    const QRegularExpression &qualifiedPathExpression) const {
+  if (!node || node->kind == QStringLiteral("root"))
+    return false;
+
+  // Find navigates visible tree names. Hidden metadata (source path, kind,
+  // stereotypes, and so on) belongs to Filter; including it here produces
+  // apparently unrelated matches. A qualified path contains every ancestor
+  // name, so an un-wildcarded FQDN must match exactly. Users can still request
+  // a subtree explicitly with a pattern such as "demo::*".
+  return (!node->label.isEmpty() && expression.match(node->label).hasMatch()) ||
+         (!node->qualifiedPath.isEmpty() &&
+          qualifiedPathExpression.match(node->qualifiedPath).hasMatch());
 }
 
 QModelIndex ProjectTreeModel::index(int row, int column,
@@ -587,6 +625,32 @@ QModelIndex ProjectTreeModel::indexForObject(const QString &objectId,
   if (kind == QStringLiteral("relationship"))
     return indexForNode(m_relationshipNodes.value(objectId, nullptr));
   return {};
+}
+
+QVariantList ProjectTreeModel::findMatches(const QString &pattern) const {
+  QVariantList result;
+  const QString normalizedPattern = pattern.trimmed();
+  if (normalizedPattern.isEmpty() || !m_invisibleRoot)
+    return result;
+
+  const QRegularExpression expression = wildcardExpression(normalizedPattern);
+  const QRegularExpression qualifiedPathExpression =
+      wildcardExpression(normalizedPattern, false);
+  const auto collectMatches = [&](const auto &self,
+                                  const TreeNode *parent) -> void {
+    for (const TreeNode *child : parent->visibleChildren) {
+      if (findNodeMatches(child, expression, qualifiedPathExpression)) {
+        result.append(QVariantMap{
+            {QStringLiteral("objectId"), child->objectId},
+            {QStringLiteral("kind"), child->kind},
+            {QStringLiteral("name"), child->label},
+        });
+      }
+      self(self, child);
+    }
+  };
+  collectMatches(collectMatches, m_invisibleRoot);
+  return result;
 }
 
 void ProjectTreeModel::collectElementIds(const TreeNode *node,
@@ -773,17 +837,17 @@ void ProjectTreeModel::startTreeDrag(const QModelIndexList &indexes) {
   drag.exec(Qt::CopyAction, Qt::CopyAction);
 }
 
-QString ProjectTreeModel::searchPattern() const { return m_searchPattern; }
+QString ProjectTreeModel::filterPattern() const { return m_filterPattern; }
 
-void ProjectTreeModel::setSearchPattern(const QString &pattern) {
-  if (m_searchPattern == pattern)
+void ProjectTreeModel::setFilterPattern(const QString &pattern) {
+  if (m_filterPattern == pattern)
     return;
-  m_searchPattern = pattern;
+  m_filterPattern = pattern;
   m_selectionAnchor = {};
   beginResetModel();
   rebuildVisibleTree();
   endResetModel();
-  emit searchPatternChanged();
+  emit filterPatternChanged();
 }
 
 QStringList ProjectTreeModel::columns() const { return m_columns; }

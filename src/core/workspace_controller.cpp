@@ -408,6 +408,13 @@ void WorkspaceController::reconcile() {
     return;
   }
 
+  // ProjectController emits diagramsChanged at its completed-command boundary,
+  // including commands that only modify the contents of a diagram. Preserve
+  // the QML tab model in that common case: rebuilding an unchanged QVariantList
+  // destroys the StackLayout delegates and can make an area fall back to its
+  // first tab.
+  const QHash<QString, QStringList> previousHosts = m_hosts;
+  const QStringList previousDetachedOrder = m_detachedOrder;
   const QStringList valid = projectDiagramIds();
   for (auto it = m_hosts.begin(); it != m_hosts.end(); ++it) {
     it.value().removeIf([&](const QString &id) { return !valid.contains(id); });
@@ -425,7 +432,8 @@ void WorkspaceController::reconcile() {
     m_activeDiagramId = valid.isEmpty() ? QString() : valid.first();
     emit activeDiagramIdChanged();
   }
-  changed();
+  if (m_hosts != previousHosts || m_detachedOrder != previousDetachedOrder)
+    changed();
 }
 
 void WorkspaceController::removeFromCurrentHost(const QString &diagramId) {
