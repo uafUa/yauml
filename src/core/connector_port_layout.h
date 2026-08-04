@@ -33,4 +33,15 @@ qreal remapAttachedOffset(qreal offset, int beforePointCount,
 
 int snapPointCountForSide(const NodePresentation &node, ConnectorSide side);
 
+// Returns the free markers after resizing one side's snap grid. Occupied
+// offsets are expressed in the old grid and are remapped by logical ordinal,
+// matching the persistence behaviour of NodePortSnapPointChange.
+QVector<qreal> availableSnapOffsets(int beforePointCount, int afterPointCount,
+                                    const QList<qreal> &occupiedBeforeOffsets);
+
+// Selects evenly spread entries without changing their order. The result is
+// empty when the supplied set cannot satisfy the request.
+QVector<qreal> spreadAcrossAvailableOffsets(const QVector<qreal> &available,
+                                            qsizetype requestedCount);
+
 } // namespace yauml::connector_ports

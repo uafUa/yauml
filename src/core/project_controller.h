@@ -16,6 +16,21 @@ namespace yauml {
 class ProjectCommand;
 struct CppImportPreview;
 
+// Presentation-only result produced by the diagram router. The controller
+// turns these desired values into compact before/after command deltas.
+struct OptimizedConnectorRoute {
+  QString connectorId;
+  ConnectorAnchor sourceAnchor;
+  ConnectorAnchor targetAnchor;
+  QList<ConnectorBendPoint> bendPoints;
+};
+
+struct OptimizedNodePortGrid {
+  QString nodeId;
+  int horizontalPointCount = 1;
+  int verticalPointCount = 1;
+};
+
 class ProjectController final : public QObject {
   Q_OBJECT
   Q_PROPERTY(ProjectTreeModel *treeModel READ treeModel CONSTANT)
@@ -331,6 +346,17 @@ public:
   Q_INVOKABLE void setConnectorsRouting(const QString &diagramId,
                                         const QStringList &connectorIds,
                                         const QString &routing);
+  void applyAutomaticConnectorRoutes(
+      const QString &diagramId,
+      const QHash<QString, QList<ConnectorBendPoint>> &bendPointsByConnector);
+  // Reports all connectors rejected by one automatic-routing operation as a
+  // single warning. This keeps the log useful when a whole diagram is routed.
+  void reportConnectorRoutingFailures(const QString &diagramId,
+                                      const QStringList &connectorIds);
+  void
+  applyOptimizedConnectorRoutes(const QString &diagramId,
+                                const QList<OptimizedConnectorRoute> &routes,
+                                const QList<OptimizedNodePortGrid> &portGrids);
   Q_INVOKABLE void insertConnectorBendPoint(const QString &diagramId,
                                             const QString &connectorId,
                                             int index, qreal x, qreal y);

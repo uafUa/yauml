@@ -42,6 +42,9 @@ class DiagramCanvas : public QQuickItem {
                  canvasSelectionChanged)
   Q_PROPERTY(int selectedContainerCount READ selectedContainerCount NOTIFY
                  canvasSelectionChanged)
+  Q_PROPERTY(
+      int selectedContainerInternalConnectorCount READ
+          selectedContainerInternalConnectorCount NOTIFY canvasSelectionChanged)
   Q_PROPERTY(int selectedConnectorCount READ selectedConnectorCount NOTIFY
                  canvasSelectionChanged)
   Q_PROPERTY(int selectedNoteCount READ selectedNoteCount NOTIFY
@@ -113,6 +116,10 @@ class DiagramCanvas : public QQuickItem {
                  NOTIFY canvasSelectionChanged)
   Q_PROPERTY(QString selectedStyleId READ selectedStyleId NOTIFY
                  canvasSelectionChanged)
+  Q_PROPERTY(bool automaticLayoutPreviewActive READ automaticLayoutPreviewActive
+                 NOTIFY automaticLayoutPreviewChanged)
+  Q_PROPERTY(int automaticLayoutPreviewCount READ automaticLayoutPreviewCount
+                 NOTIFY automaticLayoutPreviewChanged)
   Q_PROPERTY(
       QVariantMap relationshipGestureKeys READ relationshipGestureKeys WRITE
           setRelationshipGestureKeys NOTIFY relationshipGestureKeysChanged)
@@ -170,6 +177,7 @@ public:
   int totalNodeCount() const;
   int selectedNodeCount() const;
   int selectedContainerCount() const;
+  int selectedContainerInternalConnectorCount() const;
   int selectedConnectorCount() const;
   int selectedNoteCount() const;
   bool noteSelected() const;
@@ -210,6 +218,8 @@ public:
   int outgoingRelatedTypeCount() const;
   bool canWrapSelectionInPackage() const;
   QString selectedStyleId() const;
+  bool automaticLayoutPreviewActive() const;
+  int automaticLayoutPreviewCount() const;
   QVariantMap relationshipGestureKeys() const;
   void setRelationshipGestureKeys(const QVariantMap &keys);
   bool relationshipToolboxCandidate() const;
@@ -255,6 +265,12 @@ public:
   editSelectedConnectorAnnotation(const QString &annotationField);
   Q_INVOKABLE void editSelectedPresentationName();
   Q_INVOKABLE void setSelectedConnectorRouting(const QString &routing);
+  Q_INVOKABLE void routeSelectedConnectorsAroundObstacles();
+  Q_INVOKABLE void routeVisibleConnectorsAroundObstacles();
+  Q_INVOKABLE void routeSelectedContainerConnectorsAroundObstacles();
+  Q_INVOKABLE void optimizeSelectedConnectorEndsAndRoute();
+  Q_INVOKABLE void optimizeVisibleConnectorEndsAndRoute();
+  Q_INVOKABLE void optimizeSelectedContainerConnectorEndsAndRoute();
   Q_INVOKABLE void reattachSelectedConnectorEnds(const QString &side);
   Q_INVOKABLE void reattachSelectedConnectorEndsToFacingSides();
   Q_INVOKABLE void shiftSelectedConnectorEnds(const QString &direction);
@@ -272,6 +288,10 @@ public:
   Q_INVOKABLE void wrapSelectionInPackage();
   Q_INVOKABLE void assignStyleToSelection(const QString &styleId);
   Q_INVOKABLE void arrangeSelection(const QString &operation);
+  Q_INVOKABLE bool previewAutomaticLayout(const QString &scope,
+                                          const QString &direction);
+  Q_INVOKABLE void applyAutomaticLayoutPreview();
+  Q_INVOKABLE void cancelAutomaticLayoutPreview();
   Q_INVOKABLE void nudgeSelection(qreal deltaX, qreal deltaY);
   Q_INVOKABLE void removeSelectedPresentations();
   Q_INVOKABLE QString
@@ -296,6 +316,7 @@ signals:
   void viewportChanged();
   void diagramFilterChanged();
   void canvasSelectionChanged();
+  void automaticLayoutPreviewChanged();
   void defaultDistributionGapChanged();
   void snapToGridEnabledChanged();
   void alignmentGuidesEnabledChanged();
@@ -454,8 +475,23 @@ private:
   void selectAllInContext();
   void synchronizeProjectSelection();
   QStringList selectedConnectorIdsInDiagramOrder() const;
+  QStringList visibleConnectorIdsInDiagramOrder() const;
+  QStringList
+  visibleConnectorIdsInsideContainer(const QString &containerId) const;
+  void routeConnectorsAroundObstacles(const QStringList &connectorIds);
+  void optimizeConnectorEndsAndRoute(const QStringList &connectorIds);
+  ui::OrthogonalObstacleRoutingRequest
+  obstacleRoutingRequest(const NodePresentation &sourceNode,
+                         const NodePresentation &targetNode,
+                         const QPointF &source, const QPointF &target,
+                         ConnectorSide sourceSide, ConnectorSide targetSide,
+                         const QVector<QVector<QPointF>> &occupiedRoutes) const;
   QString selectedCompartmentVisibility(bool attributes) const;
   void captureSelectedGeometry();
+  void collectContainerSubtreeGeometry(const Diagram &diagram,
+                                       const ContainerPresentation &container,
+                                       QHash<QString, QRectF> &geometries,
+                                       QSet<QString> &visitedContainers) const;
   void clearContainerSelection();
   void normalizeActiveConnector();
   void selectOnlyContainer(const QString &containerId);
@@ -503,6 +539,9 @@ private:
   QString m_lassoBaseConnector;
   QSet<QString> m_lassoBaseNotes;
   QString m_lassoBaseNote;
+  // Empty-body presses remain potential lassos until the pointer crosses the
+  // drag threshold. On a click-release this ID becomes the active container.
+  QString m_lassoClickContainer;
   int m_lassoBaseBendPoint = -1;
   Qt::KeyboardModifiers m_lassoModifiers = Qt::NoModifier;
   bool m_lassoActive = false;
@@ -510,6 +549,8 @@ private:
   ResizeHandle m_resizeHandle = ResizeHandle::None;
   QHash<QString, QRectF> m_originalGeometry;
   QHash<QString, QRectF> m_previewGeometry;
+  bool m_automaticLayoutPreviewActive = false;
+  int m_automaticLayoutPreviewCount = 0;
   // Endpoint drags are presentation-only until a valid drop commits one
   // command. An empty target ID means the end is provisionally detached and
   // follows m_endpointDragPoint directly.

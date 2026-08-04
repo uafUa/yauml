@@ -119,11 +119,17 @@ private slots:
   void snappingGeometryRulesAreDeterministic();
   void nestedContainerClippingAndOverflowAreDeterministic();
   void connectorRoutingGeometryIsOrthogonalAndTracksBends();
+  void obstacleRoutingUsesClearanceAndIsDeterministic();
   void relationshipStylesUseUmlDecorations();
   void relationshipDashPatternIsIndependentOfConnectorLength();
   void lassoSelectsAndMovesMultipleNodesAsOneCommand();
   void lassoModifiersAddAndToggleSelection();
   void connectorMultiSelectionUsesRectangleFirstLassoAndBulkRouting();
+  void automaticConnectorRoutingAvoidsObstaclesAndIsUndoable();
+  void automaticConnectorRoutingReportsUnroutableConnectors();
+  void optimizedRoutingChoosesFacingEndsAtomically();
+  void containerConnectorOptimizationIsRecursivelyScopedAndUndoable();
+  void automaticLayoutPreviewIsScopedAndUndoable();
   void lassoStartsOnEmptyContainerBody();
   void contextualSelectAllUsesContainerScope();
   void diagramFiltersHideInteractionAndSelection();
@@ -201,6 +207,50 @@ void DiagramCanvasTests::arrangementGeometryRulesAreDeterministic() {
   QCOMPARE(fallback.at(1).geometry.left(), 112.0);
   QCOMPARE(fallback.at(2).geometry.left(), 224.0);
   QVERIFY(!ui::arrangementOperationFromKey(QStringLiteral("unknown")));
+
+  const QList<ui::DiagramNodeGeometry> graphNodes = {
+      {QStringLiteral("a"), QRectF(400, 300, 120, 60)},
+      {QStringLiteral("b"), QRectF(20, 500, 100, 80)},
+      {QStringLiteral("c"), QRectF(700, 40, 140, 50)},
+      {QStringLiteral("isolated"), QRectF(900, 700, 90, 70)},
+  };
+  const QList<ui::DiagramLayoutEdge> graphEdges = {
+      {QStringLiteral("a"), QStringLiteral("b")},
+      {QStringLiteral("b"), QStringLiteral("c")},
+      // The reverse edge intentionally creates a cycle. Its strongly
+      // connected nodes must remain deterministic in one layer.
+      {QStringLiteral("c"), QStringLiteral("b")},
+  };
+  const auto leftToRight =
+      ui::automaticallyLayoutDiagramNodes(graphNodes, graphEdges);
+  QCOMPARE(leftToRight,
+           ui::automaticallyLayoutDiagramNodes(graphNodes, graphEdges));
+  const auto geometryById = [](const auto &items, const QString &id) {
+    const auto found =
+        std::find_if(items.cbegin(), items.cend(),
+                     [&](const auto &item) { return item.id == id; });
+    return found != items.cend() ? found->geometry : QRectF{};
+  };
+  QVERIFY(geometryById(leftToRight, QStringLiteral("a")).right() <
+          geometryById(leftToRight, QStringLiteral("b")).left());
+  QVERIFY(!geometryById(leftToRight, QStringLiteral("b"))
+               .intersects(geometryById(leftToRight, QStringLiteral("c"))));
+  QRectF inputBounds;
+  QRectF outputBounds;
+  for (const auto &node : graphNodes)
+    inputBounds = inputBounds.isValid() ? inputBounds.united(node.geometry)
+                                        : node.geometry;
+  for (const auto &node : leftToRight)
+    outputBounds = outputBounds.isValid() ? outputBounds.united(node.geometry)
+                                          : node.geometry;
+  QCOMPARE(outputBounds.topLeft(), inputBounds.topLeft());
+
+  ui::AutomaticLayoutOptions verticalOptions;
+  verticalOptions.direction = ui::AutomaticLayoutDirection::TopToBottom;
+  const auto topToBottom = ui::automaticallyLayoutDiagramNodes(
+      graphNodes, graphEdges, verticalOptions);
+  QVERIFY(geometryById(topToBottom, QStringLiteral("a")).bottom() <
+          geometryById(topToBottom, QStringLiteral("b")).top());
 }
 
 void DiagramCanvasTests::connectorRoutingGeometryIsOrthogonalAndTracksBends() {
@@ -237,6 +287,99 @@ void DiagramCanvasTests::connectorRoutingGeometryIsOrthogonalAndTracksBends() {
   QCOMPARE(moved.points.last(), QPointF(140.0, 80.0));
   QCOMPARE(moved.points.at(moved.bendPointRouteIndices.first()),
            QPointF(30.0, 20.0));
+}
+
+void DiagramCanvasTests::obstacleRoutingUsesClearanceAndIsDeterministic() {
+  ui::OrthogonalObstacleRoutingRequest request;
+  request.source = {100.0, 50.0};
+  request.target = {400.0, 50.0};
+  request.sourceBounds = {0.0, 0.0, 100.0, 100.0};
+  request.targetBounds = {400.0, 0.0, 100.0, 100.0};
+  request.sourceSide = ConnectorSide::Right;
+  request.targetSide = ConnectorSide::Left;
+  request.obstacles = {{210.0, -10.0, 80.0, 120.0}};
+  request.clearance = 12.0;
+  request.bendPenalty = 24.0;
+
+  const QVector<QPointF> route = ui::routeOrthogonallyAroundObstacles(request);
+  QCOMPARE(route, ui::routeOrthogonallyAroundObstacles(request));
+  QVERIFY(route.size() >= 4);
+  QCOMPARE(route.first(), request.source);
+  QCOMPARE(route.last(), request.target);
+  const QVector<QPointF> persistedBends(route.cbegin() + 1, route.cend() - 1);
+  QCOMPARE(ui::buildConnectorRoute(request.source, persistedBends,
+                                   request.target, ConnectorRouting::Orthogonal,
+                                   request.sourceSide, request.targetSide)
+               .points,
+           route);
+
+  const QRectF expandedObstacle =
+      request.obstacles.first().adjusted(-request.clearance, -request.clearance,
+                                         request.clearance, request.clearance);
+  bool usesClearanceChannel = false;
+  for (const QPointF &point : route) {
+    usesClearanceChannel = usesClearanceChannel ||
+                           point.y() <= expandedObstacle.top() ||
+                           point.y() >= expandedObstacle.bottom();
+  }
+  QVERIFY(usesClearanceChannel);
+
+  for (qsizetype index = 1; index < route.size(); ++index) {
+    const QPointF first = route.at(index - 1);
+    const QPointF second = route.at(index);
+    const bool horizontal = qFuzzyCompare(first.y(), second.y());
+    const bool vertical = qFuzzyCompare(first.x(), second.x());
+    QVERIFY(horizontal || vertical);
+    if (horizontal && first.y() > expandedObstacle.top() &&
+        first.y() < expandedObstacle.bottom()) {
+      const qreal left = std::min(first.x(), second.x());
+      const qreal right = std::max(first.x(), second.x());
+      QVERIFY(right <= expandedObstacle.left() ||
+              left >= expandedObstacle.right());
+    }
+    if (vertical && first.x() > expandedObstacle.left() &&
+        first.x() < expandedObstacle.right()) {
+      const qreal top = std::min(first.y(), second.y());
+      const qreal bottom = std::max(first.y(), second.y());
+      QVERIFY(bottom <= expandedObstacle.top() ||
+              top >= expandedObstacle.bottom());
+    }
+  }
+
+  const auto channelSide = [&](const QVector<QPointF> &candidate) {
+    const auto [minimum, maximum] =
+        std::minmax_element(candidate.cbegin(), candidate.cend(),
+                            [](const QPointF &left, const QPointF &right) {
+                              return left.y() < right.y();
+                            });
+    if (minimum->y() < expandedObstacle.top() + 0.01)
+      return -1;
+    if (maximum->y() > expandedObstacle.bottom() - 0.01)
+      return 1;
+    return 0;
+  };
+  const int firstSide = channelSide(route);
+  QVERIFY(firstSide != 0);
+
+  // A route already occupying the preferred channel causes a later connector
+  // to use the equally short free channel instead of stacking on top of it.
+  request.occupiedRoutes = {route};
+  const QVector<QPointF> sharedLaneAvoiding =
+      ui::routeOrthogonallyAroundObstacles(request);
+  QVERIFY(!sharedLaneAvoiding.isEmpty());
+  QCOMPARE(channelSide(sharedLaneAvoiding), -firstSide);
+
+  // A perpendicular occupied segment has the same effect: crossings are a
+  // cost, not an impassable obstacle, so a route remains possible if every
+  // alternative would cross.
+  const qreal occupiedChannelY =
+      firstSide < 0 ? expandedObstacle.top() : expandedObstacle.bottom();
+  request.occupiedRoutes = {{QPointF(250.0, occupiedChannelY - 30.0),
+                             QPointF(250.0, occupiedChannelY + 30.0)}};
+  const QVector<QPointF> crossingAvoiding =
+      ui::routeOrthogonallyAroundObstacles(request);
+  QVERIFY(!crossingAvoiding.isEmpty());
+  QCOMPARE(channelSide(crossingAvoiding), -firstSide);
 }
 
 void DiagramCanvasTests::relationshipStylesUseUmlDecorations() {
@@ -529,6 +672,17 @@ void DiagramCanvasTests::
   const QString firstRelationshipId = first->relationshipId;
   const QString secondRelationshipId = second->relationshipId;
 
+  const ProjectData beforeAutomaticRouting = controller.data();
+  canvas.routeSelectedConnectorsAroundObstacles();
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Route connectors around obstacles"));
+  QVERIFY(findConnector(controller.data().diagrams.first(), firstConnectorId)
+              ->routing == ConnectorRouting::Orthogonal);
+  QVERIFY(findConnector(controller.data().diagrams.first(), secondConnectorId)
+              ->routing == ConnectorRouting::Orthogonal);
+  controller.undo();
+  QCOMPARE(controller.data(), beforeAutomaticRouting);
+
   // When the lasso intersects a visible rectangle, rectangle selection wins
   // even though the first connector also crosses the selected area.
   canvas.clearCanvasSelection();
@@ -554,6 +708,414 @@ void DiagramCanvasTests::
   QVERIFY(findRelationship(controller.data(), firstRelationshipId));
   QVERIFY(findRelationship(controller.data(), secondRelationshipId));
   QCOMPARE(controller.data().diagrams.first().connectors.size(), 2);
+}
+
+void DiagramCanvasTests::
+    automaticConnectorRoutingAvoidsObstaclesAndIsUndoable() {
+  ProjectController controller;
+  populate(controller, 3);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+  controller.updateNodeGeometry(diagramId, nodes.at(0).id, 50.0, 100.0, 100.0,
+                                80.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(1).id, 250.0, 70.0, 100.0,
+                                140.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(2).id, 450.0, 100.0, 100.0,
+                                80.0);
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  canvas.press({100.0, 140.0});
+  canvas.release({100.0, 140.0});
+  canvas.press({500.0, 140.0}, Qt::ControlModifier);
+  canvas.release({500.0, 140.0}, Qt::ControlModifier);
+  canvas.createRelationship(QStringLiteral("dependency"));
+  QCOMPARE(canvas.selectedConnectorCount(), 1);
+  QCOMPARE(controller.data().diagrams.first().connectors.size(), 1);
+  const QString connectorId =
+      controller.data().diagrams.first().connectors.first().id;
+
+  controller.insertConnectorBendPoint(diagramId, connectorId, 0, 300.0, 40.0);
+  const ProjectData beforeRouting = controller.data();
+  canvas.routeSelectedConnectorsAroundObstacles();
+
+  const auto *routed =
+      findConnector(controller.data().diagrams.first(), connectorId);
+  QVERIFY(routed);
+  QVERIFY(routed->routing == ConnectorRouting::Orthogonal);
+  QVERIFY(!routed->bendPoints.isEmpty());
+  QVERIFY(std::any_of(routed->bendPoints.cbegin(), routed->bendPoints.cend(),
+                      [](const ConnectorBendPoint &point) {
+                        return point.position.y() <= 58.0 ||
+                               point.position.y() >= 222.0;
+                      }));
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Route connector around obstacles"));
+
+  const ProjectData afterRouting = controller.data();
+  controller.undo();
+  QCOMPARE(controller.data(), beforeRouting);
+  controller.redo();
+  QCOMPARE(controller.data(), afterRouting);
+
+  // The diagram-level operation has the same transactional semantics and
+  // does not depend on a connector selection.
+  controller.undo();
+  canvas.clearCanvasSelection();
+  canvas.routeVisibleConnectorsAroundObstacles();
+  QCOMPARE(controller.data(), afterRouting);
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Route connector around obstacles"));
+  controller.undo();
+  QCOMPARE(controller.data(), beforeRouting);
+}
+
+void DiagramCanvasTests::
+    automaticConnectorRoutingReportsUnroutableConnectors() {
+  ProjectController controller;
+  populate(controller, 3);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+  controller.updateNodeGeometry(diagramId, nodes.at(0).id, 50.0, 100.0, 100.0,
+                                80.0);
+  // This obstacle covers the source's right-side escape point after routing
+  // clearance is applied, making an obstacle-safe route impossible.
+  controller.updateNodeGeometry(diagramId, nodes.at(1).id, 151.0, 100.0, 100.0,
+                                80.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(2).id, 450.0, 100.0, 100.0,
+                                80.0);
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  canvas.press({100.0, 140.0});
+  canvas.release({100.0, 140.0});
+  canvas.press({500.0, 140.0}, Qt::ControlModifier);
+  canvas.release({500.0, 140.0}, Qt::ControlModifier);
+  canvas.createRelationship(QStringLiteral("dependency"));
+  QCOMPARE(controller.data().diagrams.first().connectors.size(), 1);
+  const ConnectorPresentation before =
+      controller.data().diagrams.first().connectors.first();
+
+  QSignalSpy attention(controller.diagnostics(),
+                       &DiagnosticModel::attentionAdded);
+  canvas.clearCanvasSelection();
+  canvas.routeVisibleConnectorsAroundObstacles();
+
+  QCOMPARE(attention.count(), 1);
+  QCOMPARE(controller.diagnostics()->rowCount(), 1);
+  const QModelIndex warning = controller.diagnostics()->index(0, 0);
+  QCOMPARE(
+      controller.diagnostics()->data(warning, DiagnosticModel::SeverityRole),
+      QStringLiteral("warning"));
+  QCOMPARE(
+      controller.diagnostics()->data(warning, DiagnosticModel::CategoryRole),
+      QStringLiteral("routing"));
+  const QString warningMessage =
+      controller.diagnostics()
+          ->data(warning, DiagnosticModel::MessageRole)
+          .toString();
+  QVERIFY(
+      warningMessage.contains(QStringLiteral("existing route was retained")));
+  QVERIFY(warningMessage.contains(before.id));
+  QCOMPARE(controller.data().diagrams.first().connectors.first(), before);
+}
+
+void DiagramCanvasTests::optimizedRoutingChoosesFacingEndsAtomically() {
+  ProjectController controller;
+  populate(controller, 5);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+  controller.updateNodeGeometry(diagramId, nodes.at(0).id, 50.0, 120.0, 120.0,
+                                120.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(1).id, 430.0, 40.0, 120.0,
+                                100.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(2).id, 430.0, 260.0, 120.0,
+                                100.0);
+  // Close blockers make the source's top and bottom clearance exits invalid.
+  // Both routes must therefore share the right side, exercising automatic
+  // snap-grid growth and ordered port distribution as well as side choice.
+  controller.updateNodeGeometry(diagramId, nodes.at(3).id, 30.0, 20.0, 160.0,
+                                90.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(4).id, 30.0, 250.0, 160.0,
+                                90.0);
+  const QString firstConnectorId = controller.createRelationshipWithRouting(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("dependency"),
+      QStringLiteral("straight"));
+  const QString secondConnectorId = controller.createRelationshipWithRouting(
+      diagramId, nodes.at(0).id, nodes.at(2).id, QStringLiteral("dependency"),
+      QStringLiteral("straight"));
+  QVERIFY(!firstConnectorId.isEmpty());
+  QVERIFY(!secondConnectorId.isEmpty());
+  for (const QString &connectorId : {firstConnectorId, secondConnectorId}) {
+    controller.updateConnectorAnchor(diagramId, connectorId, true,
+                                     QStringLiteral("left"), 0.5);
+    controller.updateConnectorAnchor(diagramId, connectorId, false,
+                                     QStringLiteral("right"), 0.5);
+  }
+  const ProjectData before = controller.data();
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  canvas.optimizeVisibleConnectorEndsAndRoute();
+
+  const Diagram optimizedDiagram = controller.data().diagrams.first();
+  const auto *first = findConnector(optimizedDiagram, firstConnectorId);
+  const auto *second = findConnector(optimizedDiagram, secondConnectorId);
+  QVERIFY(first);
+  QVERIFY(second);
+  QVERIFY(first->sourceAnchor.side == ConnectorSide::Right);
+  QVERIFY(second->sourceAnchor.side == ConnectorSide::Right);
+  QVERIFY(first->targetAnchor.side == ConnectorSide::Left);
+  QVERIFY(second->targetAnchor.side == ConnectorSide::Left);
+  QVERIFY(first->routing == ConnectorRouting::Orthogonal);
+  QVERIFY(second->routing == ConnectorRouting::Orthogonal);
+  QVERIFY(
+      !qFuzzyCompare(first->sourceAnchor.offset, second->sourceAnchor.offset));
+  QCOMPARE(findNode(optimizedDiagram, nodes.at(0).id)->verticalPortSnapPoints,
+           3);
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Optimize connector ends and routes"));
+
+  controller.undo();
+  QCOMPARE(controller.data(), before);
+  controller.redo();
+  QCOMPARE(controller.data().diagrams.first(), optimizedDiagram);
+}
+
+void DiagramCanvasTests::
+    containerConnectorOptimizationIsRecursivelyScopedAndUndoable() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString directElement = controller.addElement(QStringLiteral("class"));
+  const QString nestedElement = controller.addElement(QStringLiteral("class"));
+  const QString externalElement =
+      controller.addElement(QStringLiteral("class"));
+  const QString rootFolder = controller.addBrowserFolder(
+      QStringLiteral("model"), {}, QStringLiteral("Routing scope"));
+  const QString nestedFolder = controller.addBrowserFolder(
+      QStringLiteral("folder"), rootFolder, QStringLiteral("Nested scope"));
+  const auto itemJson = [](const QString &kind, const QString &id) {
+    return QString::fromUtf8(
+        QJsonDocument(QJsonArray{QJsonObject{{QStringLiteral("kind"), kind},
+                                             {QStringLiteral("id"), id}}})
+            .toJson(QJsonDocument::Compact));
+  };
+  QVERIFY(controller.moveBrowserItems(
+      itemJson(QStringLiteral("element"), directElement),
+      QStringLiteral("folder"), rootFolder));
+  QVERIFY(controller.moveBrowserItems(
+      itemJson(QStringLiteral("element"), nestedElement),
+      QStringLiteral("folder"), nestedFolder));
+  QCOMPARE(controller.addTreeItemsToDiagram(
+               diagramId, {directElement, nestedElement, externalElement},
+               itemJson(QStringLiteral("folder"), rootFolder), 100.0, 100.0),
+           5);
+
+  const Diagram &created = controller.data().diagrams.first();
+  const auto nodeForElement = [&](const QString &elementId) {
+    const auto node = std::find_if(created.nodes.cbegin(), created.nodes.cend(),
+                                   [&](const NodePresentation &candidate) {
+                                     return candidate.elementId == elementId;
+                                   });
+    return node == created.nodes.cend() ? QString{} : node->id;
+  };
+  const auto containerForSubject = [&](const QString &subjectId) {
+    const auto container =
+        std::find_if(created.containers.cbegin(), created.containers.cend(),
+                     [&](const ContainerPresentation &candidate) {
+                       return candidate.subjectId == subjectId;
+                     });
+    return container == created.containers.cend() ? QString{} : container->id;
+  };
+  const QString directNodeId = nodeForElement(directElement);
+  const QString nestedNodeId = nodeForElement(nestedElement);
+  const QString externalNodeId = nodeForElement(externalElement);
+  const QString rootFrameId = containerForSubject(rootFolder);
+  const QString nestedFrameId = containerForSubject(nestedFolder);
+  QVERIFY(!directNodeId.isEmpty());
+  QVERIFY(!nestedNodeId.isEmpty());
+  QVERIFY(!externalNodeId.isEmpty());
+  QVERIFY(!rootFrameId.isEmpty());
+  QVERIFY(!nestedFrameId.isEmpty());
+
+  controller.updatePresentationGeometries(
+      diagramId,
+      {QVariantMap{{QStringLiteral("id"), rootFrameId},
+                   {QStringLiteral("x"), 50.0},
+                   {QStringLiteral("y"), 50.0},
+                   {QStringLiteral("width"), 650.0},
+                   {QStringLiteral("height"), 400.0}},
+       QVariantMap{{QStringLiteral("id"), nestedFrameId},
+                   {QStringLiteral("x"), 360.0},
+                   {QStringLiteral("y"), 110.0},
+                   {QStringLiteral("width"), 280.0},
+                   {QStringLiteral("height"), 250.0}},
+       QVariantMap{{QStringLiteral("id"), directNodeId},
+                   {QStringLiteral("x"), 100.0},
+                   {QStringLiteral("y"), 180.0},
+                   {QStringLiteral("width"), 120.0},
+                   {QStringLiteral("height"), 90.0}},
+       QVariantMap{{QStringLiteral("id"), nestedNodeId},
+                   {QStringLiteral("x"), 430.0},
+                   {QStringLiteral("y"), 190.0},
+                   {QStringLiteral("width"), 120.0},
+                   {QStringLiteral("height"), 90.0}},
+       QVariantMap{{QStringLiteral("id"), externalNodeId},
+                   {QStringLiteral("x"), 780.0},
+                   {QStringLiteral("y"), 190.0},
+                   {QStringLiteral("width"), 120.0},
+                   {QStringLiteral("height"), 90.0}}},
+      QStringLiteral("Prepare container routing scope test"));
+
+  const QString internalConnectorId = controller.createRelationshipWithRouting(
+      diagramId, directNodeId, nestedNodeId, QStringLiteral("dependency"),
+      QStringLiteral("straight"));
+  const QString boundaryConnectorId = controller.createRelationshipWithRouting(
+      diagramId, nestedNodeId, externalNodeId, QStringLiteral("dependency"),
+      QStringLiteral("straight"));
+  QVERIFY(!internalConnectorId.isEmpty());
+  QVERIFY(!boundaryConnectorId.isEmpty());
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  // View coordinates include the canvas's default pan. Selecting the outer
+  // frame includes connectors between descendants of nested frames.
+  canvas.press({90.0, 90.0});
+  canvas.release({90.0, 90.0});
+  QCOMPARE(canvas.selectedContainerCount(), 1);
+  QCOMPARE(canvas.selectedContainerInternalConnectorCount(), 1);
+
+  const ProjectData beforeRouting = controller.data();
+  const ConnectorPresentation boundaryBefore =
+      *findConnector(beforeRouting.diagrams.first(), boundaryConnectorId);
+  canvas.routeSelectedContainerConnectorsAroundObstacles();
+  QVERIFY(findConnector(controller.data().diagrams.first(), internalConnectorId)
+              ->routing == ConnectorRouting::Orthogonal);
+  QCOMPARE(
+      *findConnector(controller.data().diagrams.first(), boundaryConnectorId),
+      boundaryBefore);
+  controller.undo();
+  QCOMPARE(controller.data(), beforeRouting);
+
+  canvas.optimizeSelectedContainerConnectorEndsAndRoute();
+  QVERIFY(findConnector(controller.data().diagrams.first(), internalConnectorId)
+              ->routing == ConnectorRouting::Orthogonal);
+  QCOMPARE(
+      *findConnector(controller.data().diagrams.first(), boundaryConnectorId),
+      boundaryBefore);
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Optimize connector ends and route"));
+  controller.undo();
+  QCOMPARE(controller.data(), beforeRouting);
+}
+
+void DiagramCanvasTests::automaticLayoutPreviewIsScopedAndUndoable() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString nestedElement = controller.addElement(QStringLiteral("class"));
+  const QString rootElement = controller.addElement(QStringLiteral("class"));
+  const QString folder = controller.addBrowserFolder(
+      QStringLiteral("model"), {}, QStringLiteral("Layout group"));
+  const auto itemJson = [](const QString &kind, const QString &id) {
+    return QString::fromUtf8(
+        QJsonDocument(QJsonArray{QJsonObject{{QStringLiteral("kind"), kind},
+                                             {QStringLiteral("id"), id}}})
+            .toJson(QJsonDocument::Compact));
+  };
+  QVERIFY(controller.moveBrowserItems(
+      itemJson(QStringLiteral("element"), nestedElement),
+      QStringLiteral("folder"), folder));
+  QCOMPARE(controller.addTreeItemsToDiagram(
+               diagramId, {nestedElement, rootElement},
+               itemJson(QStringLiteral("folder"), folder), 300.0, 240.0),
+           3);
+
+  const Diagram &created = controller.data().diagrams.first();
+  const auto nestedNode =
+      std::find_if(created.nodes.cbegin(), created.nodes.cend(),
+                   [&](const NodePresentation &node) {
+                     return node.elementId == nestedElement;
+                   });
+  const auto rootNode =
+      std::find_if(created.nodes.cbegin(), created.nodes.cend(),
+                   [&](const NodePresentation &node) {
+                     return node.elementId == rootElement;
+                   });
+  const auto folderFrame =
+      std::find_if(created.containers.cbegin(), created.containers.cend(),
+                   [&](const ContainerPresentation &container) {
+                     return container.subjectId == folder;
+                   });
+  QVERIFY(nestedNode != created.nodes.cend());
+  QVERIFY(rootNode != created.nodes.cend());
+  QVERIFY(folderFrame != created.containers.cend());
+  const QString nestedNodeId = nestedNode->id;
+  const QString rootNodeId = rootNode->id;
+  const QString folderFrameId = folderFrame->id;
+  controller.updatePresentationGeometries(
+      diagramId,
+      {QVariantMap{{QStringLiteral("id"), folderFrameId},
+                   {QStringLiteral("x"), 500.0},
+                   {QStringLiteral("y"), 500.0},
+                   {QStringLiteral("width"), folderFrame->geometry.width()},
+                   {QStringLiteral("height"), folderFrame->geometry.height()}},
+       QVariantMap{{QStringLiteral("id"), nestedNodeId},
+                   {QStringLiteral("x"), 530.0},
+                   {QStringLiteral("y"), 560.0},
+                   {QStringLiteral("width"), nestedNode->geometry.width()},
+                   {QStringLiteral("height"), nestedNode->geometry.height()}},
+       QVariantMap{{QStringLiteral("id"), rootNodeId},
+                   {QStringLiteral("x"), 50.0},
+                   {QStringLiteral("y"), 50.0},
+                   {QStringLiteral("width"), rootNode->geometry.width()},
+                   {QStringLiteral("height"), rootNode->geometry.height()}}},
+      QStringLiteral("Prepare automatic layout test"));
+  QVERIFY(!controller
+               .createRelationship(diagramId, nestedNodeId, rootNodeId,
+                                   QStringLiteral("dependency"))
+               .isEmpty());
+  const ProjectData before = controller.data();
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  QVERIFY(canvas.previewAutomaticLayout(QStringLiteral("diagram"),
+                                        QStringLiteral("left-to-right")));
+  QVERIFY(canvas.automaticLayoutPreviewActive());
+  QCOMPARE(canvas.automaticLayoutPreviewCount(), 2);
+  // Preview is presentation-only canvas state; the model and undo stack stay
+  // untouched until the user accepts it.
+  QCOMPARE(controller.data(), before);
+  canvas.cancelAutomaticLayoutPreview();
+  QVERIFY(!canvas.automaticLayoutPreviewActive());
+  QCOMPARE(controller.data(), before);
+
+  QVERIFY(canvas.previewAutomaticLayout(QStringLiteral("diagram"),
+                                        QStringLiteral("top-to-bottom")));
+  canvas.applyAutomaticLayoutPreview();
+  QVERIFY(!canvas.automaticLayoutPreviewActive());
+  const ProjectData after = controller.data();
+  const Diagram &beforeDiagram = before.diagrams.first();
+  const Diagram &afterDiagram = after.diagrams.first();
+  const auto *beforeFrame = findContainer(beforeDiagram, folderFrameId);
+  const auto *afterFrame = findContainer(afterDiagram, folderFrameId);
+  const auto *beforeNested = findNode(beforeDiagram, nestedNodeId);
+  const auto *afterNested = findNode(afterDiagram, nestedNodeId);
+  const auto *afterRoot = findNode(afterDiagram, rootNodeId);
+  QVERIFY(beforeFrame && afterFrame && beforeNested && afterNested &&
+          afterRoot);
+  const QPointF frameDelta =
+      afterFrame->geometry.topLeft() - beforeFrame->geometry.topLeft();
+  const QPointF childDelta =
+      afterNested->geometry.topLeft() - beforeNested->geometry.topLeft();
+  QCOMPARE(childDelta, frameDelta);
+  QCOMPARE(afterFrame->childPresentationIds, beforeFrame->childPresentationIds);
+  QVERIFY(afterFrame->geometry.bottom() < afterRoot->geometry.top());
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Automatically arrange diagram elements"));
+
+  controller.undo();
+  QCOMPARE(controller.data(), before);
+  controller.redo();
+  QCOMPARE(controller.data(), after);
 }
 
 void DiagramCanvasTests::lassoStartsOnEmptyContainerBody() {
@@ -590,9 +1152,17 @@ void DiagramCanvasTests::lassoStartsOnEmptyContainerBody() {
   for (const auto &node : before.nodes)
     QVERIFY(!node.geometry.contains(sceneStart));
 
-  // Start in empty container body space and sweep across its contents. View
-  // coordinates include the canvas's default pan.
+  // A click-release on empty body space activates the frame. The same press
+  // becomes a lasso only after crossing the drag threshold.
   const QPointF viewPan(30.0, 30.0);
+  canvas.drag(sceneStart + viewPan, sceneStart + viewPan);
+  QVERIFY(canvas.containerSelected());
+  QCOMPARE(canvas.selectedContainerCount(), 1);
+  QCOMPARE(canvas.selectedNodeCount(), 0);
+  QCOMPARE(controller.data().diagrams.first(), before);
+
+  // Start in the same empty body space and sweep across its contents. View
+  // coordinates include the canvas's default pan.
   const QPointF sceneEnd(frame.right() - 8.0, frame.top() + 32.0);
   canvas.drag(sceneStart + viewPan, sceneEnd + viewPan);
 

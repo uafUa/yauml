@@ -407,7 +407,7 @@ history memory grow with total project size rather than the size of each edit.
   Persistence, schema migration, command undo/redo, validation, canvas
   interaction, and application smoke tests protect the delivered behavior.
 
-### 3.10 Automatic layout and obstacle-aware connector routing — planned
+### 3.10 Automatic layout and obstacle-aware connector routing — in progress
 
 - Reconsider automatic element arrangement and automatic connector routing as
   a dedicated diagram-productivity tranche. Keep this separate from the
@@ -424,10 +424,51 @@ history memory grow with total project size rather than the size of each edit.
 - Commit an accepted layout as one compact undoable command. Cancelling the
   preview must leave the project unchanged, and repeated layout of unchanged
   input must produce the same geometry.
-- Extend orthogonal routing with obstacle avoidance only after the layout
-  contract is settled. Automatic rerouting must preserve semantic endpoints,
-  snap-point attachment, connector annotations, and manual routes unless the
-  user explicitly includes those routes.
+- The first automatic element-layout slice is implemented. **Auto arrange**
+  operates either on the selected top-level presentations (independently per
+  direct container) or on the visible top-level diagram scope. Its built-in
+  deterministic layered layout ranks the directed relationship graph, keeps
+  strongly connected cycles in one layer, and shelf-packs disconnected
+  components. A modal preview renders the proposed geometry and live connector
+  response on the actual canvas; left-to-right and top-to-bottom directions can
+  be compared before accepting. Presentation sizes and container membership
+  are preserved, and a moved container carries its complete presentation
+  subtree. Apply creates one compact geometry command; Cancel does not touch
+  the model or undo stack.
+- The first opt-in routing slice is implemented. **Route around obstacles** is
+  available for one or several selected connectors from both the connector
+  context menu and configurable hover toolbox. A deterministic rectilinear
+  visibility graph routes around visible type, note, and unrelated container
+  rectangles with fixed clearance and a bend penalty. Existing semantic ends,
+  attachment ports, snap points, and route-relative annotations are preserved;
+  only presentation routing and bend points change. The complete selection is
+  one compact undo command, and no route changes automatically after later
+  manual movement.
+- **Route all visible connectors** is available from both the diagram canvas
+  and diagram-tab menus. Routes are calculated in stable diagram order and
+  prefer free lanes by penalizing crossings and collinear overlap with already
+  routed or untouched visible connectors. All accepted routes are committed as
+  one undoable command. Connectors for which no safe path exists keep their
+  previous route and are identified in one warning that opens the log panel.
+- A selected container exposes the same two operations with a recursive local
+  scope: **Route internal connectors around obstacles** and **Optimize internal
+  connector ends and routes** affect visible connectors whose two endpoint
+  presentations belong to that container or one of its nested containers.
+  Boundary-crossing connectors are intentionally left unchanged. Both actions
+  are available from the container context menu and configurable hover toolbox
+  and retain the existing one-command undo semantics.
+- Existing routing actions deliberately preserve their attachment sides and
+  snap points. The separate explicit **Optimize ends and route** action may
+  replace them: it compares deterministic facing-side candidates, grows the
+  presentation's shared snap-point grid when necessary, distributes endpoints,
+  and then routes around obstacles and occupied lanes. Port-grid, endpoint, and
+  bend-point changes are committed as one compact undoable command. The model
+  does not currently record whether an attachment was created manually, so the
+  user's choice of the optimizing action is the authority to change every
+  selected attachment; ordinary routing remains the non-destructive option.
+- Add preview before extending obstacle routing to automatic rerouting after
+  presentation movement. Manual routes remain untouched unless the user
+  explicitly invokes or accepts a routing command.
 - Validate the chosen approach on real large C++ diagrams before making it the
   default. Automatic layout and routing remain opt-in until their results are
   predictable enough not to damage carefully authored views.

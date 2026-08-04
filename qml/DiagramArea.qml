@@ -235,6 +235,11 @@ Rectangle {
                                     if (targetView)
                                         targetView.openPngExportDialog()
                                 }
+                                onAutomaticLayoutRequested: {
+                                    if (targetView)
+                                        targetView.openAutomaticLayoutDialog(
+                                                    "diagram")
+                                }
 
                                 MenuSeparator {}
                                 MenuItem {

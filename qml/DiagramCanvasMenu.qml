@@ -15,6 +15,7 @@ Menu {
 
     signal filterRequested()
     signal exportPngRequested()
+    signal automaticLayoutRequested()
 
     function createElement(type) {
         if (!canvasAvailable)
@@ -139,5 +140,20 @@ Menu {
         catalogId: "arrange.fitDiagram"
         text: qsTr("Fit diagram")
         onTriggered: root.canvas.fitToContent()
+    }
+    CatalogMenuItem {
+        catalogId: "arrange.autoLayoutDiagram"
+        text: qsTr("Auto arrange diagram…")
+        onTriggered: root.automaticLayoutRequested()
+    }
+    CatalogMenuItem {
+        catalogId: "diagram.routeVisibleConnectors"
+        text: qsTr("Route all visible connectors")
+        onTriggered: root.canvas.routeVisibleConnectorsAroundObstacles()
+    }
+    CatalogMenuItem {
+        catalogId: "diagram.optimizeVisibleConnectorEndsAndRoute"
+        text: qsTr("Optimize ends and route all visible connectors")
+        onTriggered: root.canvas.optimizeVisibleConnectorEndsAndRoute()
     }
 }

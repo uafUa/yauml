@@ -25,6 +25,17 @@ struct ConnectorRoutingChange {
   ConnectorRouting before;
 };
 
+// Complete presentation-only route delta used by explicit automatic routing.
+// Keeping routing mode and bend points together makes a multi-connector route
+// operation one atomic undo step without copying unrelated diagram data.
+struct ConnectorRouteChange {
+  QString connectorId;
+  ConnectorRouting beforeRouting = ConnectorRouting::Straight;
+  ConnectorRouting afterRouting = ConnectorRouting::Orthogonal;
+  QList<ConnectorBendPoint> beforeBendPoints;
+  QList<ConnectorBendPoint> afterBendPoints;
+};
+
 class CreateElementCommand final : public ProjectCommand {
 public:
   CreateElementCommand(ProjectController *controller,
@@ -810,6 +821,44 @@ private:
   QString m_diagramId;
   QList<ConnectorRoutingChange> m_changes;
   ConnectorRouting m_after;
+};
+
+class UpdateConnectorRoutesCommand final : public ProjectCommand {
+public:
+  UpdateConnectorRoutesCommand(ProjectController *controller, QString diagramId,
+                               QList<ConnectorRouteChange> changes,
+                               bool selectionWide);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, bool forward);
+
+  QString m_diagramId;
+  QList<ConnectorRouteChange> m_changes;
+};
+
+// Explicit optimized routing may change the snap grid, connector ends, and
+// bend points together. One command keeps that multi-part presentation edit
+// atomic without snapshotting unrelated diagram or semantic model data.
+class OptimizeConnectorRoutesCommand final : public ProjectCommand {
+public:
+  OptimizeConnectorRoutesCommand(
+      ProjectController *controller, QString diagramId,
+      QList<NodePortSnapPointChange> portChanges,
+      QList<ConnectorEndpointAnchorChange> anchorChanges,
+      QList<ConnectorRouteChange> routeChanges, bool selectionWide);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void applyAnchorChanges(ProjectData &project, bool forward);
+  void applyRouteChanges(ProjectData &project, bool forward);
+
+  QString m_diagramId;
+  QList<NodePortSnapPointChange> m_portChanges;
+  QList<ConnectorEndpointAnchorChange> m_anchorChanges;
+  QList<ConnectorRouteChange> m_routeChanges;
 };
 
 class UpdateConnectorBendPointsCommand final : public ProjectCommand {

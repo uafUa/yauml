@@ -1578,6 +1578,91 @@ void SetConnectorsRoutingCommand::revert(ProjectData &project) {
   }
 }
 
+UpdateConnectorRoutesCommand::UpdateConnectorRoutesCommand(
+    ProjectController *controller, QString diagramId,
+    QList<ConnectorRouteChange> changes, bool selectionWide)
+    : ProjectCommand(controller,
+                     selectionWide
+                         ? QStringLiteral("Route connectors around obstacles")
+                         : QStringLiteral("Route connector around obstacles")),
+      m_diagramId(std::move(diagramId)), m_changes(std::move(changes)) {}
+
+void UpdateConnectorRoutesCommand::execute(ProjectData &project) {
+  apply(project, true);
+}
+
+void UpdateConnectorRoutesCommand::revert(ProjectData &project) {
+  apply(project, false);
+}
+
+void UpdateConnectorRoutesCommand::apply(ProjectData &project, bool forward) {
+  auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram)
+    return;
+  for (const auto &change : m_changes) {
+    if (auto *connector = findConnector(*diagram, change.connectorId)) {
+      connector->routing = forward ? change.afterRouting : change.beforeRouting;
+      connector->bendPoints =
+          forward ? change.afterBendPoints : change.beforeBendPoints;
+    }
+  }
+}
+
+OptimizeConnectorRoutesCommand::OptimizeConnectorRoutesCommand(
+    ProjectController *controller, QString diagramId,
+    QList<NodePortSnapPointChange> portChanges,
+    QList<ConnectorEndpointAnchorChange> anchorChanges,
+    QList<ConnectorRouteChange> routeChanges, bool selectionWide)
+    : ProjectCommand(controller,
+                     selectionWide
+                         ? QStringLiteral("Optimize connector ends and routes")
+                         : QStringLiteral("Optimize connector ends and route")),
+      m_diagramId(std::move(diagramId)), m_portChanges(std::move(portChanges)),
+      m_anchorChanges(std::move(anchorChanges)),
+      m_routeChanges(std::move(routeChanges)) {}
+
+void OptimizeConnectorRoutesCommand::execute(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    applyPortSnapPointChanges(*diagram, m_portChanges, true);
+  applyAnchorChanges(project, true);
+  applyRouteChanges(project, true);
+}
+
+void OptimizeConnectorRoutesCommand::revert(ProjectData &project) {
+  applyRouteChanges(project, false);
+  applyAnchorChanges(project, false);
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    applyPortSnapPointChanges(*diagram, m_portChanges, false);
+}
+
+void OptimizeConnectorRoutesCommand::applyAnchorChanges(ProjectData &project,
+                                                        bool forward) {
+  auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram)
+    return;
+  for (const auto &change : m_anchorChanges) {
+    if (auto *connector = findConnector(*diagram, change.connectorId)) {
+      ConnectorAnchor &anchor =
+          change.source ? connector->sourceAnchor : connector->targetAnchor;
+      anchor = forward ? change.after : change.before;
+    }
+  }
+}
+
+void OptimizeConnectorRoutesCommand::applyRouteChanges(ProjectData &project,
+                                                       bool forward) {
+  auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram)
+    return;
+  for (const auto &change : m_routeChanges) {
+    if (auto *connector = findConnector(*diagram, change.connectorId)) {
+      connector->routing = forward ? change.afterRouting : change.beforeRouting;
+      connector->bendPoints =
+          forward ? change.afterBendPoints : change.beforeBendPoints;
+    }
+  }
+}
+
 UpdateConnectorBendPointsCommand::UpdateConnectorBendPointsCommand(
     ProjectController *controller, QString diagramId, QString connectorId,
     QList<ConnectorBendPoint> before, QList<ConnectorBendPoint> after,

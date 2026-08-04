@@ -1030,59 +1030,6 @@ int snapOffsetIndex(const QVector<qreal> &offsets, qreal offset) {
   return -1;
 }
 
-QVector<qreal> availableSnapOffsets(int beforePointCount, int afterPointCount,
-                                    const QList<qreal> &occupiedBeforeOffsets) {
-  const QVector<qreal> offsets = connector_ports::snapOffsets(afterPointCount);
-  QVector<bool> occupied(offsets.size(), false);
-  for (const qreal beforeOffset : occupiedBeforeOffsets) {
-    bool attached = false;
-    const qreal afterOffset = connector_ports::remapAttachedOffset(
-        beforeOffset, beforePointCount, afterPointCount, &attached);
-    if (!attached)
-      continue;
-    const int index = snapOffsetIndex(offsets, afterOffset);
-    if (index >= 0)
-      occupied[index] = true;
-  }
-
-  QVector<qreal> available;
-  available.reserve(offsets.size());
-  for (int index = 0; index < offsets.size(); ++index)
-    if (!occupied.at(index))
-      available.append(offsets.at(index));
-  return available;
-}
-
-QVector<qreal> spreadAcrossAvailableOffsets(const QVector<qreal> &available,
-                                            qsizetype requestedCount) {
-  QVector<qreal> result;
-  if (requestedCount <= 0 || available.size() < requestedCount)
-    return result;
-  result.reserve(requestedCount);
-  if (requestedCount == 1) {
-    result.append(available.at(available.size() / 2));
-    return result;
-  }
-
-  // Use the complete available range while retaining strict ordering. This
-  // avoids bunching a two-connector fan around one end merely because every
-  // side has an odd number of snap points.
-  int previousIndex = -1;
-  for (qsizetype index = 0; index < requestedCount; ++index) {
-    const qreal proportionalIndex = static_cast<qreal>(index) *
-                                    (available.size() - 1) /
-                                    (requestedCount - 1);
-    int selectedIndex = qRound(proportionalIndex);
-    selectedIndex = std::max(selectedIndex, previousIndex + 1);
-    const int lastAllowed =
-        available.size() - static_cast<int>(requestedCount - index);
-    selectedIndex = std::min(selectedIndex, lastAllowed);
-    result.append(available.at(selectedIndex));
-    previousIndex = selectedIndex;
-  }
-  return result;
-}
-
 QList<NodePortSnapPointChange>
 existingNodePortChanges(const ProjectData &project, const Diagram &before,
                         Diagram &after, const QSet<QString> &newNodeIds) {
@@ -4434,8 +4381,8 @@ void ProjectController::reattachConnectorEnds(const QString &diagramId,
     QVector<qreal> availableOffsets;
     for (; afterPointCount <= connector_ports::kMaximumSnapPointCount;
          afterPointCount += 2) {
-      availableOffsets = availableSnapOffsets(beforePointCount, afterPointCount,
-                                              occupiedBeforeOffsets);
+      availableOffsets = connector_ports::availableSnapOffsets(
+          beforePointCount, afterPointCount, occupiedBeforeOffsets);
       if (availableOffsets.size() >= endpoints.size())
         break;
     }
@@ -4465,7 +4412,8 @@ void ProjectController::reattachConnectorEnds(const QString &diagramId,
     }
 
     const QVector<qreal> assignedOffsets =
-        spreadAcrossAvailableOffsets(availableOffsets, endpoints.size());
+        connector_ports::spreadAcrossAvailableOffsets(availableOffsets,
+                                                      endpoints.size());
     Q_ASSERT(assignedOffsets.size() == endpoints.size());
     for (qsizetype index = 0; index < endpoints.size(); ++index) {
       const auto &endpoint = endpoints.at(index);
@@ -4713,6 +4661,135 @@ void ProjectController::setConnectorsRouting(const QString &diagramId,
   pushCommand(std::make_unique<SetConnectorsRoutingCommand>(
       this, diagramId, std::move(changes), parsedRouting,
       requested.size() > 1));
+}
+
+void ProjectController::applyAutomaticConnectorRoutes(
+    const QString &diagramId,
+    const QHash<QString, QList<ConnectorBendPoint>> &bendPointsByConnector) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || bendPointsByConnector.isEmpty())
+    return;
+
+  QList<ConnectorRouteChange> changes;
+  changes.reserve(bendPointsByConnector.size());
+  // Diagram order makes command contents and redo behaviour deterministic
+  // even though the caller naturally supplies routes in a hash map.
+  for (const auto &connector : diagram->connectors) {
+    const auto requested = bendPointsByConnector.constFind(connector.id);
+    if (requested == bendPointsByConnector.cend())
+      continue;
+    if (connector.routing == ConnectorRouting::Orthogonal &&
+        connector.bendPoints == requested.value())
+      continue;
+    changes.append({connector.id, connector.routing,
+                    ConnectorRouting::Orthogonal, connector.bendPoints,
+                    requested.value()});
+  }
+  if (changes.isEmpty())
+    return;
+  pushCommand(std::make_unique<UpdateConnectorRoutesCommand>(
+      this, diagramId, std::move(changes), bendPointsByConnector.size() > 1));
+}
+
+void ProjectController::applyOptimizedConnectorRoutes(
+    const QString &diagramId, const QList<OptimizedConnectorRoute> &routes,
+    const QList<OptimizedNodePortGrid> &portGrids) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || routes.isEmpty())
+    return;
+
+  QList<NodePortSnapPointChange> portChanges;
+  portChanges.reserve(portGrids.size());
+  for (const auto &grid : portGrids) {
+    const auto *node = findNode(*diagram, grid.nodeId);
+    if (!node ||
+        !connector_ports::isValidSnapPointCount(grid.horizontalPointCount) ||
+        !connector_ports::isValidSnapPointCount(grid.verticalPointCount)) {
+      continue;
+    }
+    if (node->horizontalPortSnapPoints == grid.horizontalPointCount &&
+        node->verticalPortSnapPoints == grid.verticalPointCount) {
+      continue;
+    }
+    portChanges.append(nodePortSnapPointChange(m_data, *diagram, *node,
+                                               grid.horizontalPointCount,
+                                               grid.verticalPointCount));
+  }
+
+  QList<ConnectorEndpointAnchorChange> anchorChanges;
+  QList<ConnectorRouteChange> routeChanges;
+  anchorChanges.reserve(routes.size() * 2);
+  routeChanges.reserve(routes.size());
+  for (const auto &route : routes) {
+    const auto *connector = findConnector(*diagram, route.connectorId);
+    if (!connector)
+      continue;
+    if (connector->sourceAnchor != route.sourceAnchor) {
+      anchorChanges.append(
+          {connector->id, true, connector->sourceAnchor, route.sourceAnchor});
+    }
+    if (connector->targetAnchor != route.targetAnchor) {
+      anchorChanges.append(
+          {connector->id, false, connector->targetAnchor, route.targetAnchor});
+    }
+    if (connector->routing != ConnectorRouting::Orthogonal ||
+        connector->bendPoints != route.bendPoints) {
+      routeChanges.append({connector->id, connector->routing,
+                           ConnectorRouting::Orthogonal, connector->bendPoints,
+                           route.bendPoints});
+    }
+  }
+  if (portChanges.isEmpty() && anchorChanges.isEmpty() &&
+      routeChanges.isEmpty()) {
+    return;
+  }
+  pushCommand(std::make_unique<OptimizeConnectorRoutesCommand>(
+      this, diagramId, std::move(portChanges), std::move(anchorChanges),
+      std::move(routeChanges), routes.size() > 1));
+}
+
+void ProjectController::reportConnectorRoutingFailures(
+    const QString &diagramId, const QStringList &connectorIds) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || connectorIds.isEmpty())
+    return;
+
+  QStringList labels;
+  labels.reserve(connectorIds.size());
+  for (const QString &connectorId : connectorIds) {
+    const auto *connector = findConnector(*diagram, connectorId);
+    const auto *relationship =
+        connector ? findRelationship(m_data, connector->relationshipId)
+                  : nullptr;
+    const auto *source =
+        relationship ? findElement(m_data, relationship->sourceId) : nullptr;
+    const auto *target =
+        relationship ? findElement(m_data, relationship->targetId) : nullptr;
+    if (!source || !target) {
+      labels.append(connectorId);
+      continue;
+    }
+    labels.append(
+        QStringLiteral("%1 -> %2 [%3]")
+            .arg(
+                presentation_layout::fullyQualifiedElementName(m_data, *source),
+                presentation_layout::fullyQualifiedElementName(m_data, *target),
+                connectorId));
+  }
+
+  const int failureCount = connectorIds.size();
+  const QString message =
+      (failureCount == 1
+           ? QStringLiteral(
+                 "Could not route 1 connector around obstacles; its existing "
+                 "route was retained: %1")
+           : QStringLiteral(
+                 "Could not route %1 connectors around obstacles; their "
+                 "existing routes were retained: %2")
+                 .arg(failureCount))
+          .arg(labels.join(QStringLiteral(", ")));
+  m_diagnostics.addWarning(QStringLiteral("routing"), message,
+                           connectorIds.constFirst());
 }
 
 void ProjectController::insertConnectorBendPoint(const QString &diagramId,

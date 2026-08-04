@@ -274,9 +274,29 @@
         contexts: ["diagram context menu", "diagram tab menu"],
         svg: "",
       },
+      routeVisibleConnectors: {
+        label: "Route all visible connectors around obstacles",
+        contexts: ["diagram context menu", "diagram tab menu"],
+        svg: "",
+      },
+      optimizeVisibleConnectorEndsAndRoute: {
+        label: "Optimize ends and route all visible connectors",
+        contexts: ["diagram context menu", "diagram tab menu"],
+        svg: "",
+      },
     },
 
     arrange: {
+      autoLayoutDiagram: {
+        label: "Auto arrange diagram",
+        contexts: ["diagram context menu", "diagram tab menu"],
+        svg: "",
+      },
+      autoLayoutSelection: {
+        label: "Auto arrange selection",
+        contexts: ["diagram Arrange menu", "multi-selection toolbox"],
+        svg: "",
+      },
       fitDiagram: {
         label: "Fit diagram",
         contexts: ["diagram context menu", "keyboard shortcut"],
@@ -345,6 +365,16 @@
     },
 
     presentation: {
+      routeInternalConnectors: {
+        label: "Route connectors inside container around obstacles",
+        contexts: ["container context menu", "presentation toolbox"],
+        svg: "",
+      },
+      optimizeInternalConnectorEndsAndRoute: {
+        label: "Optimize connector ends and routes inside container",
+        contexts: ["container context menu", "presentation toolbox"],
+        svg: "",
+      },
       addIncomingRelatedTypes: {
         label: "Add types that depend on this type",
         contexts: ["element context menu", "presentation toolbox"],
@@ -427,6 +457,16 @@
         label: "Use orthogonal routing",
         contexts: ["relationship Routing menu"],
         svg: "route-orthogonal.svg",
+      },
+      routeAroundObstacles: {
+        label: "Route around obstacles",
+        contexts: ["relationship Routing menu", "connector toolbox"],
+        svg: "",
+      },
+      optimizeEndsAndRoute: {
+        label: "Optimize connector ends and route",
+        contexts: ["relationship Routing menu", "connector toolbox"],
+        svg: "",
       },
       reattachFacing: {
         label: "Reattach common connector ends to facing sides",

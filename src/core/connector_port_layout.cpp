@@ -91,4 +91,62 @@ int snapPointCountForSide(const NodePresentation &node, ConnectorSide side) {
   return kDefaultSnapPointCount;
 }
 
+QVector<qreal> availableSnapOffsets(int beforePointCount, int afterPointCount,
+                                    const QList<qreal> &occupiedBeforeOffsets) {
+  const QVector<qreal> offsets = snapOffsets(afterPointCount);
+  QVector<bool> occupied(offsets.size(), false);
+  for (const qreal beforeOffset : occupiedBeforeOffsets) {
+    bool attached = false;
+    const qreal afterOffset = remapAttachedOffset(
+        beforeOffset, beforePointCount, afterPointCount, &attached);
+    if (!attached)
+      continue;
+    constexpr qreal kOffsetTolerance = 0.000001;
+    for (int index = 0; index < offsets.size(); ++index) {
+      if (std::abs(offsets.at(index) - afterOffset) <= kOffsetTolerance) {
+        occupied[index] = true;
+        break;
+      }
+    }
+  }
+
+  QVector<qreal> available;
+  available.reserve(offsets.size());
+  for (int index = 0; index < offsets.size(); ++index) {
+    if (!occupied.at(index))
+      available.append(offsets.at(index));
+  }
+  return available;
+}
+
+QVector<qreal> spreadAcrossAvailableOffsets(const QVector<qreal> &available,
+                                            qsizetype requestedCount) {
+  QVector<qreal> result;
+  if (requestedCount <= 0 || available.size() < requestedCount)
+    return result;
+  result.reserve(requestedCount);
+  if (requestedCount == 1) {
+    result.append(available.at(available.size() / 2));
+    return result;
+  }
+
+  // Use the complete available range while retaining strict ordering. This
+  // avoids bunching a two-connector fan around one end merely because every
+  // side has an odd number of snap points.
+  int previousIndex = -1;
+  for (qsizetype index = 0; index < requestedCount; ++index) {
+    const qreal proportionalIndex = static_cast<qreal>(index) *
+                                    (available.size() - 1) /
+                                    (requestedCount - 1);
+    int selectedIndex = qRound(proportionalIndex);
+    selectedIndex = std::max(selectedIndex, previousIndex + 1);
+    const int lastAllowed =
+        available.size() - static_cast<int>(requestedCount - index);
+    selectedIndex = std::min(selectedIndex, lastAllowed);
+    result.append(available.at(selectedIndex));
+    previousIndex = selectedIndex;
+  }
+  return result;
+}
+
 } // namespace yauml::connector_ports
