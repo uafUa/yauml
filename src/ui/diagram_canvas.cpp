@@ -60,7 +60,41 @@ constexpr qreal kMinimumContainerHeight =
 constexpr int kTextAtlasSize = 2048;
 constexpr int kTextAtlasPadding = 2;
 constexpr qreal kPortSnapToleranceViewPixels = 10.0;
-constexpr qreal kObstacleRoutingClearance = 12.0;
+constexpr auto kAnchorPositioningKey = "positioning";
+constexpr auto kManualAnchorPositioning = "manual";
+
+bool isManuallyPositioned(const ConnectorAnchor &anchor) {
+  return anchor.extra.value(QLatin1String(kAnchorPositioningKey)).toString() ==
+         QLatin1String(kManualAnchorPositioning);
+}
+
+void markManuallyPositioned(ConnectorAnchor &anchor) {
+  anchor.extra.insert(QLatin1String(kAnchorPositioningKey),
+                      QLatin1String(kManualAnchorPositioning));
+}
+
+bool isIncomingRelationshipEndpoint(RelationshipType /*type*/, bool source) {
+  // "Incoming" follows the semantic source -> target direction for every
+  // relationship type. Thus inheritance converges on its base type, while
+  // aggregation/composition imported from an owning field converge on the
+  // included member type even though the diamond is rendered at the source.
+  return !source;
+}
+
+ConnectorSide sideFacingPoint(const QRectF &bounds, const QPointF &point) {
+  const QPointF delta = point - bounds.center();
+  if (std::abs(delta.x()) >= std::abs(delta.y()))
+    return delta.x() >= 0.0 ? ConnectorSide::Right : ConnectorSide::Left;
+  return delta.y() >= 0.0 ? ConnectorSide::Bottom : ConnectorSide::Top;
+}
+
+qreal projectedAnchorOffset(const QRectF &bounds, const QPointF &point,
+                            ConnectorSide side) {
+  const qreal raw = side == ConnectorSide::Top || side == ConnectorSide::Bottom
+                        ? (point.x() - bounds.left()) / bounds.width()
+                        : (point.y() - bounds.top()) / bounds.height();
+  return std::clamp(raw, 0.02, 0.98);
+}
 
 struct RenderElementStyle {
   bool customized = false;
@@ -1993,6 +2027,13 @@ int DiagramCanvas::selectedContainerCount() const {
 int DiagramCanvas::selectedContainerInternalConnectorCount() const {
   return visibleConnectorIdsInsideContainer(m_selectedContainer).size();
 }
+int DiagramCanvas::selectedContainerChildPresentationCount() const {
+  const auto *currentDiagram = diagram();
+  const auto *container =
+      currentDiagram ? findContainer(*currentDiagram, m_selectedContainer)
+                     : nullptr;
+  return container ? container->childPresentationIds.size() : 0;
+}
 int DiagramCanvas::selectedConnectorCount() const {
   return m_selectedConnectors.size();
 }
@@ -2809,6 +2850,7 @@ void DiagramCanvas::commitEndpointDrag() {
     return;
   }
   const bool source = m_interaction == Interaction::MoveSourcePort;
+  markManuallyPositioned(m_endpointDragAnchor);
   m_project->reconnectRelationshipAtAnchor(m_diagramId, m_selectedConnector,
                                            m_endpointDragTargetNode, source,
                                            m_endpointDragAnchor);
@@ -3356,6 +3398,9 @@ void DiagramCanvas::commitConnectorGesture(const QPointF &scenePoint,
     cancelConnectorGesture();
     return;
   }
+
+  markManuallyPositioned(m_connectorGestureSourceAnchor);
+  markManuallyPositioned(m_connectorGestureTargetAnchor);
 
   const QString connectorId = m_project->createRelationshipAtAnchors(
       m_diagramId, m_connectorGestureSourceNode, targetNode->id,
@@ -4816,6 +4861,14 @@ void DiagramCanvas::updateLassoSelection(const QPointF &scenePoint) {
   for (const auto &note : d->notes)
     if (m_lassoRect.intersects(noteGeometry(note)))
       hitNotes.insert(note.id);
+  QSet<QString> hitConnectors;
+  const ui::DiagramClipLayout clipLayout(*d, m_previewGeometry);
+  for (const auto &connector : d->connectors) {
+    if (connectorPassesFilter(connector, clipLayout) &&
+        polylineIntersectsRect(connectorRoute(connector).points, m_lassoRect)) {
+      hitConnectors.insert(connector.id);
+    }
+  }
 
   QSet<QString> nextNodes;
   QStringList nextOrder;
@@ -4834,55 +4887,41 @@ void DiagramCanvas::updateLassoSelection(const QPointF &scenePoint) {
     nextActiveNote = m_lassoBaseNote;
   }
 
-  if (!hitNodes.isEmpty() || !hitNotes.isEmpty()) {
-    // Rectangles are the primary lasso target. A connector crossing the same
-    // rectangle is deliberately ignored so ordinary diagram selection does
-    // not unexpectedly accumulate relationships.
-    for (const auto &node : d->nodes) {
-      if (!hitNodes.contains(node.id))
-        continue;
-      if (toggle && nextNodes.contains(node.id)) {
-        nextNodes.remove(node.id);
-        nextOrder.removeAll(node.id);
-      } else if (!nextNodes.contains(node.id)) {
-        nextNodes.insert(node.id);
-        nextOrder.append(node.id);
-      }
+  // Presentations and connectors form independent selections. Their commands
+  // are disjoint, so a single lasso can intentionally collect both kinds.
+  for (const auto &node : d->nodes) {
+    if (!hitNodes.contains(node.id))
+      continue;
+    if (toggle && nextNodes.contains(node.id)) {
+      nextNodes.remove(node.id);
+      nextOrder.removeAll(node.id);
+    } else if (!nextNodes.contains(node.id)) {
+      nextNodes.insert(node.id);
+      nextOrder.append(node.id);
     }
-    for (const auto &note : d->notes) {
-      if (!hitNotes.contains(note.id))
-        continue;
-      if (toggle && nextNotes.contains(note.id)) {
-        nextNotes.remove(note.id);
-        if (nextActiveNote == note.id)
-          nextActiveNote.clear();
-      } else if (!nextNotes.contains(note.id)) {
-        nextNotes.insert(note.id);
-        nextActiveNote = note.id;
-      }
+  }
+  for (const auto &note : d->notes) {
+    if (!hitNotes.contains(note.id))
+      continue;
+    if (toggle && nextNotes.contains(note.id)) {
+      nextNotes.remove(note.id);
+      if (nextActiveNote == note.id)
+        nextActiveNote.clear();
+    } else if (!nextNotes.contains(note.id)) {
+      nextNotes.insert(note.id);
+      nextActiveNote = note.id;
     }
-    if (!toggle && !add) {
-      nextConnectors.clear();
-      nextActiveConnector.clear();
-    }
-  } else {
-    // Connector selection is a fallback used only when the lasso contains no
-    // visible node rectangles. Text annotations do not count: the routed line
-    // itself must cross the selection rectangle.
-    const ui::DiagramClipLayout clipLayout(*d, m_previewGeometry);
-    for (const auto &connector : d->connectors) {
-      if (!connectorPassesFilter(connector, clipLayout) ||
-          !polylineIntersectsRect(connectorRoute(connector).points,
-                                  m_lassoRect))
-        continue;
-      if (toggle && nextConnectors.contains(connector.id)) {
-        nextConnectors.remove(connector.id);
-        if (nextActiveConnector == connector.id)
-          nextActiveConnector.clear();
-      } else if (!nextConnectors.contains(connector.id)) {
-        nextConnectors.insert(connector.id);
-        nextActiveConnector = connector.id;
-      }
+  }
+  for (const auto &connector : d->connectors) {
+    if (!hitConnectors.contains(connector.id))
+      continue;
+    if (toggle && nextConnectors.contains(connector.id)) {
+      nextConnectors.remove(connector.id);
+      if (nextActiveConnector == connector.id)
+        nextActiveConnector.clear();
+    } else if (!nextConnectors.contains(connector.id)) {
+      nextConnectors.insert(connector.id);
+      nextActiveConnector = connector.id;
     }
   }
 
@@ -5494,16 +5533,74 @@ void DiagramCanvas::routeSelectedContainerConnectorsAroundObstacles() {
 }
 
 void DiagramCanvas::optimizeSelectedConnectorEndsAndRoute() {
-  optimizeConnectorEndsAndRoute(selectedConnectorIdsInDiagramOrder());
+  optimizeConnectorEndsAndRoute(selectedConnectorIdsInDiagramOrder(),
+                                QStringLiteral("snap"));
 }
 
 void DiagramCanvas::optimizeVisibleConnectorEndsAndRoute() {
-  optimizeConnectorEndsAndRoute(visibleConnectorIdsInDiagramOrder());
+  optimizeConnectorEndsAndRoute(visibleConnectorIdsInDiagramOrder(),
+                                QStringLiteral("snap"));
 }
 
-void DiagramCanvas::optimizeSelectedContainerConnectorEndsAndRoute() {
+void DiagramCanvas::optimizeSelectedContainerConnectorEndsAndRoute(
+    bool collapseTargetEndpointsByRelationshipType) {
   optimizeConnectorEndsAndRoute(
-      visibleConnectorIdsInsideContainer(m_selectedContainer));
+      visibleConnectorIdsInsideContainer(m_selectedContainer),
+      QStringLiteral("snap"), collapseTargetEndpointsByRelationshipType);
+}
+
+QStringList
+DiagramCanvas::connectorIdsForOptimizationScope(const QString &scope) const {
+  if (scope == QStringLiteral("selection"))
+    return selectedConnectorIdsInDiagramOrder();
+  if (scope == QStringLiteral("container"))
+    return visibleConnectorIdsInsideContainer(m_selectedContainer);
+  if (scope == QStringLiteral("visible"))
+    return visibleConnectorIdsInDiagramOrder();
+  return {};
+}
+
+int DiagramCanvas::connectorOptimizationScopeCount(const QString &scope) const {
+  return connectorIdsForOptimizationScope(scope).size();
+}
+
+DiagramCanvas::ConnectorRoutingOptions
+DiagramCanvas::connectorRoutingOptions(const QVariantMap &options) {
+  ConnectorRoutingOptions result;
+  result.endpointClearance = std::clamp(
+      options.value(QStringLiteral("endpointClearance"), 12).toReal(), 0.0,
+      200.0);
+  result.obstacleClearance = std::clamp(
+      options.value(QStringLiteral("obstacleClearance"), 12).toReal(), 0.0,
+      100.0);
+  result.maximumAddedSnapPoints = std::clamp(
+      options.value(QStringLiteral("maximumAddedSnapPoints"), 8).toInt(), 0,
+      16);
+  result.maximumAddedSnapPoints -= result.maximumAddedSnapPoints % 2;
+  return result;
+}
+
+void DiagramCanvas::optimizeConnectors(const QString &scope,
+                                       const QVariantMap &options) {
+  const QStringList connectorIds = connectorIdsForOptimizationScope(scope);
+  if (connectorIds.isEmpty())
+    return;
+  const QString endpointMode =
+      options.value(QStringLiteral("endpointMode"), QStringLiteral("snap"))
+          .toString();
+  const ConnectorRoutingOptions routingOptions =
+      connectorRoutingOptions(options);
+  if (endpointMode == QStringLiteral("preserve")) {
+    routeConnectorsAroundObstacles(connectorIds, routingOptions);
+    return;
+  }
+  optimizeConnectorEndsAndRoute(
+      connectorIds,
+      endpointMode == QStringLiteral("free") ? QStringLiteral("free")
+                                             : QStringLiteral("snap"),
+      options.value(QStringLiteral("collapseIncoming"), false).toBool(),
+      options.value(QStringLiteral("preserveManual"), true).toBool(),
+      routingOptions);
 }
 
 QStringList DiagramCanvas::visibleConnectorIdsInDiagramOrder() const {
@@ -5565,8 +5662,8 @@ QStringList DiagramCanvas::visibleConnectorIdsInsideContainer(
 ui::OrthogonalObstacleRoutingRequest DiagramCanvas::obstacleRoutingRequest(
     const NodePresentation &sourceNode, const NodePresentation &targetNode,
     const QPointF &source, const QPointF &target, ConnectorSide sourceSide,
-    ConnectorSide targetSide,
-    const QVector<QVector<QPointF>> &occupiedRoutes) const {
+    ConnectorSide targetSide, const QVector<QVector<QPointF>> &occupiedRoutes,
+    const ConnectorRoutingOptions &options) const {
   ui::OrthogonalObstacleRoutingRequest request;
   request.source = source;
   request.target = target;
@@ -5574,8 +5671,9 @@ ui::OrthogonalObstacleRoutingRequest DiagramCanvas::obstacleRoutingRequest(
   request.targetBounds = nodeGeometry(targetNode);
   request.sourceSide = sourceSide;
   request.targetSide = targetSide;
-  request.clearance = kObstacleRoutingClearance;
-  request.bendPenalty = kObstacleRoutingClearance * 2.0;
+  request.endpointClearance = options.endpointClearance;
+  request.clearance = options.obstacleClearance;
+  request.bendPenalty = options.endpointClearance * 2.0;
   request.occupiedRoutes = occupiedRoutes;
 
   const auto *diagramData = diagram();
@@ -5609,7 +5707,7 @@ ui::OrthogonalObstacleRoutingRequest DiagramCanvas::obstacleRoutingRequest(
 }
 
 void DiagramCanvas::routeConnectorsAroundObstacles(
-    const QStringList &connectorIds) {
+    const QStringList &connectorIds, const ConnectorRoutingOptions &options) {
   const auto *diagramData = diagram();
   if (!m_project || !diagramData || connectorIds.isEmpty())
     return;
@@ -5645,7 +5743,7 @@ void DiagramCanvas::routeConnectorsAroundObstacles(
     }
     const ui::OrthogonalObstacleRoutingRequest request = obstacleRoutingRequest(
         *sourceNode, *targetNode, endpoints.source, endpoints.target,
-        endpoints.sourceSide, endpoints.targetSide, occupiedRoutes);
+        endpoints.sourceSide, endpoints.targetSide, occupiedRoutes, options);
 
     const QVector<QPointF> route =
         ui::routeOrthogonallyAroundObstacles(request);
@@ -5677,7 +5775,9 @@ void DiagramCanvas::routeConnectorsAroundObstacles(
 }
 
 void DiagramCanvas::optimizeConnectorEndsAndRoute(
-    const QStringList &connectorIds) {
+    const QStringList &connectorIds, const QString &endpointMode,
+    bool collapseTargetEndpointsByRelationshipType,
+    bool preserveManualEndpoints, const ConnectorRoutingOptions &options) {
   const auto *diagramData = diagram();
   if (!m_project || !diagramData || connectorIds.isEmpty())
     return;
@@ -5688,11 +5788,23 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
     const NodePresentation *targetNode = nullptr;
     ConnectorAnchor sourceAnchor;
     ConnectorAnchor targetAnchor;
+    int sourcePointCount = connector_ports::kDefaultSnapPointCount;
+    int targetPointCount = connector_ports::kDefaultSnapPointCount;
+    bool sourceFixed = false;
+    bool targetFixed = false;
+    int collapseGroup = -1;
+    bool collapsedEndpointIsSource = false;
+    QString collapseKey;
   };
+
+  const bool createSnapPoints = endpointMode != QStringLiteral("free");
   struct EndpointPlan {
     qsizetype routeIndex = -1;
     bool source = false;
     const NodePresentation *remoteNode = nullptr;
+    qreal preferredOffset = 0.5;
+    int preferredPointCount = connector_ports::kDefaultSnapPointCount;
+    int collapseGroup = -1;
   };
   struct EndpointGroup {
     const NodePresentation *node = nullptr;
@@ -5701,6 +5813,38 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
   };
 
   const QSet<QString> requested(connectorIds.cbegin(), connectorIds.cend());
+  QHash<QString, QList<qreal>> occupiedOffsetCache;
+  const auto occupiedOffsetsFor = [&](const NodePresentation &node,
+                                      ConnectorSide side) {
+    const QString cacheKey =
+        node.id + u'|' + QString::number(static_cast<int>(side));
+    const auto cached = occupiedOffsetCache.constFind(cacheKey);
+    if (cached != occupiedOffsetCache.cend())
+      return cached.value();
+    QList<qreal> offsets;
+    const int pointCount = connector_ports::snapPointCountForSide(node, side);
+    for (const auto &existing : diagramData->connectors) {
+      if (requested.contains(existing.id))
+        continue;
+      const auto appendIfOccupied = [&](bool source) {
+        const auto *endpoint = endpointNode(existing, source);
+        const ConnectorAnchor &anchor =
+            source ? existing.sourceAnchor : existing.targetAnchor;
+        if (!endpoint || endpoint->id != node.id || anchor.side != side)
+          return;
+        bool attached = false;
+        connector_ports::remapAttachedOffset(anchor.offset, pointCount,
+                                             pointCount, &attached);
+        if (attached)
+          offsets.append(anchor.offset);
+      };
+      appendIfOccupied(true);
+      appendIfOccupied(false);
+    }
+    occupiedOffsetCache.insert(cacheKey, offsets);
+    return offsets;
+  };
+
   QVector<QVector<QPointF>> provisionalOccupiedRoutes;
   provisionalOccupiedRoutes.reserve(diagramData->connectors.size());
   for (const auto &connector : diagramData->connectors) {
@@ -5714,6 +5858,26 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
   constexpr std::array<ConnectorSide, 4> sides{
       ConnectorSide::Top, ConnectorSide::Right, ConnectorSide::Bottom,
       ConnectorSide::Left};
+  QHash<QString, int> incomingCollapseCounts;
+  if (collapseTargetEndpointsByRelationshipType) {
+    for (const QString &connectorId : connectorIds) {
+      const auto *connector = findConnector(*diagramData, connectorId);
+      const auto *relationship =
+          connector
+              ? findRelationship(m_project->data(), connector->relationshipId)
+              : nullptr;
+      if (!connector || !relationship)
+        continue;
+      const bool source =
+          isIncomingRelationshipEndpoint(relationship->type, true);
+      const auto *incomingNode = endpointNode(*connector, source);
+      if (!incomingNode)
+        continue;
+      const QString key = incomingNode->id + u'|' +
+                          QString::number(static_cast<int>(relationship->type));
+      ++incomingCollapseCounts[key];
+    }
+  }
   QList<RoutePlan> plans;
   QStringList failedConnectorIds;
   for (const QString &connectorId : connectorIds) {
@@ -5727,10 +5891,43 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
       continue;
     }
 
-    qreal bestCost = std::numeric_limits<qreal>::infinity();
-    ConnectorAnchor bestSource;
-    ConnectorAnchor bestTarget;
-    QVector<QPointF> bestRoute;
+    struct Candidate {
+      bool valid = false;
+      ConnectorAnchor sourceAnchor;
+      ConnectorAnchor targetAnchor;
+      int sourcePointCount = connector_ports::kDefaultSnapPointCount;
+      int targetPointCount = connector_ports::kDefaultSnapPointCount;
+      int addedPointCount = 0;
+      ui::OrthogonalRouteMetrics metrics;
+      QVector<QPointF> route;
+    };
+    Candidate best;
+    const auto *relationship =
+        findRelationship(m_project->data(), connector->relationshipId);
+    const bool incomingIsSource =
+        relationship &&
+        isIncomingRelationshipEndpoint(relationship->type, true);
+    const NodePresentation *incomingNode =
+        incomingIsSource ? sourceNode : targetNode;
+    const QString collapseKeyCandidate =
+        relationship ? incomingNode->id + u'|' +
+                           QString::number(static_cast<int>(relationship->type))
+                     : QString{};
+    const bool collapseGroupExists =
+        incomingCollapseCounts.value(collapseKeyCandidate) >= 2;
+    const bool collapseSource = collapseGroupExists && incomingIsSource;
+    const bool collapseTarget =
+        collapseGroupExists && relationship && !incomingIsSource;
+    const bool sourceFixed =
+        preserveManualEndpoints &&
+        isManuallyPositioned(connector->sourceAnchor) &&
+        connector->sourceAnchor.side != ConnectorSide::Automatic &&
+        !collapseSource;
+    const bool targetFixed =
+        preserveManualEndpoints &&
+        isManuallyPositioned(connector->targetAnchor) &&
+        connector->targetAnchor.side != ConnectorSide::Automatic &&
+        !collapseTarget;
     const QRectF sourceBounds = nodeGeometry(*sourceNode);
     const QRectF targetBounds = nodeGeometry(*targetNode);
     QList<std::pair<ConnectorSide, ConnectorSide>> sidePairs;
@@ -5759,38 +5956,296 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
         sidePairs.append(horizontal);
       }
     }
-    for (const auto &[sourceSide, targetSide] : std::as_const(sidePairs)) {
-      const ConnectorAnchor sourceAnchor{sourceSide, 0.5};
-      const ConnectorAnchor targetAnchor{targetSide, 0.5};
-      const QPointF source = connectorAnchorPoint(sourceBounds, sourceAnchor,
-                                                  targetBounds.center());
-      const QPointF target = connectorAnchorPoint(targetBounds, targetAnchor,
-                                                  sourceBounds.center());
-      const auto request = obstacleRoutingRequest(
-          *sourceNode, *targetNode, source, target, sourceSide, targetSide,
-          provisionalOccupiedRoutes);
-      const QVector<QPointF> route =
-          ui::routeOrthogonallyAroundObstacles(request);
-      const qreal cost = ui::orthogonalRouteCost(
-          route, provisionalOccupiedRoutes, request.bendPenalty,
-          request.crossingPenalty, request.sharedSegmentPenalty);
-      constexpr qreal kCostTolerance = 0.000001;
-      if (cost + kCostTolerance >= bestCost)
-        continue;
-      bestCost = cost;
-      bestSource = sourceAnchor;
-      bestTarget = targetAnchor;
-      bestRoute = route;
+    if (sourceFixed || targetFixed) {
+      // A manually positioned endpoint may face away from the other node and
+      // therefore not occur in the two normal facing-axis candidates. Search
+      // every compatible counterpart while keeping the manual side exact.
+      sidePairs.clear();
+      for (ConnectorSide sourceSide : sides) {
+        if (sourceFixed && sourceSide != connector->sourceAnchor.side)
+          continue;
+        for (ConnectorSide targetSide : sides) {
+          if (targetFixed && targetSide != connector->targetAnchor.side)
+            continue;
+          if (sourceNode != targetNode || sourceSide != targetSide)
+            sidePairs.emplaceBack(sourceSide, targetSide);
+        }
+      }
     }
-    if (bestRoute.isEmpty()) {
+    sidePairs.removeIf([&](const auto &pair) {
+      return (sourceFixed && pair.first != connector->sourceAnchor.side) ||
+             (targetFixed && pair.second != connector->targetAnchor.side);
+    });
+    constexpr qreal kCostTolerance = 0.000001;
+    const auto routeBetter = [&](const Candidate &left,
+                                 const Candidate &right) {
+      if (!left.valid)
+        return false;
+      if (!right.valid)
+        return true;
+      if (left.metrics.bendCount != right.metrics.bendCount)
+        return left.metrics.bendCount < right.metrics.bendCount;
+      if (left.addedPointCount != right.addedPointCount)
+        return left.addedPointCount < right.addedPointCount;
+      if (left.metrics.length + kCostTolerance < right.metrics.length)
+        return true;
+      return qAbs(left.metrics.length - right.metrics.length) <=
+                 kCostTolerance &&
+             left.metrics.conflictCost + kCostTolerance <
+                 right.metrics.conflictCost;
+    };
+    const auto candidateOffsets = [&](const NodePresentation &node,
+                                      const QRectF &bounds,
+                                      const QPointF &remoteCenter,
+                                      ConnectorSide side, int pointCount) {
+      const int beforePointCount =
+          connector_ports::snapPointCountForSide(node, side);
+      QVector<qreal> available = connector_ports::availableSnapOffsets(
+          beforePointCount, pointCount, occupiedOffsetsFor(node, side));
+      const qreal projectedOffset =
+          side == ConnectorSide::Top || side == ConnectorSide::Bottom
+              ? (remoteCenter.x() - bounds.left()) / bounds.width()
+              : (remoteCenter.y() - bounds.top()) / bounds.height();
+      if (!createSnapPoints)
+        return QVector<qreal>{std::clamp(projectedOffset, 0.02, 0.98)};
+      std::stable_sort(
+          available.begin(), available.end(), [&](qreal left, qreal right) {
+            const qreal leftDistance = std::abs(left - projectedOffset);
+            const qreal rightDistance = std::abs(right - projectedOffset);
+            if (!qFuzzyCompare(leftDistance, rightDistance))
+              return leftDistance < rightDistance;
+            return left < right;
+          });
+      // The closest marker normally produces the cleanest fan-out.
+      // Retaining its two neighbours lets the obstacle router choose
+      // another lane without multiplying route searches on large diagrams.
+      const qsizetype candidateLimit = pointCount == beforePointCount ? 3 : 1;
+      if (available.size() > candidateLimit)
+        available.resize(candidateLimit);
+      return available;
+    };
+    const int maximumAdaptiveSnapGrowthSteps =
+        options.maximumAddedSnapPoints / 2;
+    for (const auto &[sourceSide, targetSide] : std::as_const(sidePairs)) {
+      const int sourceBeforePointCount =
+          connector_ports::snapPointCountForSide(*sourceNode, sourceSide);
+      const int targetBeforePointCount =
+          connector_ports::snapPointCountForSide(*targetNode, targetSide);
+      const int maximumSourceGrowth = std::min(
+          sourceFixed || !createSnapPoints ? 0 : maximumAdaptiveSnapGrowthSteps,
+          (connector_ports::kMaximumSnapPointCount - sourceBeforePointCount) /
+              2);
+      const int maximumTargetGrowth = std::min(
+          targetFixed || !createSnapPoints ? 0 : maximumAdaptiveSnapGrowthSteps,
+          (connector_ports::kMaximumSnapPointCount - targetBeforePointCount) /
+              2);
+      Candidate pairBest;
+      QHash<int, QVector<qreal>> sourceOffsetsByCount;
+      QHash<int, QVector<qreal>> targetOffsetsByCount;
+      const auto offsetsForCount =
+          [&](QHash<int, QVector<qreal>> &cache, const NodePresentation &node,
+              const QRectF &bounds, const QPointF &remoteCenter,
+              ConnectorSide side, int pointCount) {
+            const auto cached = cache.constFind(pointCount);
+            if (cached != cache.cend())
+              return cached.value();
+            const QVector<qreal> offsets =
+                candidateOffsets(node, bounds, remoteCenter, side, pointCount);
+            cache.insert(pointCount, offsets);
+            return offsets;
+          };
+      // Search by increasing number of added marker pairs. This makes the
+      // first route at any bend count the one requiring the smallest grid.
+      // Four denser grids per end add up to eight positions while keeping
+      // whole-diagram optimization bounded on large imported models.
+      for (int totalGrowth = 0;
+           totalGrowth <= maximumSourceGrowth + maximumTargetGrowth;
+           ++totalGrowth) {
+        Candidate layerBest;
+        const int firstSourceGrowth =
+            std::max(0, totalGrowth - maximumTargetGrowth);
+        const int lastSourceGrowth = std::min(maximumSourceGrowth, totalGrowth);
+        for (int sourceGrowth = firstSourceGrowth;
+             sourceGrowth <= lastSourceGrowth; ++sourceGrowth) {
+          const int targetGrowth = totalGrowth - sourceGrowth;
+          const int sourcePointCount =
+              sourceBeforePointCount + sourceGrowth * 2;
+          const int targetPointCount =
+              targetBeforePointCount + targetGrowth * 2;
+          const QVector<qreal> sourceOffsets =
+              sourceFixed ? QVector<qreal>{connector->sourceAnchor.offset}
+                          : offsetsForCount(sourceOffsetsByCount, *sourceNode,
+                                            sourceBounds, targetBounds.center(),
+                                            sourceSide, sourcePointCount);
+          const QVector<qreal> targetOffsets =
+              targetFixed ? QVector<qreal>{connector->targetAnchor.offset}
+                          : offsetsForCount(targetOffsetsByCount, *targetNode,
+                                            targetBounds, sourceBounds.center(),
+                                            targetSide, targetPointCount);
+          for (const qreal sourceOffset : sourceOffsets) {
+            for (const qreal targetOffset : targetOffsets) {
+              Candidate candidate;
+              candidate.sourceAnchor = connector->sourceAnchor;
+              candidate.targetAnchor = connector->targetAnchor;
+              candidate.sourceAnchor.side = sourceSide;
+              candidate.sourceAnchor.offset = sourceOffset;
+              candidate.targetAnchor.side = targetSide;
+              candidate.targetAnchor.offset = targetOffset;
+              if (!sourceFixed)
+                candidate.sourceAnchor.extra.remove(
+                    QLatin1String(kAnchorPositioningKey));
+              if (!targetFixed)
+                candidate.targetAnchor.extra.remove(
+                    QLatin1String(kAnchorPositioningKey));
+              candidate.sourcePointCount = sourcePointCount;
+              candidate.targetPointCount = targetPointCount;
+              candidate.addedPointCount = totalGrowth * 2;
+              const QPointF source = connectorAnchorPoint(
+                  sourceBounds, candidate.sourceAnchor, targetBounds.center());
+              const QPointF target = connectorAnchorPoint(
+                  targetBounds, candidate.targetAnchor, sourceBounds.center());
+              const auto request = obstacleRoutingRequest(
+                  *sourceNode, *targetNode, source, target, sourceSide,
+                  targetSide, provisionalOccupiedRoutes, options);
+              candidate.route = ui::routeOrthogonallyAroundObstacles(request);
+              candidate.metrics = ui::orthogonalRouteMetrics(
+                  candidate.route, provisionalOccupiedRoutes,
+                  request.crossingPenalty, request.sharedSegmentPenalty);
+              candidate.valid = candidate.metrics.valid;
+              if (routeBetter(candidate, layerBest))
+                layerBest = std::move(candidate);
+            }
+          }
+        }
+        if (routeBetter(layerBest, pairBest))
+          pairBest = std::move(layerBest);
+        // Opposing sides need at least two turns unless the two ports already
+        // line up. Once that structural optimum is reached, denser grids can
+        // only shorten the line, which is not sufficient reason to add them.
+        if (pairBest.valid && pairBest.metrics.bendCount <= 2)
+          break;
+      }
+      // sidePairs lists the dominant facing pair first. Equal candidates do
+      // not replace the current best, so facing remains a deterministic
+      // tie-breaker while a genuinely simpler secondary-axis route still wins.
+      if (routeBetter(pairBest, best))
+        best = std::move(pairBest);
+    }
+    if (!best.valid || best.route.isEmpty()) {
       failedConnectorIds.append(connectorId);
       const QVector<QPointF> existingRoute = connectorRoute(*connector).points;
       if (existingRoute.size() >= 2)
         provisionalOccupiedRoutes.append(existingRoute);
       continue;
     }
-    plans.append({connector, sourceNode, targetNode, bestSource, bestTarget});
-    provisionalOccupiedRoutes.append(bestRoute);
+    RoutePlan plan{connector,
+                   sourceNode,
+                   targetNode,
+                   best.sourceAnchor,
+                   best.targetAnchor,
+                   best.sourcePointCount,
+                   best.targetPointCount,
+                   sourceFixed,
+                   targetFixed};
+    if (collapseSource || collapseTarget) {
+      plan.collapseGroup = static_cast<int>(relationship->type);
+      plan.collapsedEndpointIsSource = collapseSource;
+      plan.collapseKey = collapseKeyCandidate;
+    }
+    plans.append(std::move(plan));
+    provisionalOccupiedRoutes.append(best.route);
+  }
+
+  // Collapse is defined across the complete incoming semantic group, not only
+  // endpoints which happened to choose the same side independently. Choose a
+  // common facing side from the remote presentations' centroid, then let the
+  // normal slot allocator place the whole group at one offset. The explicit
+  // collapse request takes precedence over manual-position preservation on
+  // this one end; all unrelated manual endpoints remain fixed.
+  QHash<QString, QList<qsizetype>> collapsePlans;
+  for (qsizetype index = 0; index < plans.size(); ++index) {
+    if (!plans.at(index).collapseKey.isEmpty())
+      collapsePlans[plans.at(index).collapseKey].append(index);
+  }
+  for (const QList<qsizetype> &indices : std::as_const(collapsePlans)) {
+    if (indices.size() < 2) {
+      RoutePlan &plan = plans[indices.constFirst()];
+      ConnectorAnchor &anchor = plan.collapsedEndpointIsSource
+                                    ? plan.sourceAnchor
+                                    : plan.targetAnchor;
+      const ConnectorAnchor &original = plan.collapsedEndpointIsSource
+                                            ? plan.connector->sourceAnchor
+                                            : plan.connector->targetAnchor;
+      if (preserveManualEndpoints && isManuallyPositioned(original)) {
+        anchor = original;
+        if (plan.collapsedEndpointIsSource)
+          plan.sourceFixed = true;
+        else
+          plan.targetFixed = true;
+      }
+      plan.collapseGroup = -1;
+      plan.collapseKey.clear();
+      continue;
+    }
+    const RoutePlan &firstPlan = plans.at(indices.constFirst());
+    const NodePresentation *incomingNode = firstPlan.collapsedEndpointIsSource
+                                               ? firstPlan.sourceNode
+                                               : firstPlan.targetNode;
+    QPointF remoteCentroid;
+    for (const qsizetype index : indices) {
+      const RoutePlan &plan = plans.at(index);
+      const NodePresentation *remoteNode =
+          plan.collapsedEndpointIsSource ? plan.targetNode : plan.sourceNode;
+      remoteCentroid += nodeGeometry(*remoteNode).center();
+    }
+    remoteCentroid /= indices.size();
+    const QRectF incomingBounds = nodeGeometry(*incomingNode);
+    const ConnectorSide commonSide =
+        sideFacingPoint(incomingBounds, remoteCentroid);
+    const qreal commonOffset =
+        projectedAnchorOffset(incomingBounds, remoteCentroid, commonSide);
+    const int pointCount =
+        connector_ports::snapPointCountForSide(*incomingNode, commonSide);
+    for (const qsizetype index : indices) {
+      RoutePlan &plan = plans[index];
+      ConnectorAnchor &anchor = plan.collapsedEndpointIsSource
+                                    ? plan.sourceAnchor
+                                    : plan.targetAnchor;
+      anchor.side = commonSide;
+      anchor.offset = commonOffset;
+      anchor.extra.remove(QLatin1String(kAnchorPositioningKey));
+      if (plan.collapsedEndpointIsSource)
+        plan.sourcePointCount = pointCount;
+      else
+        plan.targetPointCount = pointCount;
+
+      // Changing the common end's side after individual route planning can
+      // leave the remote end paired with the old axis, creating the small hook
+      // reported for otherwise straight bundles. Re-face a non-manual remote
+      // end toward the shared presentation; an explicitly preserved manual end
+      // remains authoritative and may intentionally keep such a bend.
+      const bool remoteFixed =
+          plan.collapsedEndpointIsSource ? plan.targetFixed : plan.sourceFixed;
+      if (!remoteFixed) {
+        const NodePresentation *remoteNode =
+            plan.collapsedEndpointIsSource ? plan.targetNode : plan.sourceNode;
+        const QRectF remoteBounds = nodeGeometry(*remoteNode);
+        ConnectorAnchor &remoteAnchor = plan.collapsedEndpointIsSource
+                                            ? plan.targetAnchor
+                                            : plan.sourceAnchor;
+        remoteAnchor.side =
+            sideFacingPoint(remoteBounds, incomingBounds.center());
+        remoteAnchor.offset = projectedAnchorOffset(
+            remoteBounds, incomingBounds.center(), remoteAnchor.side);
+        remoteAnchor.extra.remove(QLatin1String(kAnchorPositioningKey));
+        const int remotePointCount = connector_ports::snapPointCountForSide(
+            *remoteNode, remoteAnchor.side);
+        if (plan.collapsedEndpointIsSource)
+          plan.targetPointCount = remotePointCount;
+        else
+          plan.sourcePointCount = remotePointCount;
+      }
+    }
   }
 
   QSet<QString> plannedConnectorIds;
@@ -5799,6 +6254,8 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
     const auto &plan = plans.at(index);
     plannedConnectorIds.insert(plan.connector->id);
     const auto appendEndpoint = [&](bool source) {
+      if ((source && plan.sourceFixed) || (!source && plan.targetFixed))
+        return;
       const NodePresentation *node = source ? plan.sourceNode : plan.targetNode;
       const NodePresentation *remoteNode =
           source ? plan.targetNode : plan.sourceNode;
@@ -5809,7 +6266,16 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
       auto &group = groups[key];
       group.node = node;
       group.side = side;
-      group.endpoints.append({index, source, remoteNode});
+      const ConnectorAnchor &anchor =
+          source ? plan.sourceAnchor : plan.targetAnchor;
+      const int pointCount =
+          source ? plan.sourcePointCount : plan.targetPointCount;
+      const int collapseGroup =
+          plan.collapseGroup >= 0 && source == plan.collapsedEndpointIsSource
+              ? plan.collapseGroup
+              : -1;
+      group.endpoints.append({index, source, remoteNode, anchor.offset,
+                              pointCount, collapseGroup});
     };
     appendEndpoint(true);
     appendEndpoint(false);
@@ -5841,18 +6307,34 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
   };
 
   QHash<QString, OptimizedNodePortGrid> portGrids;
-  for (const auto &plan : plans) {
-    for (const auto *node : {plan.sourceNode, plan.targetNode}) {
-      if (!portGrids.contains(node->id)) {
-        portGrids.insert(node->id, {node->id, node->horizontalPortSnapPoints,
-                                    node->verticalPortSnapPoints});
+  if (createSnapPoints) {
+    for (const auto &plan : plans) {
+      for (const auto *node : {plan.sourceNode, plan.targetNode}) {
+        if (!portGrids.contains(node->id)) {
+          portGrids.insert(node->id, {node->id, node->horizontalPortSnapPoints,
+                                      node->verticalPortSnapPoints});
+        }
       }
     }
   }
   QStringList groupKeys = groups.keys();
   std::sort(groupKeys.begin(), groupKeys.end());
+  const auto endpointSlotCount = [](const EndpointGroup &group) {
+    qsizetype count = 0;
+    QSet<int> collapsedGroups;
+    for (const EndpointPlan &endpoint : group.endpoints) {
+      if (endpoint.collapseGroup < 0) {
+        ++count;
+      } else {
+        collapsedGroups.insert(endpoint.collapseGroup);
+      }
+    }
+    return count + collapsedGroups.size();
+  };
   for (const QString &key : std::as_const(groupKeys)) {
     const EndpointGroup &group = groups.value(key);
+    if (!createSnapPoints)
+      continue;
     auto &grid = portGrids[group.node->id];
     const int beforePointCount =
         connector_ports::snapPointCountForSide(*group.node, group.side);
@@ -5860,16 +6342,20 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
         group.side == ConnectorSide::Top || group.side == ConnectorSide::Bottom
             ? grid.horizontalPointCount
             : grid.verticalPointCount;
+    for (const EndpointPlan &endpoint : group.endpoints)
+      afterPointCount = std::max(afterPointCount, endpoint.preferredPointCount);
     const QList<qreal> occupied = occupiedOffsets(group);
-    while (afterPointCount <= connector_ports::kMaximumSnapPointCount) {
+    const int maximumPointCount =
+        std::min(connector_ports::kMaximumSnapPointCount,
+                 beforePointCount + options.maximumAddedSnapPoints);
+    while (afterPointCount <= maximumPointCount) {
       const auto available = connector_ports::availableSnapOffsets(
           beforePointCount, afterPointCount, occupied);
-      if (available.size() >= group.endpoints.size())
+      if (available.size() >= endpointSlotCount(group))
         break;
       afterPointCount += 2;
     }
-    afterPointCount =
-        std::min(afterPointCount, connector_ports::kMaximumSnapPointCount);
+    afterPointCount = std::min(afterPointCount, maximumPointCount);
     if (group.side == ConnectorSide::Top ||
         group.side == ConnectorSide::Bottom) {
       grid.horizontalPointCount =
@@ -5882,15 +6368,6 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
 
   for (const QString &key : std::as_const(groupKeys)) {
     EndpointGroup &group = groups[key];
-    const auto &grid = portGrids.value(group.node->id);
-    const int beforePointCount =
-        connector_ports::snapPointCountForSide(*group.node, group.side);
-    const int afterPointCount =
-        group.side == ConnectorSide::Top || group.side == ConnectorSide::Bottom
-            ? grid.horizontalPointCount
-            : grid.verticalPointCount;
-    QVector<qreal> available = connector_ports::availableSnapOffsets(
-        beforePointCount, afterPointCount, occupiedOffsets(group));
     std::stable_sort(group.endpoints.begin(), group.endpoints.end(),
                      [&](const EndpointPlan &left, const EndpointPlan &right) {
                        const QPointF leftCenter =
@@ -5913,24 +6390,83 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
                          return left.routeIndex < right.routeIndex;
                        return left.source && !right.source;
                      });
-    QVector<qreal> assigned = connector_ports::spreadAcrossAvailableOffsets(
-        available, group.endpoints.size());
-    if (assigned.size() != group.endpoints.size()) {
-      // More than the maximum number of endpoints may legitimately share a
-      // side. Reuse its complete grid deterministically rather than rejecting
-      // otherwise routable connectors.
-      const QVector<qreal> allOffsets =
-          connector_ports::snapOffsets(afterPointCount);
-      assigned.reserve(group.endpoints.size());
-      for (qsizetype index = 0; index < group.endpoints.size(); ++index)
-        assigned.append(allOffsets.at(index % allOffsets.size()));
+    QVector<QVector<qsizetype>> endpointSlots;
+    QHash<int, qsizetype> collapsedSlotByGroup;
+    for (qsizetype endpointIndex = 0; endpointIndex < group.endpoints.size();
+         ++endpointIndex) {
+      const EndpointPlan &endpoint = group.endpoints.at(endpointIndex);
+      if (endpoint.collapseGroup >= 0 &&
+          collapsedSlotByGroup.contains(endpoint.collapseGroup)) {
+        endpointSlots[collapsedSlotByGroup.value(endpoint.collapseGroup)]
+            .append(endpointIndex);
+        continue;
+      }
+      if (endpoint.collapseGroup >= 0) {
+        collapsedSlotByGroup.insert(endpoint.collapseGroup,
+                                    endpointSlots.size());
+      }
+      endpointSlots.append({endpointIndex});
     }
-    for (qsizetype index = 0; index < group.endpoints.size(); ++index) {
-      const EndpointPlan &endpoint = group.endpoints.at(index);
-      RoutePlan &plan = plans[endpoint.routeIndex];
-      ConnectorAnchor &anchor =
-          endpoint.source ? plan.sourceAnchor : plan.targetAnchor;
-      anchor.offset = assigned.at(index);
+
+    QVector<qreal> assignedSlots;
+    if (!createSnapPoints) {
+      // Free-edge optimization retains the route-selected offsets. Collapsed
+      // endpoints use their mean so the shared fan-in remains centered.
+      for (const auto &slot : std::as_const(endpointSlots)) {
+        qreal preferred = 0.0;
+        for (const qsizetype endpointIndex : slot)
+          preferred += group.endpoints.at(endpointIndex).preferredOffset;
+        assignedSlots.append(std::clamp(preferred / slot.size(), 0.02, 0.98));
+      }
+    } else {
+      const auto &grid = portGrids.value(group.node->id);
+      const int beforePointCount =
+          connector_ports::snapPointCountForSide(*group.node, group.side);
+      const int afterPointCount = group.side == ConnectorSide::Top ||
+                                          group.side == ConnectorSide::Bottom
+                                      ? grid.horizontalPointCount
+                                      : grid.verticalPointCount;
+      QVector<qreal> available = connector_ports::availableSnapOffsets(
+          beforePointCount, afterPointCount, occupiedOffsets(group));
+      if (endpointSlots.size() == 1) {
+        qreal preferred = 0.0;
+        for (const qsizetype endpointIndex : endpointSlots.constFirst()) {
+          const EndpointPlan &endpoint = group.endpoints.at(endpointIndex);
+          preferred += connector_ports::remapAttachedOffset(
+              endpoint.preferredOffset, endpoint.preferredPointCount,
+              afterPointCount);
+        }
+        preferred /= endpointSlots.constFirst().size();
+        const auto preferredIt = std::min_element(
+            available.cbegin(), available.cend(), [&](qreal left, qreal right) {
+              return std::abs(left - preferred) < std::abs(right - preferred);
+            });
+        if (preferredIt != available.cend())
+          assignedSlots.append(*preferredIt);
+      } else {
+        assignedSlots = connector_ports::spreadAcrossAvailableOffsets(
+            available, endpointSlots.size());
+      }
+      if (assignedSlots.size() != endpointSlots.size()) {
+        // More than the maximum number of endpoints may legitimately share a
+        // side. Reuse its complete grid deterministically rather than rejecting
+        // otherwise routable connectors.
+        const QVector<qreal> allOffsets =
+            connector_ports::snapOffsets(afterPointCount);
+        assignedSlots.reserve(endpointSlots.size());
+        for (qsizetype index = 0; index < endpointSlots.size(); ++index)
+          assignedSlots.append(allOffsets.at(index % allOffsets.size()));
+      }
+    }
+    for (qsizetype slotIndex = 0; slotIndex < endpointSlots.size();
+         ++slotIndex) {
+      for (const qsizetype endpointIndex : endpointSlots.at(slotIndex)) {
+        const EndpointPlan &endpoint = group.endpoints.at(endpointIndex);
+        RoutePlan &plan = plans[endpoint.routeIndex];
+        ConnectorAnchor &anchor =
+            endpoint.source ? plan.sourceAnchor : plan.targetAnchor;
+        anchor.offset = assignedSlots.at(slotIndex);
+      }
     }
   }
 
@@ -5946,9 +6482,25 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
       occupiedRoutes.append(points);
   }
 
+  struct PlannedOccupiedRoute {
+    QString collapseKey;
+    QVector<QPointF> points;
+  };
+  QVector<PlannedOccupiedRoute> plannedOccupiedRoutes;
+
   QList<OptimizedConnectorRoute> optimizedRoutes;
   optimizedRoutes.reserve(plans.size());
   for (auto &plan : plans) {
+    QVector<QVector<QPointF>> effectiveOccupiedRoutes = occupiedRoutes;
+    for (const auto &occupied : std::as_const(plannedOccupiedRoutes)) {
+      // Shared trunks are intentional inside one collapsed semantic group;
+      // treating that overlap as a conflict makes later connectors peel away
+      // from the bundle even though the user explicitly requested collapse.
+      if (plan.collapseKey.isEmpty() ||
+          occupied.collapseKey != plan.collapseKey) {
+        effectiveOccupiedRoutes.append(occupied.points);
+      }
+    }
     const QRectF sourceBounds = nodeGeometry(*plan.sourceNode);
     const QRectF targetBounds = nodeGeometry(*plan.targetNode);
     const auto calculateRoute = [&] {
@@ -5958,14 +6510,16 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
           targetBounds, plan.targetAnchor, sourceBounds.center());
       return ui::routeOrthogonallyAroundObstacles(obstacleRoutingRequest(
           *plan.sourceNode, *plan.targetNode, source, target,
-          plan.sourceAnchor.side, plan.targetAnchor.side, occupiedRoutes));
+          plan.sourceAnchor.side, plan.targetAnchor.side,
+          effectiveOccupiedRoutes, options));
     };
     QVector<QPointF> route = calculateRoute();
-    if (route.isEmpty() && (!qFuzzyCompare(plan.sourceAnchor.offset, 0.5) ||
-                            !qFuzzyCompare(plan.targetAnchor.offset, 0.5))) {
-      // Side selection was proven with center anchors. Dense snap allocation
-      // can place a port beside a very close obstacle; the center marker is a
-      // safe deterministic fallback that preserves the chosen side pair.
+    if (route.isEmpty() && !plan.sourceFixed && !plan.targetFixed &&
+        (!qFuzzyCompare(plan.sourceAnchor.offset, 0.5) ||
+         !qFuzzyCompare(plan.targetAnchor.offset, 0.5))) {
+      // Group allocation can place a port beside a very close obstacle. The
+      // center marker is a safe deterministic fallback that preserves the
+      // chosen side pair.
       plan.sourceAnchor.offset = 0.5;
       plan.targetAnchor.offset = 0.5;
       route = calculateRoute();
@@ -5975,7 +6529,7 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
       const QVector<QPointF> existingRoute =
           connectorRoute(*plan.connector).points;
       if (existingRoute.size() >= 2)
-        occupiedRoutes.append(existingRoute);
+        plannedOccupiedRoutes.append({{}, existingRoute});
       continue;
     }
     QList<ConnectorBendPoint> bendPoints;
@@ -5984,7 +6538,7 @@ void DiagramCanvas::optimizeConnectorEndsAndRoute(
       bendPoints.append({route.at(index), {}});
     optimizedRoutes.append({plan.connector->id, plan.sourceAnchor,
                             plan.targetAnchor, std::move(bendPoints)});
-    occupiedRoutes.append(route);
+    plannedOccupiedRoutes.append({plan.collapseKey, route});
   }
 
   QList<OptimizedNodePortGrid> grids;
@@ -6182,8 +6736,16 @@ void DiagramCanvas::arrangeSelection(const QString &operation) {
 
 bool DiagramCanvas::previewAutomaticLayout(const QString &scope,
                                            const QString &direction) {
+  return previewAutomaticLayoutWithOptions(
+      scope, {{QStringLiteral("direction"), direction},
+              {QStringLiteral("resizeContainers"), false}});
+}
+
+bool DiagramCanvas::previewAutomaticLayoutWithOptions(
+    const QString &scope, const QVariantMap &optionValues) {
   if (!m_project || m_interaction != Interaction::None ||
       (scope != QStringLiteral("selection") &&
+       scope != QStringLiteral("container") &&
        scope != QStringLiteral("diagram"))) {
     return false;
   }
@@ -6195,11 +6757,28 @@ bool DiagramCanvas::previewAutomaticLayout(const QString &scope,
     cancelAutomaticLayoutPreview();
 
   ui::AutomaticLayoutOptions options;
+  const QString direction =
+      optionValues
+          .value(QStringLiteral("direction"), QStringLiteral("left-to-right"))
+          .toString();
   if (direction == QStringLiteral("top-to-bottom")) {
     options.direction = ui::AutomaticLayoutDirection::TopToBottom;
   } else if (direction != QStringLiteral("left-to-right")) {
     return false;
   }
+  options.layerGap =
+      std::clamp(optionValues.value(QStringLiteral("layerGap"), 100).toDouble(),
+                 0.0, 2000.0);
+  options.itemGap =
+      std::clamp(optionValues.value(QStringLiteral("itemGap"), 40).toDouble(),
+                 0.0, 2000.0);
+  options.componentGap = std::clamp(
+      optionValues.value(QStringLiteral("componentGap"), 80).toDouble(), 0.0,
+      2000.0);
+  const bool recursive =
+      optionValues.value(QStringLiteral("recursive"), false).toBool();
+  const bool resizeContainers =
+      optionValues.value(QStringLiteral("resizeContainers"), true).toBool();
 
   QHash<QString, QString> ownerByPresentation;
   for (const auto &container : currentDiagram->containers)
@@ -6225,6 +6804,12 @@ bool DiagramCanvas::previewAutomaticLayout(const QString &scope,
     for (const auto &note : currentDiagram->notes)
       if (m_selectedNotes.contains(note.id))
         candidates.append(note.id);
+  } else if (scope == QStringLiteral("container")) {
+    const auto *selectedContainer =
+        findContainer(*currentDiagram, m_selectedContainer);
+    if (!selectedContainer)
+      return false;
+    candidates = selectedContainer->childPresentationIds;
   } else {
     for (const auto &node : currentDiagram->nodes)
       if (!ownerByPresentation.contains(node.id) && nodePassesFilter(node))
@@ -6237,12 +6822,31 @@ bool DiagramCanvas::previewAutomaticLayout(const QString &scope,
         candidates.append(note.id);
   }
 
+  const auto appendDescendants = [&](const auto &self,
+                                     const QString &containerId) -> void {
+    const auto *container = findContainer(*currentDiagram, containerId);
+    if (!container)
+      return;
+    for (const QString &childId : container->childPresentationIds) {
+      if (!candidates.contains(childId))
+        candidates.append(childId);
+      if (findContainer(*currentDiagram, childId))
+        self(self, childId);
+    }
+  };
+  if (recursive) {
+    const QStringList currentCandidates = candidates;
+    for (const QString &candidate : currentCandidates)
+      if (findContainer(*currentDiagram, candidate))
+        appendDescendants(appendDescendants, candidate);
+  }
+
   const QSet<QString> candidateSet(candidates.cbegin(), candidates.cend());
   QStringList roots;
   for (const QString &candidate : std::as_const(candidates)) {
     QString ancestor = ownerByPresentation.value(candidate);
     bool selectedAncestor = false;
-    while (!ancestor.isEmpty()) {
+    while (!recursive && !ancestor.isEmpty()) {
       if (candidateSet.contains(ancestor)) {
         selectedAncestor = true;
         break;
@@ -6272,6 +6876,18 @@ bool DiagramCanvas::previewAutomaticLayout(const QString &scope,
       ownerOrder.append(ownerId);
     rootsByOwner[ownerId].append(rootId);
   }
+  const auto ownerDepth = [&](QString ownerId) {
+    int depth = -1;
+    while (!ownerId.isEmpty()) {
+      ++depth;
+      ownerId = ownerByPresentation.value(ownerId);
+    }
+    return depth;
+  };
+  std::stable_sort(ownerOrder.begin(), ownerOrder.end(),
+                   [&](const QString &left, const QString &right) {
+                     return ownerDepth(left) < ownerDepth(right);
+                   });
 
   bool changed = false;
   int arrangedRootCount = 0;
@@ -6329,9 +6945,84 @@ bool DiagramCanvas::previewAutomaticLayout(const QString &scope,
         subtree.insert(rootId, originalRoot);
       }
       for (auto item = subtree.cbegin(); item != subtree.cend(); ++item) {
-        m_originalGeometry.insert(item.key(), item.value());
-        m_previewGeometry.insert(item.key(), item.value().translated(delta));
+        if (!m_originalGeometry.contains(item.key()))
+          m_originalGeometry.insert(item.key(), item.value());
+        const QRectF currentGeometry =
+            m_previewGeometry.value(item.key(), item.value());
+        m_previewGeometry.insert(item.key(), currentGeometry.translated(delta));
       }
+      changed = true;
+    }
+  }
+
+  if (resizeContainers) {
+    QSet<QString> containersToResize;
+    const auto includeContainerTree = [&](const auto &self,
+                                          const QString &containerId) -> void {
+      if (containersToResize.contains(containerId))
+        return;
+      const auto *container = findContainer(*currentDiagram, containerId);
+      if (!container)
+        return;
+      containersToResize.insert(containerId);
+      if (recursive) {
+        for (const QString &childId : container->childPresentationIds)
+          if (findContainer(*currentDiagram, childId))
+            self(self, childId);
+      }
+    };
+    if (scope == QStringLiteral("diagram")) {
+      for (const auto &container : currentDiagram->containers)
+        if (recursive || !ownerByPresentation.contains(container.id))
+          includeContainerTree(includeContainerTree, container.id);
+    } else if (scope == QStringLiteral("container")) {
+      includeContainerTree(includeContainerTree, m_selectedContainer);
+    } else {
+      for (const QString &containerId : m_selectedContainers)
+        includeContainerTree(includeContainerTree, containerId);
+    }
+
+    const auto depthOf = [&](QString containerId) {
+      int depth = 0;
+      while (ownerByPresentation.contains(containerId)) {
+        containerId = ownerByPresentation.value(containerId);
+        ++depth;
+      }
+      return depth;
+    };
+    QStringList orderedContainers(containersToResize.cbegin(),
+                                  containersToResize.cend());
+    std::stable_sort(orderedContainers.begin(), orderedContainers.end(),
+                     [&](const QString &left, const QString &right) {
+                       return depthOf(left) > depthOf(right);
+                     });
+    for (const QString &containerId : std::as_const(orderedContainers)) {
+      const auto *container = findContainer(*currentDiagram, containerId);
+      if (!container || container->childPresentationIds.isEmpty())
+        continue;
+      QRectF childBounds;
+      for (const QString &childId : container->childPresentationIds) {
+        const QRectF childGeometry = geometryFor(childId);
+        if (!childGeometry.isValid() || childGeometry.isEmpty())
+          continue;
+        childBounds = childBounds.isValid() ? childBounds.united(childGeometry)
+                                            : childGeometry;
+      }
+      if (!childBounds.isValid())
+        continue;
+      QRectF fitted = childBounds.adjusted(
+          -presentation_layout::kContainerHorizontalPadding,
+          -presentation_layout::kContainerTopPadding,
+          presentation_layout::kContainerHorizontalPadding,
+          presentation_layout::kContainerBottomPadding);
+      fitted.setWidth(std::max(fitted.width(), kMinimumContainerWidth));
+      fitted.setHeight(std::max(fitted.height(), kMinimumContainerHeight));
+      const QRectF original = containerGeometry(*container);
+      if (fitted == m_previewGeometry.value(containerId, original))
+        continue;
+      if (!m_originalGeometry.contains(containerId))
+        m_originalGeometry.insert(containerId, original);
+      m_previewGeometry.insert(containerId, fitted);
       changed = true;
     }
   }
@@ -6339,10 +7030,38 @@ bool DiagramCanvas::previewAutomaticLayout(const QString &scope,
   if (!changed) {
     m_originalGeometry.clear();
     m_previewGeometry.clear();
+    m_automaticLayoutConnectorIds.clear();
     return false;
   }
   m_automaticLayoutPreviewActive = true;
   m_automaticLayoutPreviewCount = arrangedRootCount;
+  QSet<QString> affectedNodeIds;
+  for (const auto &node : currentDiagram->nodes)
+    if (m_originalGeometry.contains(node.id))
+      affectedNodeIds.insert(node.id);
+  const auto includeCandidateNodes =
+      [&](const auto &self, const QString &presentationId) -> void {
+    if (findNode(*currentDiagram, presentationId)) {
+      affectedNodeIds.insert(presentationId);
+      return;
+    }
+    const auto *container = findContainer(*currentDiagram, presentationId);
+    if (!container)
+      return;
+    for (const QString &childId : container->childPresentationIds)
+      self(self, childId);
+  };
+  for (const QString &candidate : std::as_const(candidates))
+    includeCandidateNodes(includeCandidateNodes, candidate);
+  m_automaticLayoutConnectorIds.clear();
+  for (const auto &connector : currentDiagram->connectors) {
+    const auto *sourceNode = endpointNode(connector, true);
+    const auto *targetNode = endpointNode(connector, false);
+    if (sourceNode && targetNode && affectedNodeIds.contains(sourceNode->id) &&
+        affectedNodeIds.contains(targetNode->id)) {
+      m_automaticLayoutConnectorIds.append(connector.id);
+    }
+  }
   m_sceneDirty = true;
   m_textDirty = true;
   emit automaticLayoutPreviewChanged();
@@ -6351,6 +7070,12 @@ bool DiagramCanvas::previewAutomaticLayout(const QString &scope,
 }
 
 void DiagramCanvas::applyAutomaticLayoutPreview() {
+  applyAutomaticLayoutPreviewWithConnectorHandling(QStringLiteral("none"), {});
+}
+
+void DiagramCanvas::applyAutomaticLayoutPreviewWithConnectorHandling(
+    const QString &connectorHandling,
+    const QVariantMap &connectorOptimizationOptions) {
   if (!m_project || !m_automaticLayoutPreviewActive)
     return;
   const auto *currentDiagram = diagram();
@@ -6360,6 +7085,7 @@ void DiagramCanvas::applyAutomaticLayoutPreview() {
   }
 
   const int arrangedRootCount = m_automaticLayoutPreviewCount;
+  const QStringList connectorIds = m_automaticLayoutConnectorIds;
   QVariantList geometries;
   const auto appendGeometry = [&](const QString &presentationId) {
     const auto preview = m_previewGeometry.constFind(presentationId);
@@ -6386,16 +7112,52 @@ void DiagramCanvas::applyAutomaticLayoutPreview() {
   m_previewGeometry.clear();
   m_automaticLayoutPreviewActive = false;
   m_automaticLayoutPreviewCount = 0;
+  m_automaticLayoutConnectorIds.clear();
   m_sceneDirty = true;
   m_textDirty = true;
   emit automaticLayoutPreviewChanged();
   update();
   if (!geometries.isEmpty()) {
-    m_project->updatePresentationGeometries(
-        m_diagramId, geometries,
+    const QString description =
         arrangedRootCount > 1
             ? QStringLiteral("Automatically arrange diagram elements")
-            : QStringLiteral("Automatically arrange diagram element"));
+            : QStringLiteral("Automatically arrange diagram element");
+    const auto applyLayoutAndRouting = [&] {
+      m_project->updatePresentationGeometries(m_diagramId, geometries,
+                                              description);
+      if (connectorHandling == QStringLiteral("route")) {
+        routeConnectorsAroundObstacles(
+            connectorIds,
+            connectorRoutingOptions(connectorOptimizationOptions));
+      } else if (connectorHandling == QStringLiteral("optimize")) {
+        const ConnectorRoutingOptions routingOptions =
+            connectorRoutingOptions(connectorOptimizationOptions);
+        const QString endpointMode =
+            connectorOptimizationOptions
+                .value(QStringLiteral("endpointMode"), QStringLiteral("snap"))
+                .toString();
+        if (endpointMode == QStringLiteral("preserve")) {
+          routeConnectorsAroundObstacles(connectorIds, routingOptions);
+        } else {
+          optimizeConnectorEndsAndRoute(
+              connectorIds,
+              endpointMode == QStringLiteral("free") ? QStringLiteral("free")
+                                                     : QStringLiteral("snap"),
+              connectorOptimizationOptions
+                  .value(QStringLiteral("collapseIncoming"), false)
+                  .toBool(),
+              connectorOptimizationOptions
+                  .value(QStringLiteral("preserveManual"), true)
+                  .toBool(),
+              routingOptions);
+        }
+      }
+    };
+    if (connectorHandling == QStringLiteral("none") || connectorIds.isEmpty()) {
+      applyLayoutAndRouting();
+    } else {
+      m_project->executeUndoMacro(description, applyLayoutAndRouting);
+    }
   }
 }
 
@@ -6406,6 +7168,7 @@ void DiagramCanvas::cancelAutomaticLayoutPreview() {
   m_previewGeometry.clear();
   m_automaticLayoutPreviewActive = false;
   m_automaticLayoutPreviewCount = 0;
+  m_automaticLayoutConnectorIds.clear();
   m_sceneDirty = true;
   m_textDirty = true;
   emit automaticLayoutPreviewChanged();

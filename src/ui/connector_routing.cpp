@@ -394,57 +394,104 @@ buildVisibilityGraph(const QVector<QPointF> &points,
   return graph;
 }
 
+struct PathCost {
+  int bendCount = std::numeric_limits<int>::max();
+  qreal length = std::numeric_limits<qreal>::infinity();
+  qreal conflictCost = std::numeric_limits<qreal>::infinity();
+};
+
+bool pathCostLess(const PathCost &left, const PathCost &right) {
+  if (left.bendCount != right.bendCount)
+    return left.bendCount < right.bendCount;
+  if (left.length != right.length)
+    return left.length < right.length;
+  return left.conflictCost < right.conflictCost;
+}
+
+bool samePathCost(const PathCost &left, const PathCost &right) {
+  return left.bendCount == right.bendCount && left.length == right.length &&
+         left.conflictCost == right.conflictCost;
+}
+
 QVector<int> leastCostPath(const QVector<QVector<VisibilityEdge>> &graph,
-                           int source, int target, qreal bendPenalty) {
+                           int source, int target, Axis sourceAxis,
+                           Axis targetAxis) {
   constexpr int kDirectionCount = 3;
-  constexpr int kNoDirection = 0;
   constexpr int kHorizontalDirection = 1;
   constexpr int kVerticalDirection = 2;
   const int stateCount = graph.size() * kDirectionCount;
-  const qreal infinity = std::numeric_limits<qreal>::infinity();
-  QVector<qreal> distance(stateCount, infinity);
+  QVector<PathCost> distance(stateCount);
   QVector<int> previous(stateCount, -1);
-  using QueueEntry = std::pair<qreal, int>;
-  std::priority_queue<QueueEntry, std::vector<QueueEntry>,
-                      std::greater<QueueEntry>>
+  struct QueueEntry {
+    PathCost cost;
+    int state = -1;
+  };
+  struct QueueEntryGreater {
+    bool operator()(const QueueEntry &left, const QueueEntry &right) const {
+      if (pathCostLess(right.cost, left.cost))
+        return true;
+      if (pathCostLess(left.cost, right.cost))
+        return false;
+      return left.state > right.state;
+    }
+  };
+  std::priority_queue<QueueEntry, std::vector<QueueEntry>, QueueEntryGreater>
       queue;
 
-  const int sourceState = source * kDirectionCount + kNoDirection;
-  distance[sourceState] = 0.0;
-  queue.emplace(0.0, sourceState);
-  int targetState = -1;
+  const auto directionForAxis = [&](Axis axis) {
+    return axis == Axis::Horizontal ? kHorizontalDirection : kVerticalDirection;
+  };
+  const int sourceDirection = directionForAxis(sourceAxis);
+  const int targetDirection = directionForAxis(targetAxis);
+  const int sourceState = source * kDirectionCount + sourceDirection;
+  distance[sourceState] = {0, 0.0, 0.0};
+  queue.push({distance.at(sourceState), sourceState});
 
   while (!queue.empty()) {
-    const auto [currentDistance, state] = queue.top();
+    const QueueEntry current = queue.top();
     queue.pop();
-    if (currentDistance > distance.at(state) + kGeometryEpsilon)
+    const int state = current.state;
+    if (!samePathCost(current.cost, distance.at(state)))
       continue;
     const int vertex = state / kDirectionCount;
     const int incomingDirection = state % kDirectionCount;
-    if (vertex == target) {
-      targetState = state;
-      break;
-    }
 
     for (const VisibilityEdge &edge : graph.at(vertex)) {
       const int outgoingDirection = edge.axis == Axis::Horizontal
                                         ? kHorizontalDirection
                                         : kVerticalDirection;
-      const qreal turnCost = incomingDirection != kNoDirection &&
-                                     incomingDirection != outgoingDirection
-                                 ? bendPenalty
-                                 : 0.0;
       const int nextState = edge.target * kDirectionCount + outgoingDirection;
-      const qreal candidateDistance =
-          currentDistance + edge.length + turnCost + edge.conflictCost;
-      if (candidateDistance + kGeometryEpsilon >= distance.at(nextState))
+      PathCost candidate = current.cost;
+      if (incomingDirection != outgoingDirection)
+        ++candidate.bendCount;
+      candidate.length += edge.length;
+      candidate.conflictCost += edge.conflictCost;
+      if (!pathCostLess(candidate, distance.at(nextState)))
         continue;
-      distance[nextState] = candidateDistance;
+      distance[nextState] = candidate;
       previous[nextState] = state;
-      queue.emplace(candidateDistance, nextState);
+      queue.push({candidate, nextState});
     }
   }
 
+  int targetState = -1;
+  PathCost targetCost;
+  for (const int incomingDirection :
+       {kHorizontalDirection, kVerticalDirection}) {
+    const int candidateState = target * kDirectionCount + incomingDirection;
+    PathCost candidate = distance.at(candidateState);
+    if (candidate.bendCount == std::numeric_limits<int>::max())
+      continue;
+    // The escape-to-presentation segment has the target side's axis. Counting
+    // this turn prevents the route from selecting a cheap-looking path which
+    // immediately hooks around beside its endpoint.
+    if (incomingDirection != targetDirection)
+      ++candidate.bendCount;
+    if (pathCostLess(candidate, targetCost)) {
+      targetCost = candidate;
+      targetState = candidateState;
+    }
+  }
   if (targetState < 0)
     return {};
   QVector<int> reversed;
@@ -452,6 +499,8 @@ QVector<int> leastCostPath(const QVector<QVector<VisibilityEdge>> &graph,
     reversed.append(state / kDirectionCount);
     if (state == sourceState)
       break;
+    if (previous.at(state) < 0)
+      return {};
   }
   std::reverse(reversed.begin(), reversed.end());
   return reversed;
@@ -519,37 +568,53 @@ buildConnectorRoute(const QPointF &source, const QVector<QPointF> &bendPoints,
   return route;
 }
 
-qreal orthogonalRouteCost(const QVector<QPointF> &points,
-                          const QVector<QVector<QPointF>> &occupiedRoutes,
-                          qreal bendPenalty, qreal crossingPenalty,
-                          qreal sharedSegmentPenalty) {
-  if (points.size() < 2 || !std::isfinite(bendPenalty) || bendPenalty < 0.0 ||
-      !std::isfinite(crossingPenalty) || crossingPenalty < 0.0 ||
-      !std::isfinite(sharedSegmentPenalty) || sharedSegmentPenalty < 0.0) {
-    return std::numeric_limits<qreal>::infinity();
-  }
+OrthogonalRouteMetrics
+orthogonalRouteMetrics(const QVector<QPointF> &points,
+                       const QVector<QVector<QPointF>> &occupiedRoutes,
+                       qreal crossingPenalty, qreal sharedSegmentPenalty) {
+  OrthogonalRouteMetrics metrics;
+  if (points.size() < 2 || !std::isfinite(crossingPenalty) ||
+      crossingPenalty < 0.0 || !std::isfinite(sharedSegmentPenalty) ||
+      sharedSegmentPenalty < 0.0)
+    return metrics;
 
-  qreal cost = 0.0;
   std::optional<Axis> previousAxis;
   for (qsizetype index = 1; index < points.size(); ++index) {
     const QPointF first = points.at(index - 1);
     const QPointF second = points.at(index);
+    if (samePoint(first, second))
+      continue;
     Axis axis;
     if (qAbs(first.y() - second.y()) <= kGeometryEpsilon)
       axis = Axis::Horizontal;
     else if (qAbs(first.x() - second.x()) <= kGeometryEpsilon)
       axis = Axis::Vertical;
     else
-      return std::numeric_limits<qreal>::infinity();
+      return metrics;
 
     if (previousAxis && *previousAxis != axis)
-      cost += bendPenalty;
+      ++metrics.bendCount;
     previousAxis = axis;
-    cost += QLineF(first, second).length();
-    cost += segmentConflictCost(first, second, occupiedRoutes, crossingPenalty,
-                                sharedSegmentPenalty);
+    metrics.length += QLineF(first, second).length();
+    metrics.conflictCost += segmentConflictCost(
+        first, second, occupiedRoutes, crossingPenalty, sharedSegmentPenalty);
   }
-  return cost;
+  metrics.valid = previousAxis.has_value();
+  return metrics;
+}
+
+qreal orthogonalRouteCost(const QVector<QPointF> &points,
+                          const QVector<QVector<QPointF>> &occupiedRoutes,
+                          qreal bendPenalty, qreal crossingPenalty,
+                          qreal sharedSegmentPenalty) {
+  if (!std::isfinite(bendPenalty) || bendPenalty < 0.0)
+    return std::numeric_limits<qreal>::infinity();
+  const OrthogonalRouteMetrics metrics = orthogonalRouteMetrics(
+      points, occupiedRoutes, crossingPenalty, sharedSegmentPenalty);
+  if (!metrics.valid)
+    return std::numeric_limits<qreal>::infinity();
+  return metrics.length + metrics.bendCount * bendPenalty +
+         metrics.conflictCost;
 }
 
 QVector<QPointF> routeOrthogonallyAroundObstacles(
@@ -557,9 +622,10 @@ QVector<QPointF> routeOrthogonallyAroundObstacles(
   if (!request.sourceBounds.isValid() || !request.targetBounds.isValid() ||
       !pointIsOnPerimeter(request.sourceBounds, request.source) ||
       !pointIsOnPerimeter(request.targetBounds, request.target) ||
-      !std::isfinite(request.clearance) || request.clearance < 0.0 ||
-      !std::isfinite(request.bendPenalty) || request.bendPenalty < 0.0 ||
-      !std::isfinite(request.crossingPenalty) ||
+      !std::isfinite(request.endpointClearance) ||
+      request.endpointClearance < 0.0 || !std::isfinite(request.clearance) ||
+      request.clearance < 0.0 || !std::isfinite(request.bendPenalty) ||
+      request.bendPenalty < 0.0 || !std::isfinite(request.crossingPenalty) ||
       request.crossingPenalty < 0.0 ||
       !std::isfinite(request.sharedSegmentPenalty) ||
       request.sharedSegmentPenalty < 0.0)
@@ -570,9 +636,9 @@ QVector<QPointF> routeOrthogonallyAroundObstacles(
   const ConnectorSide targetSide =
       resolvedSide(request.targetSide, request.targetBounds, request.target);
   const QPointF sourceEscape =
-      request.source + outwardNormal(sourceSide) * request.clearance;
+      request.source + outwardNormal(sourceSide) * request.endpointClearance;
   const QPointF targetEscape =
-      request.target + outwardNormal(targetSide) * request.clearance;
+      request.target + outwardNormal(targetSide) * request.endpointClearance;
 
   QVector<QRectF> externalObstacles;
   externalObstacles.reserve(request.obstacles.size());
@@ -584,10 +650,12 @@ QVector<QPointF> routeOrthogonallyAroundObstacles(
   // outgoing sides. The short endpoint-to-escape legs are added afterward and
   // are intentionally the only segments allowed inside those two bounds.
   QVector<QRectF> routingObstacles = externalObstacles;
-  appendObstacleIfDistinct(routingObstacles,
-                           expanded(request.sourceBounds, request.clearance));
-  appendObstacleIfDistinct(routingObstacles,
-                           expanded(request.targetBounds, request.clearance));
+  appendObstacleIfDistinct(
+      routingObstacles,
+      expanded(request.sourceBounds, request.endpointClearance));
+  appendObstacleIfDistinct(
+      routingObstacles,
+      expanded(request.targetBounds, request.endpointClearance));
 
   if (pointStrictlyInsideAny(sourceEscape, routingObstacles) ||
       pointStrictlyInsideAny(targetEscape, routingObstacles))
@@ -633,7 +701,9 @@ QVector<QPointF> routeOrthogonallyAroundObstacles(
       candidates, routingObstacles, request.occupiedRoutes,
       request.crossingPenalty, request.sharedSegmentPenalty);
   const QVector<int> path =
-      leastCostPath(graph, sourceIndex, targetIndex, request.bendPenalty);
+      leastCostPath(graph, sourceIndex, targetIndex,
+                    axisForSide(sourceSide, request.source, sourceEscape),
+                    axisForSide(targetSide, targetEscape, request.target));
   if (path.isEmpty())
     return {};
 

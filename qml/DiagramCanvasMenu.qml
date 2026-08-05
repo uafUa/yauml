@@ -16,6 +16,7 @@ Menu {
     signal filterRequested()
     signal exportPngRequested()
     signal automaticLayoutRequested()
+    signal connectorOptimizationRequested(string scope)
 
     function createElement(type) {
         if (!canvasAvailable)
@@ -147,13 +148,8 @@ Menu {
         onTriggered: root.automaticLayoutRequested()
     }
     CatalogMenuItem {
-        catalogId: "diagram.routeVisibleConnectors"
-        text: qsTr("Route all visible connectors")
-        onTriggered: root.canvas.routeVisibleConnectorsAroundObstacles()
-    }
-    CatalogMenuItem {
         catalogId: "diagram.optimizeVisibleConnectorEndsAndRoute"
-        text: qsTr("Optimize ends and route all visible connectors")
-        onTriggered: root.canvas.optimizeVisibleConnectorEndsAndRoute()
+        text: qsTr("Optimize connectors…")
+        onTriggered: root.connectorOptimizationRequested("visible")
     }
 }

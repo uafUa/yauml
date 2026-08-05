@@ -5682,6 +5682,10 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(settings.gridSpacing(), ApplicationSettings::kDefaultGridSpacing);
     QCOMPARE(settings.diagramItemSizingMode(), QStringLiteral("content"));
     QCOMPARE(settings.defaultConnectorRouting(), QStringLiteral("straight"));
+    QCOMPARE(settings.connectorOptimizationOptions(),
+             ApplicationSettings::defaultConnectorOptimizationOptions());
+    QCOMPARE(settings.automaticLayoutOptions(),
+             ApplicationSettings::defaultAutomaticLayoutOptions());
     QCOMPARE(settings.cppInterfacePattern(),
              ApplicationSettings::defaultCppInterfacePattern());
     QCOMPARE(settings.cppMemberTypeRules(),
@@ -5707,6 +5711,22 @@ void CoreTests::applicationPreferencesPersist() {
     settings.setGridSpacing(35);
     settings.setDiagramItemSizingMode(QStringLiteral("fixed"));
     settings.setDefaultConnectorRouting(QStringLiteral("orthogonal"));
+    settings.setConnectorOptimizationOptions(
+        {{QStringLiteral("endpointMode"), QStringLiteral("free")},
+         {QStringLiteral("collapseIncoming"), true},
+         {QStringLiteral("preserveManual"), false},
+         {QStringLiteral("endpointClearance"), 36},
+         {QStringLiteral("obstacleClearance"), 18},
+         // Odd values are normalized because snap grids grow symmetrically.
+         {QStringLiteral("maximumAddedSnapPoints"), 11}});
+    settings.setAutomaticLayoutOptions(
+        {{QStringLiteral("direction"), QStringLiteral("top-to-bottom")},
+         {QStringLiteral("recursive"), true},
+         {QStringLiteral("resizeContainers"), false},
+         {QStringLiteral("layerGap"), 145},
+         {QStringLiteral("itemGap"), 55},
+         {QStringLiteral("componentGap"), 95},
+         {QStringLiteral("connectorHandling"), QStringLiteral("optimize")}});
     settings.setPackageReassignmentPolicy(QStringLiteral("allow"));
     settings.setAutomaticUpdateChecksEnabled(false);
     settings.setProjectTreeColumns({QStringLiteral("name"),
@@ -5800,6 +5820,24 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(restored.gridSpacing(), 35);
     QCOMPARE(restored.diagramItemSizingMode(), QStringLiteral("fixed"));
     QCOMPARE(restored.defaultConnectorRouting(), QStringLiteral("orthogonal"));
+    QCOMPARE(
+        restored.connectorOptimizationOptions(),
+        QVariantMap({{QStringLiteral("endpointMode"), QStringLiteral("free")},
+                     {QStringLiteral("collapseIncoming"), true},
+                     {QStringLiteral("preserveManual"), false},
+                     {QStringLiteral("endpointClearance"), 36},
+                     {QStringLiteral("obstacleClearance"), 18},
+                     {QStringLiteral("maximumAddedSnapPoints"), 10}}));
+    QCOMPARE(restored.automaticLayoutOptions(),
+             QVariantMap({{QStringLiteral("direction"),
+                           QStringLiteral("top-to-bottom")},
+                          {QStringLiteral("recursive"), true},
+                          {QStringLiteral("resizeContainers"), false},
+                          {QStringLiteral("layerGap"), 145},
+                          {QStringLiteral("itemGap"), 55},
+                          {QStringLiteral("componentGap"), 95},
+                          {QStringLiteral("connectorHandling"),
+                           QStringLiteral("optimize")}}));
     QCOMPARE(restored.cppInterfacePattern(), QStringLiteral("^Abstract.*$"));
     const QVariantList expectedMemberRules = {
         QVariantMap{
@@ -5879,6 +5917,10 @@ void CoreTests::applicationPreferencesPersist() {
     QCOMPARE(restored.gridSpacing(), ApplicationSettings::kDefaultGridSpacing);
     QCOMPARE(restored.diagramItemSizingMode(), QStringLiteral("content"));
     QCOMPARE(restored.defaultConnectorRouting(), QStringLiteral("straight"));
+    QCOMPARE(restored.connectorOptimizationOptions(),
+             ApplicationSettings::defaultConnectorOptimizationOptions());
+    QCOMPARE(restored.automaticLayoutOptions(),
+             ApplicationSettings::defaultAutomaticLayoutOptions());
     QCOMPARE(restored.cppInterfacePattern(),
              ApplicationSettings::defaultCppInterfacePattern());
     QCOMPARE(restored.cppMemberTypeRules(),

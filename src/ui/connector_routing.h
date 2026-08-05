@@ -33,6 +33,10 @@ struct OrthogonalObstacleRoutingRequest {
   ConnectorSide targetSide = ConnectorSide::Automatic;
   QVector<QRectF> obstacles;
   QVector<QVector<QPointF>> occupiedRoutes;
+  // Minimum straight lead between an attachment and its first/last bend.
+  // This is independent from obstacle clearance so diagrams can use generous
+  // readable endpoint stubs without pushing every route far from every node.
+  qreal endpointClearance = 12.0;
   qreal clearance = 12.0;
   qreal bendPenalty = 24.0;
   qreal crossingPenalty = 160.0;
@@ -45,6 +49,22 @@ struct OrthogonalObstacleRoutingRequest {
 // for persisted diagram geometry.
 QVector<QPointF> routeOrthogonallyAroundObstacles(
     const OrthogonalObstacleRoutingRequest &request);
+
+// Separating structural route quality from its optional weighted cost keeps
+// automatic routing visually stable on dense diagrams. Bend count and length
+// can be compared before connector-crossing penalties, so avoiding an existing
+// line never justifies a needlessly complicated detour.
+struct OrthogonalRouteMetrics {
+  bool valid = false;
+  int bendCount = 0;
+  qreal length = 0.0;
+  qreal conflictCost = 0.0;
+};
+
+OrthogonalRouteMetrics
+orthogonalRouteMetrics(const QVector<QPointF> &points,
+                       const QVector<QVector<QPointF>> &occupiedRoutes,
+                       qreal crossingPenalty, qreal sharedSegmentPenalty);
 
 // Scores a complete orthogonal polyline with the same terms used by the
 // visibility graph. Exposing the score lets endpoint optimization compare

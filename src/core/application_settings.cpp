@@ -23,7 +23,9 @@ constexpr auto kGridSpacingKey = "gridSpacing";
 constexpr auto kDiagramItemSizingModeKey = "itemSizingMode";
 constexpr auto kConnectorSettingsGroup = "preferences/connectors";
 constexpr auto kDefaultConnectorRoutingKey = "defaultRouting";
+constexpr auto kConnectorOptimizationOptionsKey = "optimizationOptions";
 constexpr auto kRelationshipGestureKeySuffix = "GestureKey";
+constexpr auto kAutomaticLayoutOptionsKey = "automaticLayoutOptions";
 constexpr auto kCppImportSettingsGroup = "preferences/cppImport";
 constexpr auto kCppInterfacePatternKey = "interfacePattern";
 constexpr auto kCppMemberTypeRulesKey = "memberTypeRules";
@@ -119,6 +121,68 @@ QString normalizedDiagramItemSizingMode(const QString &candidate) {
   return candidate.trimmed().toLower() == QStringLiteral("fixed")
              ? QStringLiteral("fixed")
              : QStringLiteral("content");
+}
+
+QVariantMap normalizedConnectorOptimizationOptions(const QVariantMap &input) {
+  QVariantMap result;
+  const QString endpointMode =
+      input.value(QStringLiteral("endpointMode")).toString().trimmed();
+  result.insert(QStringLiteral("endpointMode"),
+                endpointMode == QStringLiteral("preserve") ||
+                        endpointMode == QStringLiteral("free")
+                    ? endpointMode
+                    : QStringLiteral("snap"));
+  result.insert(
+      QStringLiteral("collapseIncoming"),
+      input.value(QStringLiteral("collapseIncoming"), false).toBool());
+  result.insert(QStringLiteral("preserveManual"),
+                input.value(QStringLiteral("preserveManual"), true).toBool());
+  result.insert(
+      QStringLiteral("endpointClearance"),
+      std::clamp(input.value(QStringLiteral("endpointClearance"), 12).toInt(),
+                 0, 200));
+  result.insert(
+      QStringLiteral("obstacleClearance"),
+      std::clamp(input.value(QStringLiteral("obstacleClearance"), 12).toInt(),
+                 0, 100));
+  int maximumAddedSnapPoints = std::clamp(
+      input.value(QStringLiteral("maximumAddedSnapPoints"), 8).toInt(), 0, 16);
+  // Snap grids grow symmetrically, so expose and persist an even number.
+  maximumAddedSnapPoints -= maximumAddedSnapPoints % 2;
+  result.insert(QStringLiteral("maximumAddedSnapPoints"),
+                maximumAddedSnapPoints);
+  return result;
+}
+
+QVariantMap normalizedAutomaticLayoutOptions(const QVariantMap &input) {
+  QVariantMap result;
+  const QString direction =
+      input.value(QStringLiteral("direction")).toString().trimmed();
+  result.insert(QStringLiteral("direction"),
+                direction == QStringLiteral("top-to-bottom")
+                    ? direction
+                    : QStringLiteral("left-to-right"));
+  result.insert(QStringLiteral("recursive"),
+                input.value(QStringLiteral("recursive"), false).toBool());
+  result.insert(QStringLiteral("resizeContainers"),
+                input.value(QStringLiteral("resizeContainers"), true).toBool());
+  const auto boundedGap = [&](const QString &key, int fallback) {
+    return std::clamp(input.value(key, fallback).toInt(), 0, 2000);
+  };
+  result.insert(QStringLiteral("layerGap"),
+                boundedGap(QStringLiteral("layerGap"), 100));
+  result.insert(QStringLiteral("itemGap"),
+                boundedGap(QStringLiteral("itemGap"), 40));
+  result.insert(QStringLiteral("componentGap"),
+                boundedGap(QStringLiteral("componentGap"), 80));
+  const QString connectorHandling =
+      input.value(QStringLiteral("connectorHandling")).toString().trimmed();
+  result.insert(QStringLiteral("connectorHandling"),
+                connectorHandling == QStringLiteral("route") ||
+                        connectorHandling == QStringLiteral("optimize")
+                    ? connectorHandling
+                    : QStringLiteral("none"));
+  return result;
 }
 
 QStringList normalizedProjectTreeColumns(const QStringList &candidate) {
@@ -284,10 +348,10 @@ QVariantMap makeDefaultContextToolboxConfiguration() {
       {QStringLiteral("connector"),
        toolboxEntries(
            {"connector.routeStraight", "connector.routeOrthogonal",
-            "connector.routeAroundObstacles", "connector.optimizeEndsAndRoute",
-            "connector.editName", "connector.editSourceRole",
-            "connector.editSourceMultiplicity", "connector.editTargetRole",
-            "connector.editTargetMultiplicity", "connector.editStereotypes",
+            "connector.optimizeEndsAndRoute", "connector.editName",
+            "connector.editSourceRole", "connector.editSourceMultiplicity",
+            "connector.editTargetRole", "connector.editTargetMultiplicity",
+            "connector.editStereotypes",
             "connector.resetAnnotationPositions"})},
       {QStringLiteral("presentation"),
        toolboxEntries({"presentation.editName", "source.open",
@@ -296,7 +360,6 @@ QVariantMap makeDefaultContextToolboxConfiguration() {
                        "presentation.operationSignatureMode",
                        "presentation.connectorSnapPoints",
                        "arrange.fitToContent", "style.assignNamed",
-                       "presentation.routeInternalConnectors",
                        "presentation.optimizeInternalConnectorEndsAndRoute",
                        "presentation.addIncomingRelatedTypes",
                        "presentation.addOutgoingRelatedTypes",
@@ -387,6 +450,8 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
       &routingOk);
   if (!routingOk)
     m_defaultConnectorRouting = kDefaultConnectorRouting;
+  m_connectorOptimizationOptions = normalizedConnectorOptimizationOptions(
+      settings.value(QLatin1String(kConnectorOptimizationOptionsKey)).toMap());
 
   const QVariantMap gestureDefaults = makeDefaultRelationshipGestureKeys();
   QVariantMap storedGestureKeys;
@@ -400,6 +465,11 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
   if (!normalizeRelationshipGestureKeys(storedGestureKeys,
                                         m_relationshipGestureKeys))
     m_relationshipGestureKeys = gestureDefaults;
+  settings.endGroup();
+
+  settings.beginGroup(QLatin1String(kSettingsGroup));
+  m_automaticLayoutOptions = normalizedAutomaticLayoutOptions(
+      settings.value(QLatin1String(kAutomaticLayoutOptionsKey)).toMap());
   settings.endGroup();
 
   settings.beginGroup(QLatin1String(kCppImportSettingsGroup));
@@ -529,6 +599,14 @@ QVariantMap ApplicationSettings::defaultRelationshipGestureKeys() {
   return makeDefaultRelationshipGestureKeys();
 }
 
+QVariantMap ApplicationSettings::defaultConnectorOptimizationOptions() {
+  return normalizedConnectorOptimizationOptions({});
+}
+
+QVariantMap ApplicationSettings::defaultAutomaticLayoutOptions() {
+  return normalizedAutomaticLayoutOptions({});
+}
+
 QString ApplicationSettings::defaultCppInterfacePattern() {
   return CppImportOptions::defaultInterfacePattern();
 }
@@ -624,6 +702,35 @@ void ApplicationSettings::setDefaultConnectorRouting(const QString &routing) {
   m_defaultConnectorRouting = parsed;
   persistConnectorPreferences();
   emit defaultConnectorRoutingChanged();
+}
+
+QVariantMap ApplicationSettings::connectorOptimizationOptions() const {
+  return m_connectorOptimizationOptions;
+}
+
+void ApplicationSettings::setConnectorOptimizationOptions(
+    const QVariantMap &options) {
+  const QVariantMap normalized =
+      normalizedConnectorOptimizationOptions(options);
+  if (m_connectorOptimizationOptions == normalized)
+    return;
+  m_connectorOptimizationOptions = normalized;
+  persistConnectorPreferences();
+  emit connectorOptimizationOptionsChanged();
+}
+
+QVariantMap ApplicationSettings::automaticLayoutOptions() const {
+  return m_automaticLayoutOptions;
+}
+
+void ApplicationSettings::setAutomaticLayoutOptions(
+    const QVariantMap &options) {
+  const QVariantMap normalized = normalizedAutomaticLayoutOptions(options);
+  if (m_automaticLayoutOptions == normalized)
+    return;
+  m_automaticLayoutOptions = normalized;
+  persistDiagramPreferences();
+  emit automaticLayoutOptionsChanged();
 }
 
 QVariantMap ApplicationSettings::relationshipGestureKeys() const {
@@ -796,6 +903,8 @@ void ApplicationSettings::resetDefaults() {
   setGridSpacing(kDefaultGridSpacing);
   setDiagramItemSizingMode(QLatin1String(kDefaultDiagramItemSizingMode));
   setDefaultConnectorRouting(toString(kDefaultConnectorRouting));
+  setConnectorOptimizationOptions(defaultConnectorOptimizationOptions());
+  setAutomaticLayoutOptions(defaultAutomaticLayoutOptions());
   setRelationshipGestureKeys(makeDefaultRelationshipGestureKeys());
   setCppInterfacePattern(defaultCppInterfacePattern());
   setCppMemberTypeRules(defaultCppMemberTypeRules());
@@ -886,6 +995,8 @@ void ApplicationSettings::persistDiagramPreferences() const {
   settings.setValue(QLatin1String(kGridSpacingKey), m_gridSpacing);
   settings.setValue(QLatin1String(kDiagramItemSizingModeKey),
                     m_diagramItemSizingMode);
+  settings.setValue(QLatin1String(kAutomaticLayoutOptionsKey),
+                    m_automaticLayoutOptions);
   settings.endGroup();
   settings.sync();
 }
@@ -895,6 +1006,8 @@ void ApplicationSettings::persistConnectorPreferences() const {
   settings.beginGroup(QLatin1String(kConnectorSettingsGroup));
   settings.setValue(QLatin1String(kDefaultConnectorRoutingKey),
                     toString(m_defaultConnectorRouting));
+  settings.setValue(QLatin1String(kConnectorOptimizationOptionsKey),
+                    m_connectorOptimizationOptions);
   for (const auto &type : relationshipGestureTypes())
     settings.setValue(type + QLatin1String(kRelationshipGestureKeySuffix),
                       m_relationshipGestureKeys.value(type));

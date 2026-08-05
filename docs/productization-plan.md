@@ -312,13 +312,13 @@ history memory grow with total project size rather than the size of each edit.
   toolbox follows the hovered route point, then latches there while the user
   crosses its hover bridge; long relationships therefore do not require a trip
   back to their midpoint.
-- Connectors support Ctrl-click and lasso multi-selection. Rectangle
-  presentations retain lasso priority: routed lines are considered only when
-  the lasso intersects no visible node rectangle. Shift adds and Ctrl toggles
-  either kind of selection. Straight/orthogonal routing applies to the complete
-  connector selection as one field-sized undo command that records only the
-  affected connector modes; precise endpoint, bend-point, and annotation
-  editing remains scoped to one active connector.
+- Connectors support Ctrl-click and lasso multi-selection. One lasso may select
+  rectangle/note presentations and intersecting routed lines together; Shift
+  adds and Ctrl toggles every kind independently. Straight/orthogonal routing
+  applies to the complete connector portion of a mixed selection as one
+  field-sized undo command that records only the affected connector modes;
+  precise endpoint, bend-point, and annotation editing remains scoped to one
+  active connector.
 - The selected-node/container expansion is implemented. Hovering a selected
   node body or selected container header exposes direct name editing, fit to
   content, a lightweight named-style menu with access to style management, and
@@ -424,48 +424,54 @@ history memory grow with total project size rather than the size of each edit.
 - Commit an accepted layout as one compact undoable command. Cancelling the
   preview must leave the project unchanged, and repeated layout of unchanged
   input must produce the same geometry.
-- The first automatic element-layout slice is implemented. **Auto arrange**
-  operates either on the selected top-level presentations (independently per
-  direct container) or on the visible top-level diagram scope. Its built-in
-  deterministic layered layout ranks the directed relationship graph, keeps
-  strongly connected cycles in one layer, and shelf-packs disconnected
-  components. A modal preview renders the proposed geometry and live connector
-  response on the actual canvas; left-to-right and top-to-bottom directions can
-  be compared before accepting. Presentation sizes and container membership
-  are preserved, and a moved container carries its complete presentation
-  subtree. Apply creates one compact geometry command; Cancel does not touch
-  the model or undo stack.
-- The first opt-in routing slice is implemented. **Route around obstacles** is
-  available for one or several selected connectors from both the connector
-  context menu and configurable hover toolbox. A deterministic rectilinear
+- The automatic element-layout dialog is implemented for selection, selected
+  container, and whole-diagram scopes. Its built-in deterministic layered
+  layout ranks the directed relationship graph, keeps strongly connected
+  cycles in one layer, and shelf-packs disconnected components. A live modal
+  preview exposes direction, layer/item/component gaps, recursive arrangement
+  of nested container contents, optional container resizing, and post-layout
+  connector handling (unchanged, reroute with fixed ends, or full endpoint
+  optimization). The most recent choices are application settings. Apply
+  commits layout and optional routing as one undo step; Cancel leaves both the
+  model and undo stack untouched.
+- The first opt-in routing slice is implemented. A deterministic rectilinear
   visibility graph routes around visible type, note, and unrelated container
-  rectangles with fixed clearance and a bend penalty. Existing semantic ends,
-  attachment ports, snap points, and route-relative annotations are preserved;
+  rectangles with fixed clearance and structural bend minimization. Existing
+  semantic ends, attachment ports, snap points, and route-relative annotations
+  are preserved;
   only presentation routing and bend points change. The complete selection is
   one compact undo command, and no route changes automatically after later
-  manual movement.
-- **Route all visible connectors** is available from both the diagram canvas
-  and diagram-tab menus. Routes are calculated in stable diagram order and
+  manual movement. Route quality is compared structurally: fewest bends first
+  (including turns immediately outside endpoint ports), then shortest length,
+  then overlap/crossing with existing connectors. Endpoint optimization uses
+  the geometrically facing side pair as the deterministic tie-breaker, while a
+  secondary side pair still wins whenever it removes real bends (or distance
+  without requiring a denser port grid).
+  It evaluates nearby free snap positions together with the route and grows a
+  side's snap grid by the minimum required pair of positions when that removes
+  bends; merely shortening an equally simple route does not make the model's
+  port grid denser.
+- Visible-diagram routing calculates routes in stable diagram order and
   prefer free lanes by penalizing crossings and collinear overlap with already
   routed or untouched visible connectors. All accepted routes are committed as
   one undoable command. Connectors for which no safe path exists keep their
   previous route and are identified in one warning that opens the log panel.
-- A selected container exposes the same two operations with a recursive local
-  scope: **Route internal connectors around obstacles** and **Optimize internal
-  connector ends and routes** affect visible connectors whose two endpoint
-  presentations belong to that container or one of its nested containers.
-  Boundary-crossing connectors are intentionally left unchanged. Both actions
-  are available from the container context menu and configurable hover toolbox
-  and retain the existing one-command undo semantics.
-- Existing routing actions deliberately preserve their attachment sides and
-  snap points. The separate explicit **Optimize ends and route** action may
-  replace them: it compares deterministic facing-side candidates, grows the
-  presentation's shared snap-point grid when necessary, distributes endpoints,
-  and then routes around obstacles and occupied lanes. Port-grid, endpoint, and
-  bend-point changes are committed as one compact undoable command. The model
-  does not currently record whether an attachment was created manually, so the
-  user's choice of the optimizing action is the authority to change every
-  selected attachment; ordinary routing remains the non-destructive option.
+- Connector context menus and hover toolboxes now expose one **Optimize
+  connectors...** command instead of several overlapping route commands. Its
+  dialog offers selection, recursive selected-container, or visible-diagram
+  scope as applicable. Boundary-crossing connectors are intentionally excluded
+  from container scope. Endpoint handling can preserve existing anchors, place
+  arbitrary anchors on edges, or create the minimum additional snap points
+  justified by a simpler route. Manually dragged/reconnected endpoints carry
+  explicit provenance and can be protected while the opposite end is still
+  optimized. An optional collapse mode combines incoming relationships of the
+  same semantic type onto a shared side and attachment, producing trunks such
+  as grouped generalizations into one base. Explicit collapse takes precedence
+  over manual preservation only at that shared incoming end. Readability and
+  work limits are adjustable through minimum straight endpoint-segment length,
+  obstacle clearance, and maximum added snap points per side. The most recent
+  options are persisted, and all port-grid, endpoint, and route changes form
+  one compact undo command.
 - Add preview before extending obstacle routing to automatic rerouting after
   presentation movement. Manual routes remain untouched unless the user
   explicitly invokes or accepts a routing command.

@@ -8,6 +8,7 @@
 #include <QObject>
 #include <QUndoStack>
 #include <QUrl>
+#include <functional>
 #include <memory>
 #include <optional>
 
@@ -289,6 +290,11 @@ public:
   void updatePresentationGeometries(const QString &diagramId,
                                     const QVariantList &geometries,
                                     const QString &description);
+  // Groups validated controller operations into one undo entry. Execution is
+  // synchronous, allowing a later operation to use model changes made by an
+  // earlier one (for example, routing after committing a layout).
+  void executeUndoMacro(const QString &description,
+                        const std::function<void()> &operations);
   // Commits a completed diagram drag as one command. An empty target ID moves
   // the presentations to the diagram root; resize and arrangement operations
   // use updatePresentationGeometries() and therefore leave membership intact.

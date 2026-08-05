@@ -124,12 +124,16 @@ private slots:
   void relationshipDashPatternIsIndependentOfConnectorLength();
   void lassoSelectsAndMovesMultipleNodesAsOneCommand();
   void lassoModifiersAddAndToggleSelection();
-  void connectorMultiSelectionUsesRectangleFirstLassoAndBulkRouting();
+  void connectorMultiSelectionSupportsMixedLassoAndBulkRouting();
   void automaticConnectorRoutingAvoidsObstaclesAndIsUndoable();
   void automaticConnectorRoutingReportsUnroutableConnectors();
   void optimizedRoutingChoosesFacingEndsAtomically();
+  void optimizedRoutingPrioritizesFacingSidesAndSimplePaths();
+  void optimizedRoutingUsesSimplerSecondarySidePair();
   void containerConnectorOptimizationIsRecursivelyScopedAndUndoable();
+  void unifiedConnectorOptimizationHonorsFreeAndManualEndpointModes();
   void automaticLayoutPreviewIsScopedAndUndoable();
+  void automaticLayoutOptionsArrangeContainerAndRouteInOneUndoStep();
   void lassoStartsOnEmptyContainerBody();
   void contextualSelectAllUsesContainerScope();
   void diagramFiltersHideInteractionAndSelection();
@@ -290,6 +294,28 @@ void DiagramCanvasTests::connectorRoutingGeometryIsOrthogonalAndTracksBends() {
 }
 
 void DiagramCanvasTests::obstacleRoutingUsesClearanceAndIsDeterministic() {
+  // Connector conflicts are a tie-breaker, not a reason to manufacture four
+  // extra turns. A direct lane remains the visually optimal result even when
+  // another connector already occupies it completely.
+  ui::OrthogonalObstacleRoutingRequest directRequest;
+  directRequest.source = {100.0, 50.0};
+  directRequest.target = {400.0, 50.0};
+  directRequest.sourceBounds = {0.0, 0.0, 100.0, 100.0};
+  directRequest.targetBounds = {400.0, 0.0, 100.0, 100.0};
+  directRequest.sourceSide = ConnectorSide::Right;
+  directRequest.targetSide = ConnectorSide::Left;
+  directRequest.occupiedRoutes = {
+      QVector<QPointF>{{100.0, 50.0}, {400.0, 50.0}}};
+  const QVector<QPointF> directRoute =
+      ui::routeOrthogonallyAroundObstacles(directRequest);
+  QCOMPARE(directRoute,
+           QVector<QPointF>({directRequest.source, directRequest.target}));
+  const ui::OrthogonalRouteMetrics directMetrics = ui::orthogonalRouteMetrics(
+      directRoute, directRequest.occupiedRoutes, directRequest.crossingPenalty,
+      directRequest.sharedSegmentPenalty);
+  QVERIFY(directMetrics.valid);
+  QCOMPARE(directMetrics.bendCount, 0);
+
   ui::OrthogonalObstacleRoutingRequest request;
   request.source = {100.0, 50.0};
   request.target = {400.0, 50.0};
@@ -298,6 +324,7 @@ void DiagramCanvasTests::obstacleRoutingUsesClearanceAndIsDeterministic() {
   request.sourceSide = ConnectorSide::Right;
   request.targetSide = ConnectorSide::Left;
   request.obstacles = {{210.0, -10.0, 80.0, 120.0}};
+  request.endpointClearance = 36.0;
   request.clearance = 12.0;
   request.bendPenalty = 24.0;
 
@@ -306,6 +333,13 @@ void DiagramCanvasTests::obstacleRoutingUsesClearanceAndIsDeterministic() {
   QVERIFY(route.size() >= 4);
   QCOMPARE(route.first(), request.source);
   QCOMPARE(route.last(), request.target);
+  // The first and last turns stay away from their presentation borders even
+  // though ordinary obstacle clearance is smaller.
+  QVERIFY(QLineF(route.at(0), route.at(1)).length() + 0.000001 >=
+          request.endpointClearance);
+  QVERIFY(QLineF(route.at(route.size() - 2), route.constLast()).length() +
+              0.000001 >=
+          request.endpointClearance);
   const QVector<QPointF> persistedBends(route.cbegin() + 1, route.cend() - 1);
   QCOMPARE(ui::buildConnectorRoute(request.source, persistedBends,
                                    request.target, ConnectorRouting::Orthogonal,
@@ -597,7 +631,7 @@ void DiagramCanvasTests::lassoModifiersAddAndToggleSelection() {
 }
 
 void DiagramCanvasTests::
-    connectorMultiSelectionUsesRectangleFirstLassoAndBulkRouting() {
+    connectorMultiSelectionSupportsMixedLassoAndBulkRouting() {
   ProjectController controller;
   populate(controller, 3);
   useStandardInteractionGeometry(controller);
@@ -683,12 +717,13 @@ void DiagramCanvasTests::
   controller.undo();
   QCOMPARE(controller.data(), beforeAutomaticRouting);
 
-  // When the lasso intersects a visible rectangle, rectangle selection wins
-  // even though the first connector also crosses the selected area.
+  // A lasso can select both a visible rectangle and a connector crossing the
+  // same area; presentation and connector commands remain independently
+  // applicable to the mixed selection.
   canvas.clearCanvasSelection();
   canvas.drag({60.0, 60.0}, {315.0, 220.0});
   QCOMPARE(canvas.selectedNodeCount(), 1);
-  QCOMPARE(canvas.selectedConnectorCount(), 0);
+  QCOMPARE(canvas.selectedConnectorCount(), 1);
 
   // Delete follows the visible connector selection, removes only these
   // diagram presentations, and keeps the semantic relationships available to
@@ -855,6 +890,18 @@ void DiagramCanvasTests::optimizedRoutingChoosesFacingEndsAtomically() {
 
   TestDiagramCanvas canvas;
   configureCanvas(canvas, controller);
+  canvas.optimizeConnectors(
+      QStringLiteral("visible"),
+      {{QStringLiteral("endpointMode"), QStringLiteral("snap")},
+       {QStringLiteral("collapseIncoming"), false},
+       {QStringLiteral("preserveManual"), false},
+       {QStringLiteral("maximumAddedSnapPoints"), 0}});
+  QCOMPARE(findNode(controller.data().diagrams.first(), nodes.at(0).id)
+               ->verticalPortSnapPoints,
+           1);
+  controller.undo();
+  QCOMPARE(controller.data(), before);
+
   canvas.optimizeVisibleConnectorEndsAndRoute();
 
   const Diagram optimizedDiagram = controller.data().diagrams.first();
@@ -882,10 +929,125 @@ void DiagramCanvasTests::optimizedRoutingChoosesFacingEndsAtomically() {
 }
 
 void DiagramCanvasTests::
+    optimizedRoutingPrioritizesFacingSidesAndSimplePaths() {
+  ProjectController controller;
+  populate(controller, 14);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+
+  controller.updateNodeGeometry(diagramId, nodes.at(0).id, 350.0, 20.0, 120.0,
+                                80.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(1).id, 350.0, 550.0, 120.0,
+                                80.0);
+  for (int row = 0; row < 6; ++row) {
+    const qreal y = 130.0 + row * 75.0;
+    controller.updateNodeGeometry(diagramId, nodes.at(2 + row * 2).id, 40.0, y,
+                                  80.0, 50.0);
+    controller.updateNodeGeometry(diagramId, nodes.at(3 + row * 2).id, 680.0, y,
+                                  80.0, 50.0);
+  }
+
+  const QString optimizedConnectorId = controller.createRelationshipWithRouting(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("dependency"),
+      QStringLiteral("straight"));
+  QVERIFY(!optimizedConnectorId.isEmpty());
+  for (int row = 0; row < 6; ++row) {
+    QVERIFY(!controller
+                 .createRelationshipWithRouting(
+                     diagramId, nodes.at(2 + row * 2).id,
+                     nodes.at(3 + row * 2).id, QStringLiteral("dependency"),
+                     QStringLiteral("orthogonal"))
+                 .isEmpty());
+  }
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  // Select only the vertical connector above the first occupied horizontal
+  // lane. The former weighted scorer preferred a large right-to-left loop to
+  // this facing bottom-to-top attachment after enough crossings accumulated.
+  canvas.drag({435.0, 140.0}, {445.0, 150.0});
+  QCOMPARE(canvas.selectedConnectorCount(), 1);
+  const ProjectData before = controller.data();
+  canvas.optimizeSelectedConnectorEndsAndRoute();
+
+  const auto *optimized =
+      findConnector(controller.data().diagrams.first(), optimizedConnectorId);
+  QVERIFY(optimized);
+  QVERIFY(optimized->sourceAnchor.side == ConnectorSide::Bottom);
+  QVERIFY(optimized->targetAnchor.side == ConnectorSide::Top);
+  QVERIFY(optimized->bendPoints.isEmpty());
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Optimize connector ends and route"));
+  controller.undo();
+  QCOMPARE(controller.data(), before);
+}
+
+void DiagramCanvasTests::optimizedRoutingUsesSimplerSecondarySidePair() {
+  ProjectController controller;
+  populate(controller, 5);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+
+  // This mirrors the reported arrangement: the presentations are primarily
+  // separated horizontally, but two intervening rows make right-to-left
+  // attachment require a staircase. Top-to-bottom attachment has a clear
+  // two-bend corridor between those rows.
+  controller.updateNodeGeometry(diagramId, nodes.at(0).id, 80.0, 540.0, 220.0,
+                                80.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(1).id, 1170.0, 233.0, 245.0,
+                                83.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(2).id, 457.0, 200.0, 190.0,
+                                140.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(3).id, 407.0, 558.0, 289.0,
+                                73.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(4).id, 1200.0, 700.0, 180.0,
+                                70.0);
+  // Occupy the target's only bottom marker. The optimizer must discover that
+  // adding the first pair of horizontal markers exposes a substantially
+  // simpler route through the left bottom marker.
+  const QString occupyingConnectorId = controller.createRelationshipAtAnchors(
+      diagramId, nodes.at(1).id, nodes.at(4).id, QStringLiteral("dependency"),
+      QStringLiteral("orthogonal"), {ConnectorSide::Bottom, 0.5},
+      {ConnectorSide::Top, 0.5});
+  QVERIFY(!occupyingConnectorId.isEmpty());
+  const QString connectorId = controller.createRelationshipWithRouting(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("dependency"),
+      QStringLiteral("straight"));
+  QVERIFY(!connectorId.isEmpty());
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  // The midpoint of the initial straight connector is empty canvas space.
+  // View coordinates include the default (30, 30) pan.
+  canvas.drag({760.0, 452.0}, {770.0, 462.0});
+  QCOMPARE(canvas.selectedConnectorCount(), 1);
+  const ProjectData before = controller.data();
+  canvas.optimizeSelectedConnectorEndsAndRoute();
+
+  const auto *optimized =
+      findConnector(controller.data().diagrams.first(), connectorId);
+  QVERIFY(optimized);
+  QCOMPARE(static_cast<int>(optimized->sourceAnchor.side),
+           static_cast<int>(ConnectorSide::Top));
+  QCOMPARE(static_cast<int>(optimized->targetAnchor.side),
+           static_cast<int>(ConnectorSide::Bottom));
+  QCOMPARE(optimized->targetAnchor.offset, 0.25);
+  QCOMPARE(optimized->bendPoints.size(), 2);
+  const auto *optimizedTarget =
+      findNode(controller.data().diagrams.first(), nodes.at(1).id);
+  QVERIFY(optimizedTarget);
+  QCOMPARE(optimizedTarget->horizontalPortSnapPoints, 3);
+  controller.undo();
+  QCOMPARE(controller.data(), before);
+}
+
+void DiagramCanvasTests::
     containerConnectorOptimizationIsRecursivelyScopedAndUndoable() {
   ProjectController controller;
   const QString diagramId = controller.data().diagrams.first().id;
   const QString directElement = controller.addElement(QStringLiteral("class"));
+  const QString secondDirectElement =
+      controller.addElement(QStringLiteral("class"));
   const QString nestedElement = controller.addElement(QStringLiteral("class"));
   const QString externalElement =
       controller.addElement(QStringLiteral("class"));
@@ -903,12 +1065,17 @@ void DiagramCanvasTests::
       itemJson(QStringLiteral("element"), directElement),
       QStringLiteral("folder"), rootFolder));
   QVERIFY(controller.moveBrowserItems(
+      itemJson(QStringLiteral("element"), secondDirectElement),
+      QStringLiteral("folder"), rootFolder));
+  QVERIFY(controller.moveBrowserItems(
       itemJson(QStringLiteral("element"), nestedElement),
       QStringLiteral("folder"), nestedFolder));
-  QCOMPARE(controller.addTreeItemsToDiagram(
-               diagramId, {directElement, nestedElement, externalElement},
-               itemJson(QStringLiteral("folder"), rootFolder), 100.0, 100.0),
-           5);
+  QCOMPARE(
+      controller.addTreeItemsToDiagram(
+          diagramId,
+          {directElement, secondDirectElement, nestedElement, externalElement},
+          itemJson(QStringLiteral("folder"), rootFolder), 100.0, 100.0),
+      6);
 
   const Diagram &created = controller.data().diagrams.first();
   const auto nodeForElement = [&](const QString &elementId) {
@@ -927,11 +1094,13 @@ void DiagramCanvasTests::
     return container == created.containers.cend() ? QString{} : container->id;
   };
   const QString directNodeId = nodeForElement(directElement);
+  const QString secondDirectNodeId = nodeForElement(secondDirectElement);
   const QString nestedNodeId = nodeForElement(nestedElement);
   const QString externalNodeId = nodeForElement(externalElement);
   const QString rootFrameId = containerForSubject(rootFolder);
   const QString nestedFrameId = containerForSubject(nestedFolder);
   QVERIFY(!directNodeId.isEmpty());
+  QVERIFY(!secondDirectNodeId.isEmpty());
   QVERIFY(!nestedNodeId.isEmpty());
   QVERIFY(!externalNodeId.isEmpty());
   QVERIFY(!rootFrameId.isEmpty());
@@ -951,7 +1120,12 @@ void DiagramCanvasTests::
                    {QStringLiteral("height"), 250.0}},
        QVariantMap{{QStringLiteral("id"), directNodeId},
                    {QStringLiteral("x"), 100.0},
-                   {QStringLiteral("y"), 180.0},
+                   {QStringLiteral("y"), 140.0},
+                   {QStringLiteral("width"), 120.0},
+                   {QStringLiteral("height"), 90.0}},
+       QVariantMap{{QStringLiteral("id"), secondDirectNodeId},
+                   {QStringLiteral("x"), 100.0},
+                   {QStringLiteral("y"), 280.0},
                    {QStringLiteral("width"), 120.0},
                    {QStringLiteral("height"), 90.0}},
        QVariantMap{{QStringLiteral("id"), nestedNodeId},
@@ -967,12 +1141,17 @@ void DiagramCanvasTests::
       QStringLiteral("Prepare container routing scope test"));
 
   const QString internalConnectorId = controller.createRelationshipWithRouting(
-      diagramId, directNodeId, nestedNodeId, QStringLiteral("dependency"),
+      diagramId, directNodeId, nestedNodeId, QStringLiteral("generalization"),
       QStringLiteral("straight"));
+  const QString secondInternalConnectorId =
+      controller.createRelationshipWithRouting(
+          diagramId, secondDirectNodeId, nestedNodeId,
+          QStringLiteral("generalization"), QStringLiteral("straight"));
   const QString boundaryConnectorId = controller.createRelationshipWithRouting(
       diagramId, nestedNodeId, externalNodeId, QStringLiteral("dependency"),
       QStringLiteral("straight"));
   QVERIFY(!internalConnectorId.isEmpty());
+  QVERIFY(!secondInternalConnectorId.isEmpty());
   QVERIFY(!boundaryConnectorId.isEmpty());
 
   TestDiagramCanvas canvas;
@@ -982,7 +1161,7 @@ void DiagramCanvasTests::
   canvas.press({90.0, 90.0});
   canvas.release({90.0, 90.0});
   QCOMPARE(canvas.selectedContainerCount(), 1);
-  QCOMPARE(canvas.selectedContainerInternalConnectorCount(), 1);
+  QCOMPARE(canvas.selectedContainerInternalConnectorCount(), 2);
 
   const ProjectData beforeRouting = controller.data();
   const ConnectorPresentation boundaryBefore =
@@ -996,16 +1175,135 @@ void DiagramCanvasTests::
   controller.undo();
   QCOMPARE(controller.data(), beforeRouting);
 
-  canvas.optimizeSelectedContainerConnectorEndsAndRoute();
+  canvas.optimizeSelectedContainerConnectorEndsAndRoute(false);
   QVERIFY(findConnector(controller.data().diagrams.first(), internalConnectorId)
               ->routing == ConnectorRouting::Orthogonal);
+  const auto *normallyOptimizedFirst =
+      findConnector(controller.data().diagrams.first(), internalConnectorId);
+  const auto *normallyOptimizedSecond = findConnector(
+      controller.data().diagrams.first(), secondInternalConnectorId);
+  QVERIFY(normallyOptimizedFirst);
+  QVERIFY(normallyOptimizedSecond);
+  QVERIFY(normallyOptimizedFirst->targetAnchor !=
+          normallyOptimizedSecond->targetAnchor);
   QCOMPARE(
       *findConnector(controller.data().diagrams.first(), boundaryConnectorId),
       boundaryBefore);
   QCOMPARE(controller.undoText(),
-           QStringLiteral("Optimize connector ends and route"));
+           QStringLiteral("Optimize connector ends and routes"));
   controller.undo();
   QCOMPARE(controller.data(), beforeRouting);
+
+  canvas.optimizeSelectedContainerConnectorEndsAndRoute(true);
+  const auto *collapsedFirst =
+      findConnector(controller.data().diagrams.first(), internalConnectorId);
+  const auto *collapsedSecond = findConnector(
+      controller.data().diagrams.first(), secondInternalConnectorId);
+  QVERIFY(collapsedFirst);
+  QVERIFY(collapsedSecond);
+  QCOMPARE(collapsedFirst->targetAnchor, collapsedSecond->targetAnchor);
+  QCOMPARE(
+      *findConnector(controller.data().diagrams.first(), boundaryConnectorId),
+      boundaryBefore);
+  controller.undo();
+  QCOMPARE(controller.data(), beforeRouting);
+
+  // Explicit semantic collapse is stronger than manual preservation at the
+  // shared incoming end. It also groups endpoints which started on different
+  // sides; unrelated manual ends would remain protected.
+  controller.updateConnectorAnchor(diagramId, internalConnectorId, false,
+                                   QStringLiteral("top"), 0.2);
+  controller.updateConnectorAnchor(diagramId, secondInternalConnectorId, false,
+                                   QStringLiteral("left"), 0.8);
+  const ProjectData manuallySeparated = controller.data();
+  canvas.optimizeConnectors(
+      QStringLiteral("container"),
+      {{QStringLiteral("endpointMode"), QStringLiteral("free")},
+       {QStringLiteral("collapseIncoming"), true},
+       {QStringLiteral("preserveManual"), true},
+       {QStringLiteral("endpointClearance"), 28},
+       {QStringLiteral("obstacleClearance"), 12},
+       {QStringLiteral("maximumAddedSnapPoints"), 0}});
+  collapsedFirst =
+      findConnector(controller.data().diagrams.first(), internalConnectorId);
+  collapsedSecond = findConnector(controller.data().diagrams.first(),
+                                  secondInternalConnectorId);
+  QVERIFY(collapsedFirst);
+  QVERIFY(collapsedSecond);
+  QCOMPARE(collapsedFirst->targetAnchor, collapsedSecond->targetAnchor);
+  QVERIFY(collapsedFirst->targetAnchor.side == ConnectorSide::Left);
+  QVERIFY(collapsedFirst->sourceAnchor.side == ConnectorSide::Right);
+  QVERIFY(collapsedSecond->sourceAnchor.side == ConnectorSide::Right);
+  QVERIFY(
+      collapsedFirst->targetAnchor.extra.value(QStringLiteral("positioning"))
+          .isUndefined());
+  controller.undo();
+  QCOMPARE(controller.data(), manuallySeparated);
+}
+
+void DiagramCanvasTests::
+    unifiedConnectorOptimizationHonorsFreeAndManualEndpointModes() {
+  ProjectController controller;
+  populate(controller, 2);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+  controller.updateNodeGeometry(diagramId, nodes.at(0).id, 80.0, 120.0, 160.0,
+                                100.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(1).id, 620.0, 300.0, 160.0,
+                                100.0);
+
+  ConnectorAnchor source{ConnectorSide::Left, 0.27};
+  ConnectorAnchor target{ConnectorSide::Right, 0.73};
+  source.extra.insert(QStringLiteral("positioning"), QStringLiteral("manual"));
+  target.extra.insert(QStringLiteral("positioning"), QStringLiteral("manual"));
+  const QString connectorId = controller.createRelationshipAtAnchors(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("dependency"),
+      QStringLiteral("straight"), source, target);
+  QVERIFY(!connectorId.isEmpty());
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  QCOMPARE(canvas.connectorOptimizationScopeCount(QStringLiteral("visible")),
+           1);
+  const ProjectData before = controller.data();
+  canvas.optimizeConnectors(
+      QStringLiteral("visible"),
+      {{QStringLiteral("endpointMode"), QStringLiteral("free")},
+       {QStringLiteral("collapseIncoming"), false},
+       {QStringLiteral("preserveManual"), true}});
+  const auto *preserved =
+      findConnector(controller.data().diagrams.first(), connectorId);
+  QVERIFY(preserved);
+  QCOMPARE(preserved->sourceAnchor, source);
+  QCOMPARE(preserved->targetAnchor, target);
+  QVERIFY(preserved->routing == ConnectorRouting::Orthogonal);
+  controller.undo();
+  QCOMPARE(controller.data(), before);
+
+  canvas.optimizeConnectors(
+      QStringLiteral("visible"),
+      {{QStringLiteral("endpointMode"), QStringLiteral("free")},
+       {QStringLiteral("collapseIncoming"), false},
+       {QStringLiteral("preserveManual"), false}});
+  const auto *optimized =
+      findConnector(controller.data().diagrams.first(), connectorId);
+  QVERIFY(optimized);
+  QVERIFY(optimized->sourceAnchor != source ||
+          optimized->targetAnchor != target);
+  QVERIFY(optimized->sourceAnchor.extra.value(QStringLiteral("positioning"))
+              .isUndefined());
+  QVERIFY(optimized->targetAnchor.extra.value(QStringLiteral("positioning"))
+              .isUndefined());
+  QCOMPARE(findNode(controller.data().diagrams.first(), nodes.at(0).id)
+               ->horizontalPortSnapPoints,
+           findNode(before.diagrams.first(), nodes.at(0).id)
+               ->horizontalPortSnapPoints);
+  QCOMPARE(findNode(controller.data().diagrams.first(), nodes.at(0).id)
+               ->verticalPortSnapPoints,
+           findNode(before.diagrams.first(), nodes.at(0).id)
+               ->verticalPortSnapPoints);
+  controller.undo();
+  QCOMPARE(controller.data(), before);
 }
 
 void DiagramCanvasTests::automaticLayoutPreviewIsScopedAndUndoable() {
@@ -1116,6 +1414,96 @@ void DiagramCanvasTests::automaticLayoutPreviewIsScopedAndUndoable() {
   QCOMPARE(controller.data(), before);
   controller.redo();
   QCOMPARE(controller.data(), after);
+}
+
+void DiagramCanvasTests::
+    automaticLayoutOptionsArrangeContainerAndRouteInOneUndoStep() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+  const QString first = controller.addElement(QStringLiteral("class"));
+  const QString second = controller.addElement(QStringLiteral("class"));
+  const QString folder = controller.addBrowserFolder(
+      QStringLiteral("model"), {}, QStringLiteral("Layout scope"));
+  const auto itemJson = [](const QString &kind, const QString &id) {
+    return QString::fromUtf8(
+        QJsonDocument(QJsonArray{QJsonObject{{QStringLiteral("kind"), kind},
+                                             {QStringLiteral("id"), id}}})
+            .toJson(QJsonDocument::Compact));
+  };
+  QVERIFY(
+      controller.moveBrowserItems(itemJson(QStringLiteral("element"), first),
+                                  QStringLiteral("folder"), folder));
+  QVERIFY(
+      controller.moveBrowserItems(itemJson(QStringLiteral("element"), second),
+                                  QStringLiteral("folder"), folder));
+  QCOMPARE(controller.addTreeItemsToDiagram(
+               diagramId, {first, second},
+               itemJson(QStringLiteral("folder"), folder), 200.0, 180.0),
+           3);
+
+  const Diagram &created = controller.data().diagrams.first();
+  QVERIFY(created.containers.size() == 1);
+  QVERIFY(created.nodes.size() == 2);
+  const QString frameId = created.containers.first().id;
+  const QString firstNodeId = created.nodes.at(0).id;
+  const QString secondNodeId = created.nodes.at(1).id;
+  controller.updatePresentationGeometries(
+      diagramId,
+      {QVariantMap{{QStringLiteral("id"), frameId},
+                   {QStringLiteral("x"), 100.0},
+                   {QStringLiteral("y"), 100.0},
+                   {QStringLiteral("width"), 600.0},
+                   {QStringLiteral("height"), 420.0}},
+       QVariantMap{{QStringLiteral("id"), firstNodeId},
+                   {QStringLiteral("x"), 180.0},
+                   {QStringLiteral("y"), 210.0},
+                   {QStringLiteral("width"), 150.0},
+                   {QStringLiteral("height"), 90.0}},
+       QVariantMap{{QStringLiteral("id"), secondNodeId},
+                   {QStringLiteral("x"), 190.0},
+                   {QStringLiteral("y"), 220.0},
+                   {QStringLiteral("width"), 150.0},
+                   {QStringLiteral("height"), 90.0}}},
+      QStringLiteral("Prepare scoped layout"));
+  const QString connectorId = controller.createRelationshipWithRouting(
+      diagramId, firstNodeId, secondNodeId, QStringLiteral("dependency"),
+      QStringLiteral("straight"));
+  QVERIFY(!connectorId.isEmpty());
+  const ProjectData before = controller.data();
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  // Canvas view coordinates include its default (30, 30) pan.
+  canvas.press({150.0, 150.0});
+  canvas.release({150.0, 150.0});
+  QVERIFY(canvas.containerSelected());
+  QCOMPARE(canvas.selectedContainerChildPresentationCount(), 2);
+  QVERIFY(canvas.previewAutomaticLayoutWithOptions(
+      QStringLiteral("container"),
+      {{QStringLiteral("direction"), QStringLiteral("left-to-right")},
+       {QStringLiteral("recursive"), false},
+       {QStringLiteral("resizeContainers"), true},
+       {QStringLiteral("layerGap"), 120},
+       {QStringLiteral("itemGap"), 40},
+       {QStringLiteral("componentGap"), 80}}));
+  QCOMPARE(controller.data(), before);
+  canvas.applyAutomaticLayoutPreviewWithConnectorHandling(
+      QStringLiteral("route"), {});
+
+  const Diagram &arranged = controller.data().diagrams.first();
+  const auto *frame = findContainer(arranged, frameId);
+  const auto *firstNode = findNode(arranged, firstNodeId);
+  const auto *secondNode = findNode(arranged, secondNodeId);
+  const auto *connector = findConnector(arranged, connectorId);
+  QVERIFY(frame && firstNode && secondNode && connector);
+  QVERIFY(!firstNode->geometry.intersects(secondNode->geometry));
+  QVERIFY(frame->geometry.contains(firstNode->geometry));
+  QVERIFY(frame->geometry.contains(secondNode->geometry));
+  QVERIFY(connector->routing == ConnectorRouting::Orthogonal);
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Automatically arrange diagram elements"));
+  controller.undo();
+  QCOMPARE(controller.data(), before);
 }
 
 void DiagramCanvasTests::lassoStartsOnEmptyContainerBody() {

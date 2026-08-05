@@ -45,6 +45,9 @@ class DiagramCanvas : public QQuickItem {
   Q_PROPERTY(
       int selectedContainerInternalConnectorCount READ
           selectedContainerInternalConnectorCount NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(
+      int selectedContainerChildPresentationCount READ
+          selectedContainerChildPresentationCount NOTIFY canvasSelectionChanged)
   Q_PROPERTY(int selectedConnectorCount READ selectedConnectorCount NOTIFY
                  canvasSelectionChanged)
   Q_PROPERTY(int selectedNoteCount READ selectedNoteCount NOTIFY
@@ -178,6 +181,7 @@ public:
   int selectedNodeCount() const;
   int selectedContainerCount() const;
   int selectedContainerInternalConnectorCount() const;
+  int selectedContainerChildPresentationCount() const;
   int selectedConnectorCount() const;
   int selectedNoteCount() const;
   bool noteSelected() const;
@@ -270,7 +274,11 @@ public:
   Q_INVOKABLE void routeSelectedContainerConnectorsAroundObstacles();
   Q_INVOKABLE void optimizeSelectedConnectorEndsAndRoute();
   Q_INVOKABLE void optimizeVisibleConnectorEndsAndRoute();
-  Q_INVOKABLE void optimizeSelectedContainerConnectorEndsAndRoute();
+  Q_INVOKABLE void optimizeSelectedContainerConnectorEndsAndRoute(
+      bool collapseTargetEndpointsByRelationshipType);
+  Q_INVOKABLE int connectorOptimizationScopeCount(const QString &scope) const;
+  Q_INVOKABLE void optimizeConnectors(const QString &scope,
+                                      const QVariantMap &options);
   Q_INVOKABLE void reattachSelectedConnectorEnds(const QString &side);
   Q_INVOKABLE void reattachSelectedConnectorEndsToFacingSides();
   Q_INVOKABLE void shiftSelectedConnectorEnds(const QString &direction);
@@ -290,7 +298,13 @@ public:
   Q_INVOKABLE void arrangeSelection(const QString &operation);
   Q_INVOKABLE bool previewAutomaticLayout(const QString &scope,
                                           const QString &direction);
+  Q_INVOKABLE bool
+  previewAutomaticLayoutWithOptions(const QString &scope,
+                                    const QVariantMap &options);
   Q_INVOKABLE void applyAutomaticLayoutPreview();
+  Q_INVOKABLE void applyAutomaticLayoutPreviewWithConnectorHandling(
+      const QString &connectorHandling,
+      const QVariantMap &connectorOptimizationOptions);
   Q_INVOKABLE void cancelAutomaticLayoutPreview();
   Q_INVOKABLE void nudgeSelection(qreal deltaX, qreal deltaY);
   Q_INVOKABLE void removeSelectedPresentations();
@@ -360,6 +374,12 @@ protected:
   void keyPressEvent(QKeyEvent *event) override;
 
 private:
+  struct ConnectorRoutingOptions {
+    qreal endpointClearance = 12.0;
+    qreal obstacleClearance = 12.0;
+    int maximumAddedSnapPoints = 8;
+  };
+
   enum class Interaction {
     None,
     Move,
@@ -478,14 +498,22 @@ private:
   QStringList visibleConnectorIdsInDiagramOrder() const;
   QStringList
   visibleConnectorIdsInsideContainer(const QString &containerId) const;
-  void routeConnectorsAroundObstacles(const QStringList &connectorIds);
-  void optimizeConnectorEndsAndRoute(const QStringList &connectorIds);
-  ui::OrthogonalObstacleRoutingRequest
-  obstacleRoutingRequest(const NodePresentation &sourceNode,
-                         const NodePresentation &targetNode,
-                         const QPointF &source, const QPointF &target,
-                         ConnectorSide sourceSide, ConnectorSide targetSide,
-                         const QVector<QVector<QPointF>> &occupiedRoutes) const;
+  void routeConnectorsAroundObstacles(
+      const QStringList &connectorIds,
+      const ConnectorRoutingOptions &options = ConnectorRoutingOptions{});
+  QStringList connectorIdsForOptimizationScope(const QString &scope) const;
+  void optimizeConnectorEndsAndRoute(
+      const QStringList &connectorIds, const QString &endpointMode,
+      bool collapseTargetEndpointsByRelationshipType = false,
+      bool preserveManualEndpoints = false,
+      const ConnectorRoutingOptions &options = ConnectorRoutingOptions{});
+  static ConnectorRoutingOptions
+  connectorRoutingOptions(const QVariantMap &options);
+  ui::OrthogonalObstacleRoutingRequest obstacleRoutingRequest(
+      const NodePresentation &sourceNode, const NodePresentation &targetNode,
+      const QPointF &source, const QPointF &target, ConnectorSide sourceSide,
+      ConnectorSide targetSide, const QVector<QVector<QPointF>> &occupiedRoutes,
+      const ConnectorRoutingOptions &options) const;
   QString selectedCompartmentVisibility(bool attributes) const;
   void captureSelectedGeometry();
   void collectContainerSubtreeGeometry(const Diagram &diagram,
@@ -551,6 +579,7 @@ private:
   QHash<QString, QRectF> m_previewGeometry;
   bool m_automaticLayoutPreviewActive = false;
   int m_automaticLayoutPreviewCount = 0;
+  QStringList m_automaticLayoutConnectorIds;
   // Endpoint drags are presentation-only until a valid drop commits one
   // command. An empty target ID means the end is provisionally detached and
   // follows m_endpointDragPoint directly.

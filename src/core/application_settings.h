@@ -28,6 +28,11 @@ class ApplicationSettings final : public QObject {
   Q_PROPERTY(
       QString defaultConnectorRouting READ defaultConnectorRouting WRITE
           setDefaultConnectorRouting NOTIFY defaultConnectorRoutingChanged)
+  Q_PROPERTY(
+      QVariantMap connectorOptimizationOptions READ connectorOptimizationOptions
+          NOTIFY connectorOptimizationOptionsChanged)
+  Q_PROPERTY(QVariantMap automaticLayoutOptions READ automaticLayoutOptions
+                 NOTIFY automaticLayoutOptionsChanged)
   Q_PROPERTY(QVariantMap relationshipGestureKeys READ relationshipGestureKeys
                  NOTIFY relationshipGestureKeysChanged)
   Q_PROPERTY(QString cppInterfacePattern READ cppInterfacePattern NOTIFY
@@ -80,6 +85,8 @@ public:
   static constexpr int kMaximumRecentProjects = 10;
 
   static QVariantMap defaultRelationshipGestureKeys();
+  static QVariantMap defaultConnectorOptimizationOptions();
+  static QVariantMap defaultAutomaticLayoutOptions();
   static QString defaultCppInterfacePattern();
   static QVariantList defaultCppMemberTypeRules();
   static QVariantMap defaultContextToolboxConfiguration();
@@ -106,6 +113,10 @@ public:
   void setDiagramItemSizingMode(const QString &mode);
   QString defaultConnectorRouting() const;
   void setDefaultConnectorRouting(const QString &routing);
+  QVariantMap connectorOptimizationOptions() const;
+  Q_INVOKABLE void setConnectorOptimizationOptions(const QVariantMap &options);
+  QVariantMap automaticLayoutOptions() const;
+  Q_INVOKABLE void setAutomaticLayoutOptions(const QVariantMap &options);
   QVariantMap relationshipGestureKeys() const;
   Q_INVOKABLE bool setRelationshipGestureKeys(const QVariantMap &keys);
   QString cppInterfacePattern() const;
@@ -149,6 +160,8 @@ signals:
   void gridSpacingChanged();
   void diagramItemSizingModeChanged();
   void defaultConnectorRoutingChanged();
+  void connectorOptimizationOptionsChanged();
+  void automaticLayoutOptionsChanged();
   void relationshipGestureKeysChanged();
   void cppInterfacePatternChanged();
   void cppMemberTypeRulesChanged();
@@ -179,6 +192,8 @@ private:
   int m_gridSpacing = kDefaultGridSpacing;
   QString m_diagramItemSizingMode = QStringLiteral("content");
   ConnectorRouting m_defaultConnectorRouting = kDefaultConnectorRouting;
+  QVariantMap m_connectorOptimizationOptions;
+  QVariantMap m_automaticLayoutOptions;
   QVariantMap m_relationshipGestureKeys;
   QString m_cppInterfacePattern;
   QList<CppMemberTypeRule> m_cppMemberTypeRules;

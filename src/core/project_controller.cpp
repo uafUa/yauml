@@ -3867,6 +3867,15 @@ void ProjectController::updatePresentationGeometries(
                             description);
 }
 
+void ProjectController::executeUndoMacro(
+    const QString &description, const std::function<void()> &operations) {
+  if (!operations)
+    return;
+  m_undoStack.beginMacro(description);
+  operations();
+  m_undoStack.endMacro();
+}
+
 bool ProjectController::canMovePresentationsToContainer(
     const QString &diagramId, const QStringList &movedPresentationIds,
     const QString &targetContainerId) const {
@@ -4178,6 +4187,7 @@ void ProjectController::updateConnectorAnchor(const QString &diagramId,
   ConnectorAnchor after = before;
   after.side = parsedSide;
   after.offset = std::clamp(offset, 0.0, 1.0);
+  after.extra.insert(QStringLiteral("positioning"), QStringLiteral("manual"));
   if (before == after)
     return;
   pushCommand(std::make_unique<MoveConnectorAnchorCommand>(

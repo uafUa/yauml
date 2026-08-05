@@ -274,13 +274,8 @@
         contexts: ["diagram context menu", "diagram tab menu"],
         svg: "",
       },
-      routeVisibleConnectors: {
-        label: "Route all visible connectors around obstacles",
-        contexts: ["diagram context menu", "diagram tab menu"],
-        svg: "",
-      },
       optimizeVisibleConnectorEndsAndRoute: {
-        label: "Optimize ends and route all visible connectors",
+        label: "Optimize connectors",
         contexts: ["diagram context menu", "diagram tab menu"],
         svg: "",
       },
@@ -365,13 +360,8 @@
     },
 
     presentation: {
-      routeInternalConnectors: {
-        label: "Route connectors inside container around obstacles",
-        contexts: ["container context menu", "presentation toolbox"],
-        svg: "",
-      },
       optimizeInternalConnectorEndsAndRoute: {
-        label: "Optimize connector ends and routes inside container",
+        label: "Optimize connectors inside container",
         contexts: ["container context menu", "presentation toolbox"],
         svg: "",
       },
@@ -458,13 +448,8 @@
         contexts: ["relationship Routing menu"],
         svg: "route-orthogonal.svg",
       },
-      routeAroundObstacles: {
-        label: "Route around obstacles",
-        contexts: ["relationship Routing menu", "connector toolbox"],
-        svg: "",
-      },
       optimizeEndsAndRoute: {
-        label: "Optimize connector ends and route",
+        label: "Optimize connectors",
         contexts: ["relationship Routing menu", "connector toolbox"],
         svg: "",
       },

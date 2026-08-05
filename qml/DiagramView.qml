@@ -142,16 +142,10 @@ Item {
             label: qsTr("Use orthogonal routing")
         },
         {
-            actionId: "connector.routeAroundObstacles",
-            kind: "autoRouting",
-            fallback: qsTr("Auto"),
-            label: qsTr("Route around obstacles")
-        },
-        {
             actionId: "connector.optimizeEndsAndRoute",
             kind: "optimizedRouting",
             fallback: qsTr("Opt"),
-            label: qsTr("Optimize ends and route")
+            label: qsTr("Optimize connectors")
         },
         {
             actionId: "connector.editName",
@@ -252,16 +246,10 @@ Item {
             label: qsTr("Choose style")
         },
         {
-            actionId: "presentation.routeInternalConnectors",
-            kind: "routeInternalConnectors",
-            fallback: qsTr("Route"),
-            label: qsTr("Route internal connectors")
-        },
-        {
             actionId: "presentation.optimizeInternalConnectorEndsAndRoute",
             kind: "optimizeInternalConnectors",
             fallback: qsTr("Opt"),
-            label: qsTr("Optimize internal connector ends and routes")
+            label: qsTr("Optimize connectors")
         },
         {
             actionId: "presentation.addIncomingRelatedTypes",
@@ -311,8 +299,7 @@ Item {
         configuredToolboxActions("presentation", presentationToolboxActions)
 
     function presentationToolboxActionApplicable(kind) {
-        if (kind === "routeInternalConnectors"
-                || kind === "optimizeInternalConnectors") {
+        if (kind === "optimizeInternalConnectors") {
             return canvas.presentationToolboxKind === "container"
                     && canvas.selectedContainerInternalConnectorCount > 0
         }
@@ -364,6 +351,10 @@ Item {
 
     function openAutomaticLayoutDialog(scope) {
         automaticLayoutDialog.openFor(scope)
+    }
+
+    function openConnectorOptimizationDialog(scope) {
+        connectorOptimizationDialog.openFor(scope)
     }
 
     function openSelectedPortSnapPointsDialog() {
@@ -557,65 +548,395 @@ Item {
     }
 
     CatalogDialog {
-        id: automaticLayoutDialog
-        property string layoutScope: "diagram"
+        id: connectorOptimizationDialog
+        objectName: "connectorOptimizationDialog"
+        property string requestedScope: "visible"
+        property var scopes: []
 
         parent: Overlay.overlay
         anchors.centerIn: parent
-        width: Math.min(460, parent.width - 40)
+        width: Math.min(500, parent.width - 40)
         modal: true
         focus: true
         closePolicy: Popup.NoAutoClose
-        title: qsTr("Automatic layout preview")
+        title: qsTr("Optimize connectors")
         standardButtons: Dialog.Ok | Dialog.Cancel
-        onAccepted: canvas.applyAutomaticLayoutPreview()
-        onRejected: canvas.cancelAutomaticLayoutPreview()
-        onClosed: {
-            if (canvas.automaticLayoutPreviewActive)
-                canvas.cancelAutomaticLayoutPreview()
+
+        function availableScopes() {
+            const result = []
+            const selectedCount = canvas.connectorOptimizationScopeCount(
+                                      "selection")
+            const containerCount = canvas.connectorOptimizationScopeCount(
+                                       "container")
+            const visibleCount = canvas.connectorOptimizationScopeCount(
+                                     "visible")
+            if (selectedCount > 0)
+                result.push({ value: "selection",
+                              label: qsTr("Selected connectors (%1)")
+                                     .arg(selectedCount) })
+            if (containerCount > 0)
+                result.push({ value: "container",
+                              label: qsTr("Inside selected container (%1)")
+                                     .arg(containerCount) })
+            if (visibleCount > 0)
+                result.push({ value: "visible",
+                              label: qsTr("All visible connectors (%1)")
+                                     .arg(visibleCount) })
+            return result
         }
 
-        function directionValue() {
-            return automaticLayoutDirection.currentIndex === 0
-                    ? "left-to-right" : "top-to-bottom"
+        function indexForValue(model, value) {
+            for (let index = 0; index < model.length; ++index)
+                if (model[index].value === value)
+                    return index
+            return 0
+        }
+
+        function savedNumber(options, key, fallback) {
+            return options[key] === undefined ? fallback : options[key]
+        }
+
+        function optionValues() {
+            return {
+                endpointMode: connectorEndpointMode.currentValue,
+                collapseIncoming: collapseIncomingConnectors.checked,
+                preserveManual: preserveManualConnectorEnds.checked,
+                endpointClearance: connectorEndpointClearance.value,
+                obstacleClearance: connectorObstacleClearance.value,
+                maximumAddedSnapPoints: connectorMaximumAddedSnapPoints.value
+            }
         }
 
         function openFor(scope) {
-            layoutScope = scope
-            automaticLayoutDirection.currentIndex = 0
-            if (canvas.previewAutomaticLayout(scope, directionValue()))
-                open()
+            requestedScope = scope
+            scopes = availableScopes()
+            if (scopes.length === 0)
+                return
+            connectorOptimizationScope.currentIndex =
+                    indexForValue(scopes, scope)
+            const saved = applicationSettings.connectorOptimizationOptions
+            connectorEndpointMode.currentIndex =
+                    indexForValue(connectorEndpointMode.model,
+                                  saved.endpointMode || "snap")
+            collapseIncomingConnectors.checked =
+                    saved.collapseIncoming === true
+            preserveManualConnectorEnds.checked =
+                    saved.preserveManual !== false
+            connectorEndpointClearance.value = savedNumber(
+                        saved, "endpointClearance", 12)
+            connectorObstacleClearance.value = savedNumber(
+                        saved, "obstacleClearance", 12)
+            connectorMaximumAddedSnapPoints.value = savedNumber(
+                        saved, "maximumAddedSnapPoints", 8)
+            open()
+        }
+
+        onAccepted: {
+            const options = optionValues()
+            applicationSettings.setConnectorOptimizationOptions(options)
+            canvas.optimizeConnectors(connectorOptimizationScope.currentValue,
+                                      options)
         }
 
         contentItem: ColumnLayout {
             spacing: 10
 
+            Label { text: qsTr("Scope") }
+            ComboBox {
+                id: connectorOptimizationScope
+                Layout.fillWidth: true
+                model: connectorOptimizationDialog.scopes
+                textRole: "label"
+                valueRole: "value"
+            }
+
+            Label { text: qsTr("Endpoint handling") }
+            ComboBox {
+                id: connectorEndpointMode
+                Layout.fillWidth: true
+                textRole: "label"
+                valueRole: "value"
+                model: [
+                    { value: "preserve",
+                      label: qsTr("Preserve endpoints; optimize routes only") },
+                    { value: "free",
+                      label: qsTr("Reconsider endpoints at free edge positions") },
+                    { value: "snap",
+                      label: qsTr("Reconsider endpoints using snap points") }
+                ]
+            }
+            CheckBox {
+                id: preserveManualConnectorEnds
+                Layout.fillWidth: true
+                enabled: connectorEndpointMode.currentValue !== "preserve"
+                text: qsTr("Preserve manually positioned endpoints")
+            }
+            CheckBox {
+                id: collapseIncomingConnectors
+                Layout.fillWidth: true
+                enabled: connectorEndpointMode.currentValue !== "preserve"
+                text: qsTr("Collapse incoming connectors of the same relationship type")
+            }
             Label {
                 Layout.fillWidth: true
+                visible: collapseIncomingConnectors.checked
+                         && preserveManualConnectorEnds.checked
+                         && connectorEndpointMode.currentValue !== "preserve"
                 wrapMode: Text.Wrap
-                text: automaticLayoutDialog.layoutScope === "selection"
-                      ? qsTr("Previewing %1 selected top-level presentations. Container membership and presentation sizes are preserved.")
-                            .arg(canvas.automaticLayoutPreviewCount)
-                      : qsTr("Previewing %1 top-level diagram presentations. Container contents move with their frames.")
-                            .arg(canvas.automaticLayoutPreviewCount)
+                color: uiTheme.mutedText
+                text: qsTr("Collapsing takes precedence at the shared incoming endpoint; other manually positioned endpoints remain fixed.")
             }
-            Label { text: qsTr("Direction") }
-            ComboBox {
-                id: automaticLayoutDirection
+            Label {
+                text: qsTr("Routing geometry")
+                font.bold: true
+            }
+            GridLayout {
                 Layout.fillWidth: true
-                model: [qsTr("Left to right"), qsTr("Top to bottom")]
-                onActivated: {
-                    if (!canvas.previewAutomaticLayout(
-                                automaticLayoutDialog.layoutScope,
-                                automaticLayoutDialog.directionValue()))
-                        automaticLayoutDialog.reject()
+                columns: 2
+                columnSpacing: 12
+                rowSpacing: 8
+
+                Label { text: qsTr("Minimum straight segment at endpoint (px)") }
+                SpinBox {
+                    id: connectorEndpointClearance
+                    Layout.fillWidth: true
+                    from: 0
+                    to: 200
+                    editable: true
+                }
+                Label { text: qsTr("Obstacle clearance (px)") }
+                SpinBox {
+                    id: connectorObstacleClearance
+                    Layout.fillWidth: true
+                    from: 0
+                    to: 100
+                    editable: true
+                }
+                Label { text: qsTr("Maximum added snap points per side") }
+                SpinBox {
+                    id: connectorMaximumAddedSnapPoints
+                    Layout.fillWidth: true
+                    enabled: connectorEndpointMode.currentValue === "snap"
+                    from: 0
+                    to: 16
+                    stepSize: 2
+                    editable: true
                 }
             }
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 color: uiTheme.mutedText
-                text: qsTr("Review the live result on the diagram. OK commits all positions as one undoable command; Cancel restores the original geometry.")
+                text: connectorEndpointMode.currentValue === "snap"
+                      ? qsTr("Additional snap points are created only when they reduce route complexity.")
+                      : connectorEndpointMode.currentValue === "free"
+                        ? qsTr("Endpoints may be placed anywhere on a presentation edge; snap-point counts are unchanged.")
+                        : qsTr("Only orthogonal bends are recalculated; attachment sides and offsets stay unchanged.")
+            }
+        }
+    }
+
+    CatalogDialog {
+        id: automaticLayoutDialog
+        objectName: "automaticLayoutDialog"
+        property string requestedScope: "diagram"
+        property var scopes: []
+        property bool previewAvailable: false
+
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(520, parent.width - 40)
+        modal: true
+        focus: true
+        closePolicy: Popup.NoAutoClose
+        title: qsTr("Auto-arrange")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onAccepted: {
+            const options = optionValues()
+            applicationSettings.setAutomaticLayoutOptions(options)
+            canvas.applyAutomaticLayoutPreviewWithConnectorHandling(
+                        options.connectorHandling,
+                        applicationSettings.connectorOptimizationOptions)
+        }
+        onRejected: canvas.cancelAutomaticLayoutPreview()
+        onClosed: {
+            if (canvas.automaticLayoutPreviewActive)
+                canvas.cancelAutomaticLayoutPreview()
+        }
+
+        function availableScopes() {
+            const result = []
+            const selectedCount = canvas.selectedNodeCount
+                    + canvas.selectedContainerCount + canvas.selectedNoteCount
+            if (selectedCount >= 2)
+                result.push({ value: "selection",
+                              label: qsTr("Selected presentations") })
+            if (canvas.containerSelected
+                    && canvas.selectedContainerChildPresentationCount >= 2)
+                result.push({ value: "container",
+                              label: qsTr("Contents of selected container") })
+            result.push({ value: "diagram",
+                          label: qsTr("Top-level diagram presentations") })
+            return result
+        }
+
+        function indexForValue(model, value) {
+            for (let index = 0; index < model.length; ++index)
+                if (model[index].value === value)
+                    return index
+            return 0
+        }
+
+        function savedNumber(options, key, fallback) {
+            return options[key] === undefined ? fallback : options[key]
+        }
+
+        function optionValues() {
+            return {
+                direction: automaticLayoutDirection.currentValue,
+                recursive: automaticLayoutRecursive.checked,
+                resizeContainers: automaticLayoutResizeContainers.checked,
+                layerGap: automaticLayoutLayerGap.value,
+                itemGap: automaticLayoutItemGap.value,
+                componentGap: automaticLayoutComponentGap.value,
+                connectorHandling: automaticLayoutConnectorHandling.currentValue
+            }
+        }
+
+        function refreshPreview() {
+            previewAvailable = canvas.previewAutomaticLayoutWithOptions(
+                        automaticLayoutScope.currentValue, optionValues())
+            const okButton = standardButton(Dialog.Ok)
+            if (okButton)
+                okButton.enabled = previewAvailable
+        }
+
+        function openFor(scope) {
+            requestedScope = scope
+            scopes = availableScopes()
+            automaticLayoutScope.currentIndex = indexForValue(scopes, scope)
+            const saved = applicationSettings.automaticLayoutOptions
+            automaticLayoutDirection.currentIndex = indexForValue(
+                        automaticLayoutDirection.model,
+                        saved.direction || "left-to-right")
+            automaticLayoutRecursive.checked = saved.recursive === true
+            automaticLayoutResizeContainers.checked =
+                    saved.resizeContainers !== false
+            automaticLayoutLayerGap.value = savedNumber(saved, "layerGap", 100)
+            automaticLayoutItemGap.value = savedNumber(saved, "itemGap", 40)
+            automaticLayoutComponentGap.value = savedNumber(saved,
+                                                               "componentGap",
+                                                               80)
+            automaticLayoutConnectorHandling.currentIndex = indexForValue(
+                        automaticLayoutConnectorHandling.model,
+                        saved.connectorHandling || "none")
+            refreshPreview()
+            open()
+        }
+
+        onOpened: {
+            const okButton = standardButton(Dialog.Ok)
+            if (okButton)
+                okButton.enabled = previewAvailable
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            Label { text: qsTr("Scope") }
+            ComboBox {
+                id: automaticLayoutScope
+                Layout.fillWidth: true
+                model: automaticLayoutDialog.scopes
+                textRole: "label"
+                valueRole: "value"
+                onActivated: automaticLayoutDialog.refreshPreview()
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                text: automaticLayoutDialog.previewAvailable
+                      ? qsTr("Previewing %1 arranged presentations.")
+                            .arg(canvas.automaticLayoutPreviewCount)
+                      : qsTr("The current options do not change this scope.")
+            }
+            Label { text: qsTr("Direction") }
+            ComboBox {
+                id: automaticLayoutDirection
+                Layout.fillWidth: true
+                textRole: "label"
+                valueRole: "value"
+                model: [
+                    { value: "left-to-right", label: qsTr("Left to right") },
+                    { value: "top-to-bottom", label: qsTr("Top to bottom") }
+                ]
+                onActivated: automaticLayoutDialog.refreshPreview()
+            }
+            GridLayout {
+                Layout.fillWidth: true
+                columns: 2
+                columnSpacing: 12
+                rowSpacing: 8
+
+                Label { text: qsTr("Layer gap") }
+                SpinBox {
+                    id: automaticLayoutLayerGap
+                    Layout.fillWidth: true
+                    from: 0
+                    to: 2000
+                    editable: true
+                    onValueModified: automaticLayoutDialog.refreshPreview()
+                }
+                Label { text: qsTr("Item gap") }
+                SpinBox {
+                    id: automaticLayoutItemGap
+                    Layout.fillWidth: true
+                    from: 0
+                    to: 2000
+                    editable: true
+                    onValueModified: automaticLayoutDialog.refreshPreview()
+                }
+                Label { text: qsTr("Component gap") }
+                SpinBox {
+                    id: automaticLayoutComponentGap
+                    Layout.fillWidth: true
+                    from: 0
+                    to: 2000
+                    editable: true
+                    onValueModified: automaticLayoutDialog.refreshPreview()
+                }
+            }
+            CheckBox {
+                id: automaticLayoutRecursive
+                Layout.fillWidth: true
+                text: qsTr("Arrange nested container contents recursively")
+                onToggled: if (automaticLayoutDialog.visible)
+                               automaticLayoutDialog.refreshPreview()
+            }
+            CheckBox {
+                id: automaticLayoutResizeContainers
+                Layout.fillWidth: true
+                text: qsTr("Resize containers to fit their contents")
+                onToggled: if (automaticLayoutDialog.visible)
+                               automaticLayoutDialog.refreshPreview()
+            }
+            Label { text: qsTr("After layout") }
+            ComboBox {
+                id: automaticLayoutConnectorHandling
+                Layout.fillWidth: true
+                textRole: "label"
+                valueRole: "value"
+                model: [
+                    { value: "none", label: qsTr("Do not change connectors") },
+                    { value: "route", label: qsTr("Route while preserving endpoints") },
+                    { value: "optimize", label: qsTr("Use saved connector optimization options") }
+                ]
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: uiTheme.mutedText
+                text: qsTr("Review the live result on the diagram. OK commits layout and optional routing as one undoable command; Cancel restores the original geometry.")
             }
         }
     }
@@ -766,6 +1087,9 @@ Item {
         onExportPngRequested: root.openPngExportDialog()
         onAutomaticLayoutRequested:
             root.openAutomaticLayoutDialog("diagram")
+        onConnectorOptimizationRequested: function(scope) {
+            root.openConnectorOptimizationDialog(scope)
+        }
     }
 
     Menu {
@@ -1112,18 +1436,10 @@ Item {
         Menu {
             title: qsTr("Routing")
             CatalogMenuItem {
-                catalogId: "connector.routeAroundObstacles"
-                text: canvas.selectedConnectorCount > 1
-                      ? qsTr("Route selected around obstacles")
-                      : qsTr("Route around obstacles")
-                onTriggered: canvas.routeSelectedConnectorsAroundObstacles()
-            }
-            CatalogMenuItem {
                 catalogId: "connector.optimizeEndsAndRoute"
-                text: canvas.selectedConnectorCount > 1
-                      ? qsTr("Optimize selected ends and route")
-                      : qsTr("Optimize ends and route")
-                onTriggered: canvas.optimizeSelectedConnectorEndsAndRoute()
+                text: qsTr("Optimize connectors…")
+                onTriggered:
+                    root.openConnectorOptimizationDialog("selection")
             }
             MenuSeparator {}
             CatalogMenuItem {
@@ -1213,26 +1529,19 @@ Item {
     Menu {
         id: containerMenu
         title: qsTr("Folder frame")
-        MenuItem {
-            action: automaticLayoutSelectionAction
-            visible: automaticLayoutSelectionAction.enabled
-            height: visible ? implicitHeight : 0
+        CatalogMenuItem {
+            catalogId: "arrange.autoLayoutSelection"
+            text: qsTr("Auto-arrange contents…")
+            enabled: canvas.selectedContainerChildPresentationCount >= 2
+            onTriggered: root.openAutomaticLayoutDialog("container")
         }
         MenuItem { action: fitSelectionAction }
         MenuSeparator {}
         CatalogMenuItem {
-            catalogId: "presentation.routeInternalConnectors"
-            text: qsTr("Route internal connectors around obstacles")
-            enabled: canvas.selectedContainerInternalConnectorCount > 0
-            onTriggered:
-                canvas.routeSelectedContainerConnectorsAroundObstacles()
-        }
-        CatalogMenuItem {
             catalogId: "presentation.optimizeInternalConnectorEndsAndRoute"
-            text: qsTr("Optimize internal connector ends and routes")
+            text: qsTr("Optimize connectors…")
             enabled: canvas.selectedContainerInternalConnectorCount > 0
-            onTriggered:
-                canvas.optimizeSelectedContainerConnectorEndsAndRoute()
+            onTriggered: root.openConnectorOptimizationDialog("container")
         }
         StyleAssignmentMenu {
             assignedStyleId: canvas.selectedStyleId
@@ -1586,7 +1895,6 @@ Item {
                              && canvas.selectedConnectorRouting
                                 === modelData.value
                     enabled: modelData.kind === "routing"
-                             || modelData.kind === "autoRouting"
                              || modelData.kind === "optimizedRouting"
                              || (canvas.selectedConnectorCount === 1
                                  && (modelData.kind !== "reset"
@@ -1601,12 +1909,9 @@ Item {
                         if (modelData.kind === "routing") {
                             canvas.setSelectedConnectorRouting(modelData.value)
                             canvas.forceActiveFocus()
-                        } else if (modelData.kind === "autoRouting") {
-                            canvas.routeSelectedConnectorsAroundObstacles()
-                            canvas.forceActiveFocus()
                         } else if (modelData.kind === "optimizedRouting") {
-                            canvas.optimizeSelectedConnectorEndsAndRoute()
-                            canvas.forceActiveFocus()
+                            connectorToolbox.dismiss()
+                            root.openConnectorOptimizationDialog("selection")
                         } else if (modelData.kind === "annotation") {
                             canvas.editSelectedConnectorAnnotation(modelData.field)
                             connectorToolbox.dismiss()
@@ -1707,12 +2012,9 @@ Item {
                             } else if (kind === "snapPoints") {
                                 presentationToolbox.dismiss()
                                 root.openSelectedPortSnapPointsDialog()
-                            } else if (kind === "routeInternalConnectors") {
-                                canvas.routeSelectedContainerConnectorsAroundObstacles()
-                                canvas.forceActiveFocus()
                             } else if (kind === "optimizeInternalConnectors") {
-                                canvas.optimizeSelectedContainerConnectorEndsAndRoute()
-                                canvas.forceActiveFocus()
+                                presentationToolbox.dismiss()
+                                root.openConnectorOptimizationDialog("container")
                             } else {
                                 canvas.wrapSelectionInPackage()
                                 canvas.forceActiveFocus()
