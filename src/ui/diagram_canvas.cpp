@@ -23,6 +23,7 @@
 #include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QImage>
+#include <QImageReader>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QMatrix4x4>
@@ -48,6 +49,8 @@ namespace {
 constexpr qreal kHeaderHeight = presentation_layout::kNodeHeaderHeight;
 constexpr qreal kLineHeight = presentation_layout::kNodeLineHeight;
 constexpr qreal kPadding = presentation_layout::kNodeTextPadding;
+constexpr qreal kTypeIconSize = 16.0;
+constexpr qreal kTypeIconSpacing = 4.0;
 constexpr qreal kSnapToleranceViewPixels = 8.0;
 constexpr qreal kMinimumNodeWidth = presentation_layout::kMinimumNodeWidth;
 constexpr qreal kMinimumNodeHeight = presentation_layout::kMinimumNodeHeight;
@@ -110,6 +113,7 @@ struct RenderNode {
   QRectF rect;
   ElementType type = ElementType::Class;
   QString name;
+  QString iconSource;
   QString stereotype;
   QStringList attributes;
   QStringList operations;
@@ -192,6 +196,9 @@ struct RenderText {
   Qt::Alignment alignment;
   QVector<QRectF> visibleFragments;
   bool markdown = false;
+  // Icons share the text atlas so they remain crisp at the canvas raster
+  // scale without creating a QQuickItem for every presentation.
+  QString imageSource;
 };
 
 int detailLevel(qreal zoom) {
@@ -588,11 +595,29 @@ const QColor &elementColor(ElementType type, const ui::UiPalette &palette) {
   return palette.surface;
 }
 
-RenderElementStyle renderElementStyle(const DiagramStyle *style) {
+RenderElementStyle
+renderElementStyle(const DiagramStyle *style,
+                   std::optional<ElementType> elementType = std::nullopt) {
   if (!style)
     return {};
+  QString fill = style->fill;
+  if (elementType) {
+    switch (*elementType) {
+    case ElementType::Class:
+      fill = style->classFill;
+      break;
+    case ElementType::Struct:
+      fill = style->structFill;
+      break;
+    case ElementType::Enumeration:
+      fill = style->enumerationFill;
+      break;
+    case ElementType::Package:
+      break;
+    }
+  }
   return {true,
-          QColor(style->fill),
+          QColor(fill),
           QColor(style->headerFill),
           QColor(style->border),
           QColor(style->primaryText),
@@ -1017,7 +1042,16 @@ QString textSignature(const RenderText &entry) {
          QString::number(static_cast<int>(entry.alignment)) + QChar(0x1f) +
          QString::number(qCeil(entry.target.width())) + u'x' +
          QString::number(qCeil(entry.target.height())) + QChar(0x1f) +
-         QString::number(entry.markdown);
+         QString::number(entry.markdown) + QChar(0x1f) + entry.imageSource;
+}
+
+QString svgResourcePath(const QString &source) {
+  const QUrl url(source);
+  if (url.scheme() == QStringLiteral("qrc"))
+    return u':' + url.path();
+  if (url.isLocalFile())
+    return url.toLocalFile();
+  return source;
 }
 
 QString textLayoutSignature(const RenderText &entry) {
@@ -1206,7 +1240,21 @@ public:
         painter.save();
         painter.translate(command.rect.topLeft());
         painter.scale(m_rasterScale, m_rasterScale);
-        if (entry.markdown) {
+        if (!entry.imageSource.isEmpty()) {
+          // Ask the SVG image plugin to rasterize at the atlas pixel size.
+          // Drawing that image through the inverse logical transform gives a
+          // one-to-one result at the current zoom instead of scaling a 24 px
+          // source icon.
+          QImageReader reader(svgResourcePath(entry.imageSource));
+          reader.setScaledSize(
+              {qMax(1, qCeil(entry.target.width() * m_rasterScale)),
+               qMax(1, qCeil(entry.target.height() * m_rasterScale))});
+          const QImage icon = reader.read();
+          if (!icon.isNull())
+            painter.drawImage(
+                QRectF(0, 0, entry.target.width(), entry.target.height()),
+                icon);
+        } else if (entry.markdown) {
           SafeMarkdownDocument document;
           document.setDocumentMargin(0.0);
           document.setDefaultFont(entry.font);
@@ -1668,6 +1716,23 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
         if (!fragments.isEmpty())
           entries.append({target, text, font, color, alignment, fragments});
       };
+  const auto appendVisibleImage =
+      [&](const QRectF &target, const QRectF &ownClip, const QString &source,
+          const QList<QRectF> &occluders) {
+        if (source.isEmpty())
+          return;
+        const QRectF initiallyVisible = target.intersected(ownClip);
+        const auto fragments =
+            ui::visibleRectangleFragments(initiallyVisible, occluders);
+        if (!fragments.isEmpty())
+          entries.append({target, {}, {}, {}, {}, fragments, false, source});
+      };
+  const auto elided = [](const QString &text, const QFont &font, qreal width) {
+    if (width <= 0.0)
+      return QString{};
+    return QFontMetricsF(font).elidedText(text, Qt::ElideRight,
+                                          std::floor(width));
+  };
 
   QList<QRectF> allNodeRects;
   allNodeRects.reserve(snapshot.nodes.size());
@@ -1721,8 +1786,9 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
     if (splitPackageTitle)
       appendVisibleText(stereotypeTarget, clip, container.stereotype,
                         stereotypeFont, titleColor, Qt::AlignCenter, occluders);
-    appendVisibleText(target, clip, container.name, header, titleColor,
-                      Qt::AlignVCenter | Qt::AlignLeft, occluders);
+    appendVisibleText(target, clip,
+                      elided(container.name, header, target.width()), header,
+                      titleColor, Qt::AlignVCenter | Qt::AlignLeft, occluders);
   }
 
   for (const auto &connector : snapshot.connectors) {
@@ -1775,10 +1841,16 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
                                   node.rect.width() - 2 * kPadding,
                                   node.stereotype.isEmpty() ? 0.0
                                                             : kLineHeight);
+    const qreal headerTop =
+        node.rect.top() + (node.stereotype.isEmpty() ? 0.0 : kLineHeight);
+    const qreal iconWidth =
+        node.iconSource.isEmpty() ? 0.0 : kTypeIconSize + kTypeIconSpacing;
+    const QRectF iconTarget(node.rect.left() + kPadding,
+                            headerTop + (kHeaderHeight - kTypeIconSize) / 2.0,
+                            kTypeIconSize, kTypeIconSize);
     const QRectF headerTarget(
-        node.rect.left() + kPadding,
-        node.rect.top() + (node.stereotype.isEmpty() ? 0.0 : kLineHeight),
-        node.rect.width() - 2 * kPadding, kHeaderHeight);
+        node.rect.left() + kPadding + iconWidth, headerTop,
+        node.rect.width() - 2 * kPadding - iconWidth, kHeaderHeight);
     const QColor primaryText =
         node.style.customized ? node.style.primaryText : palette.nodeTitleText;
     const QColor secondaryText =
@@ -1786,7 +1858,10 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
     if (!node.stereotype.isEmpty())
       appendVisibleText(stereotypeTarget, nodeTextClip, node.stereotype, base,
                         secondaryText, Qt::AlignCenter, laterNodeRects);
-    appendVisibleText(headerTarget, nodeTextClip, node.name, header,
+    appendVisibleImage(iconTarget, nodeTextClip, node.iconSource,
+                       laterNodeRects);
+    appendVisibleText(headerTarget, nodeTextClip,
+                      elided(node.name, header, headerTarget.width()), header,
                       primaryText, Qt::AlignCenter, laterNodeRects);
     if (detail != 2)
       continue;
@@ -2412,6 +2487,34 @@ void DiagramCanvas::setDiagramItemSizingMode(const QString &mode) {
     return;
   m_diagramItemSizingMode = normalized;
   emit diagramItemSizingModeChanged();
+}
+
+bool DiagramCanvas::typeIconsVisible() const { return m_typeIconsVisible; }
+
+void DiagramCanvas::setTypeIconsVisible(bool visible) {
+  if (m_typeIconsVisible == visible)
+    return;
+  m_typeIconsVisible = visible;
+  m_textDirty = true;
+  emit typeIconsVisibleChanged();
+  update();
+}
+
+QVariantMap DiagramCanvas::typeIconSources() const { return m_typeIconSources; }
+
+void DiagramCanvas::setTypeIconSources(const QVariantMap &sources) {
+  QVariantMap normalized;
+  for (auto source = sources.cbegin(); source != sources.cend(); ++source) {
+    const QString value = source.value().toString().trimmed();
+    if (!value.isEmpty())
+      normalized.insert(source.key(), value);
+  }
+  if (m_typeIconSources == normalized)
+    return;
+  m_typeIconSources = std::move(normalized);
+  m_textDirty = true;
+  emit typeIconSourcesChanged();
+  update();
 }
 
 bool DiagramCanvas::sourceEditorDoubleClickEnabled() const {
@@ -3480,8 +3583,14 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
   auto *quickWindow = window();
   const qreal devicePixelRatio =
       quickWindow ? quickWindow->devicePixelRatio() : 1.0;
-  root->updateGrid({width(), height()}, m_pan, m_zoom, devicePixelRatio,
-                   m_gridSpacing, !m_exportMode, m_themeRevision);
+  // Pixel-aligned grid geometry lives in item coordinates. Account for an
+  // external item scale (used by mixed-DPI rendering and visual tests), not
+  // only the window DPR, so grid lines remain one physical pixel wide.
+  const qreal effectiveGridDevicePixelRatio =
+      std::max<qreal>(0.001, devicePixelRatio * scale());
+  root->updateGrid({width(), height()}, m_pan, m_zoom,
+                   effectiveGridDevicePixelRatio, m_gridSpacing, !m_exportMode,
+                   m_themeRevision);
   root->updateTransform(m_pan, m_zoom);
 
   const int detail = m_exportMode ? 2 : detailLevel(m_zoom);
@@ -3621,6 +3730,10 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
             {rect, (*element)->type,
              presentation_layout::elementDisplayNameInPackage(
                  projectData, **element, containingPackageId(node.id)),
+             m_typeIconsVisible
+                 ? m_typeIconSources.value(toString((*element)->type))
+                       .toString()
+                 : QString{},
              stereotype_catalog::displayText(projectData,
                                              (*element)->stereotypeIds),
              showAttributes ? (*element)->attributes : QStringList{},
@@ -3629,7 +3742,8 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
                             : QStringList{},
              (*element)->enumLiterals,
              renderElementStyle(
-                 project_style::effectiveStyleForNode(projectData, node)),
+                 project_style::effectiveStyleForNode(projectData, node),
+                 (*element)->type),
              m_selectedNodes.contains(node.id),
              m_selectedNodes.size() > 1 &&
                  node.id == m_selectedNodeOrder.constLast(),

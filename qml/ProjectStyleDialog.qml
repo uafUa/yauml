@@ -16,6 +16,9 @@ CatalogDialog {
     property string editingStyleId: ""
     property string draftName: ""
     property string draftFill: ""
+    property string draftClassFill: ""
+    property string draftStructFill: ""
+    property string draftEnumerationFill: ""
     property string draftHeaderFill: ""
     property string draftBorder: ""
     property string draftPrimaryText: ""
@@ -26,6 +29,9 @@ CatalogDialog {
     readonly property bool draftValid:
         draftName.trim().length > 0
         && uiTheme.normalizeColor(draftFill).length > 0
+        && uiTheme.normalizeColor(draftClassFill).length > 0
+        && uiTheme.normalizeColor(draftStructFill).length > 0
+        && uiTheme.normalizeColor(draftEnumerationFill).length > 0
         && uiTheme.normalizeColor(draftHeaderFill).length > 0
         && uiTheme.normalizeColor(draftBorder).length > 0
         && uiTheme.normalizeColor(draftPrimaryText).length > 0
@@ -43,7 +49,13 @@ CatalogDialog {
 
     function defaultColor(role) {
         if (role === "fill")
+            return uiTheme.colorText(uiTheme.packageFill)
+        if (role === "classFill")
             return uiTheme.colorText(uiTheme.classFill)
+        if (role === "structFill")
+            return uiTheme.colorText(uiTheme.structFill)
+        if (role === "enumerationFill")
+            return uiTheme.colorText(uiTheme.enumerationFill)
         if (role === "headerFill")
             return uiTheme.colorText(uiTheme.panelHeader)
         if (role === "border")
@@ -58,6 +70,12 @@ CatalogDialog {
     function draftColor(role) {
         if (role === "fill")
             return draftFill
+        if (role === "classFill")
+            return draftClassFill
+        if (role === "structFill")
+            return draftStructFill
+        if (role === "enumerationFill")
+            return draftEnumerationFill
         if (role === "headerFill")
             return draftHeaderFill
         if (role === "border")
@@ -72,6 +90,12 @@ CatalogDialog {
     function setDraftColor(role, value) {
         if (role === "fill")
             draftFill = value
+        else if (role === "classFill")
+            draftClassFill = value
+        else if (role === "structFill")
+            draftStructFill = value
+        else if (role === "enumerationFill")
+            draftEnumerationFill = value
         else if (role === "headerFill")
             draftHeaderFill = value
         else if (role === "border")
@@ -88,6 +112,9 @@ CatalogDialog {
         editingStyleId = ""
         draftName = qsTr("New style")
         draftFill = defaultColor("fill")
+        draftClassFill = defaultColor("classFill")
+        draftStructFill = defaultColor("structFill")
+        draftEnumerationFill = defaultColor("enumerationFill")
         draftHeaderFill = defaultColor("headerFill")
         draftBorder = defaultColor("border")
         draftPrimaryText = defaultColor("primaryText")
@@ -106,6 +133,9 @@ CatalogDialog {
         editingStyleId = style.id
         draftName = style.name
         draftFill = style.fill
+        draftClassFill = style.classFill || style.fill
+        draftStructFill = style.structFill || style.fill
+        draftEnumerationFill = style.enumerationFill || style.fill
         draftHeaderFill = style.headerFill
         draftBorder = style.border
         draftPrimaryText = style.primaryText
@@ -141,6 +171,9 @@ CatalogDialog {
                             editingStyleId, draftName,
                             {
                                 "fill": draftFill,
+                                "classFill": draftClassFill,
+                                "structFill": draftStructFill,
+                                "enumerationFill": draftEnumerationFill,
                                 "headerFill": draftHeaderFill,
                                 "border": draftBorder,
                                 "primaryText": draftPrimaryText,
@@ -230,7 +263,10 @@ CatalogDialog {
 
                 Repeater {
                     model: [
-                        { "key": "fill", "label": qsTr("Body fill") },
+                        { "key": "fill", "label": qsTr("Container / package fill") },
+                        { "key": "classFill", "label": qsTr("Class fill") },
+                        { "key": "structFill", "label": qsTr("Struct fill") },
+                        { "key": "enumerationFill", "label": qsTr("Enumeration fill") },
                         { "key": "headerFill", "label": qsTr("Header fill") },
                         { "key": "border", "label": qsTr("Border") },
                         { "key": "primaryText", "label": qsTr("Primary text") },
@@ -245,7 +281,7 @@ CatalogDialog {
                         spacing: 12
 
                         Label {
-                            Layout.preferredWidth: 120
+                            Layout.preferredWidth: 170
                             text: parent.modelData.label
                         }
                         CatalogButton {

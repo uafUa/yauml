@@ -22,6 +22,10 @@ protected:
 private:
   friend class ProjectController;
 
+  // Most commands change the semantic browser hierarchy. Pure presentation
+  // style commands override this so editing diagram appearance does not reset
+  // an unrelated project tree and discard the user's expansion state.
+  virtual bool affectsProjectTree() const;
   virtual void execute(ProjectData &project) = 0;
   virtual void revert(ProjectData &project) = 0;
 

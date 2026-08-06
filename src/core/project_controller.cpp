@@ -38,6 +38,9 @@ QVariantMap diagramStyleMap(const DiagramStyle &style) {
   return {{QStringLiteral("id"), style.id},
           {QStringLiteral("name"), style.name},
           {QStringLiteral("fill"), style.fill},
+          {QStringLiteral("classFill"), style.classFill},
+          {QStringLiteral("structFill"), style.structFill},
+          {QStringLiteral("enumerationFill"), style.enumerationFill},
           {QStringLiteral("headerFill"), style.headerFill},
           {QStringLiteral("border"), style.border},
           {QStringLiteral("primaryText"), style.primaryText},
@@ -1497,6 +1500,22 @@ QString ProjectController::saveDiagramStyle(const QString &styleId,
       !assignColor(style.primaryText, QStringLiteral("primaryText")) ||
       !assignColor(style.secondaryText, QStringLiteral("secondaryText")) ||
       !assignColor(style.divider, QStringLiteral("divider"))) {
+    m_diagnostics.addError(
+        QStringLiteral("style"),
+        QStringLiteral("Every diagram style color must be valid"));
+    return {};
+  }
+  const auto assignClassifierFill = [&](QString &target, const QString &key) {
+    if (!colors.contains(key)) {
+      target = style.fill;
+      return true;
+    }
+    return assignColor(target, key);
+  };
+  if (!assignClassifierFill(style.classFill, QStringLiteral("classFill")) ||
+      !assignClassifierFill(style.structFill, QStringLiteral("structFill")) ||
+      !assignClassifierFill(style.enumerationFill,
+                            QStringLiteral("enumerationFill"))) {
     m_diagnostics.addError(
         QStringLiteral("style"),
         QStringLiteral("Every diagram style color must be valid"));
@@ -5111,6 +5130,8 @@ void ProjectController::applyCommand(ProjectCommand &command, bool execute) {
     m_selectedId.clear();
     m_selectedKind.clear();
   }
+  if (command.affectsProjectTree())
+    emit projectTreeChanged();
   emit stateChanged();
   emit diagramsChanged();
   emit projectChanged();
@@ -5121,6 +5142,7 @@ void ProjectController::setDataDirect(const ProjectData &state) {
   m_undoStack.clear();
   m_data = state;
   m_undoStack.setClean();
+  emit projectTreeChanged();
   emit stateChanged();
   emit diagramsChanged();
   emit projectChanged();

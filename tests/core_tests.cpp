@@ -307,9 +307,15 @@ void CoreTests::actionIconCatalogIsValid() {
       if (!value.isString() || value.toString().isEmpty())
         return;
       const QString svg = value.toString();
-      QVERIFY2(QFileInfo::exists(QFileInfo(catalogPath).dir().filePath(svg)),
+      const QString svgPath = QFileInfo(catalogPath).dir().filePath(svg);
+      QVERIFY2(QFileInfo::exists(svgPath),
                qPrintable(node.key() + u'.' + field +
                           QStringLiteral(" references missing ") + svg));
+      QFile icon(svgPath);
+      QVERIFY2(icon.open(QIODevice::ReadOnly), qPrintable(icon.errorString()));
+      QVERIFY2(!icon.readAll().contains("currentColor"),
+               qPrintable(node.key() + u'.' + field +
+                          QStringLiteral(" uses unsupported currentColor")));
     };
     verifyAssignedIconExists(QStringLiteral("svg"), true);
     verifyAssignedIconExists(QStringLiteral("expandedSvg"), false);
@@ -662,9 +668,14 @@ void CoreTests::invalidProjectSchemaVersionsAreRejected() {
 
 void CoreTests::projectDiagramStylesPersistResolveAndUndo() {
   ProjectController controller;
+  QSignalSpy treeModelResets(controller.treeModel(),
+                             &QAbstractItemModel::modelReset);
   const QString diagramId = controller.data().diagrams.first().id;
   const QVariantMap warmColors{
       {QStringLiteral("fill"), QStringLiteral("#FFF4D6")},
+      {QStringLiteral("classFill"), QStringLiteral("#FFF9EB")},
+      {QStringLiteral("structFill"), QStringLiteral("#F4FFE8")},
+      {QStringLiteral("enumerationFill"), QStringLiteral("#F8EFFF")},
       {QStringLiteral("headerFill"), QStringLiteral("#FFE2A1")},
       {QStringLiteral("border"), QStringLiteral("#725100")},
       {QStringLiteral("primaryText"), QStringLiteral("#2A1C00")},
@@ -694,7 +705,13 @@ void CoreTests::projectDiagramStylesPersistResolveAndUndo() {
   QVERIFY(!warm.isEmpty());
   QVERIFY(!cool.isEmpty());
   QVERIFY(!alert.isEmpty());
+  QCOMPARE(treeModelResets.count(), 0);
   QCOMPARE(controller.diagramStyles().size(), 3);
+  QCOMPARE(controller.diagramStyle(warm).value(QStringLiteral("structFill")),
+           QVariant(QStringLiteral("#F4FFE8")));
+  // Callers using the original generic style map remain supported.
+  QCOMPARE(controller.diagramStyle(cool).value(QStringLiteral("structFill")),
+           coolColors.value(QStringLiteral("fill")));
 
   // Names identify styles to users, while updates retain the stable UUID.
   QCOMPARE(controller.saveDiagramStyle(cool, QStringLiteral("Cool blue"),
@@ -715,6 +732,7 @@ void CoreTests::projectDiagramStylesPersistResolveAndUndo() {
           .toJson(QJsonDocument::Compact));
   QVERIFY(controller.moveBrowserItems(elementJson, QStringLiteral("folder"),
                                       folderId));
+  treeModelResets.clear();
 
   const Diagram *diagram = findDiagram(controller.data(), diagramId);
   QVERIFY(diagram);
@@ -758,6 +776,7 @@ void CoreTests::projectDiagramStylesPersistResolveAndUndo() {
   QCOMPARE(node->styleId, alert);
   QCOMPARE(project_style::effectiveStyleForNode(controller.data(), *node)->id,
            alert);
+  QCOMPARE(treeModelResets.count(), 0);
 
   // Legacy synthetic namespace nodes participate in the same inheritance
   // chain until a materialized package element replaces them.
@@ -5681,6 +5700,8 @@ void CoreTests::applicationPreferencesPersist() {
              ApplicationSettings::kDefaultAlignmentGuidesEnabled);
     QCOMPARE(settings.gridSpacing(), ApplicationSettings::kDefaultGridSpacing);
     QCOMPARE(settings.diagramItemSizingMode(), QStringLiteral("content"));
+    QCOMPARE(settings.diagramTypeIconsVisible(),
+             ApplicationSettings::kDefaultDiagramTypeIconsVisible);
     QCOMPARE(settings.defaultConnectorRouting(), QStringLiteral("straight"));
     QCOMPARE(settings.connectorOptimizationOptions(),
              ApplicationSettings::defaultConnectorOptimizationOptions());
@@ -5710,6 +5731,7 @@ void CoreTests::applicationPreferencesPersist() {
     settings.setAlignmentGuidesEnabled(false);
     settings.setGridSpacing(35);
     settings.setDiagramItemSizingMode(QStringLiteral("fixed"));
+    settings.setDiagramTypeIconsVisible(true);
     settings.setDefaultConnectorRouting(QStringLiteral("orthogonal"));
     settings.setConnectorOptimizationOptions(
         {{QStringLiteral("endpointMode"), QStringLiteral("free")},
@@ -5819,6 +5841,7 @@ void CoreTests::applicationPreferencesPersist() {
     QVERIFY(!restored.alignmentGuidesEnabled());
     QCOMPARE(restored.gridSpacing(), 35);
     QCOMPARE(restored.diagramItemSizingMode(), QStringLiteral("fixed"));
+    QVERIFY(restored.diagramTypeIconsVisible());
     QCOMPARE(restored.defaultConnectorRouting(), QStringLiteral("orthogonal"));
     QCOMPARE(
         restored.connectorOptimizationOptions(),
@@ -5906,6 +5929,7 @@ void CoreTests::applicationPreferencesPersist() {
              ApplicationSettings::kMinimumDistributionGap);
     QCOMPARE(restored.gridSpacing(), ApplicationSettings::kMinimumGridSpacing);
     QCOMPARE(restored.diagramItemSizingMode(), QStringLiteral("content"));
+    QVERIFY(restored.diagramTypeIconsVisible());
     QCOMPARE(restored.packageReassignmentPolicy(), QStringLiteral("ask"));
     restored.resetDefaults();
     QCOMPARE(restored.defaultDistributionGap(),
@@ -5916,6 +5940,8 @@ void CoreTests::applicationPreferencesPersist() {
              ApplicationSettings::kDefaultAlignmentGuidesEnabled);
     QCOMPARE(restored.gridSpacing(), ApplicationSettings::kDefaultGridSpacing);
     QCOMPARE(restored.diagramItemSizingMode(), QStringLiteral("content"));
+    QCOMPARE(restored.diagramTypeIconsVisible(),
+             ApplicationSettings::kDefaultDiagramTypeIconsVisible);
     QCOMPARE(restored.defaultConnectorRouting(), QStringLiteral("straight"));
     QCOMPARE(restored.connectorOptimizationOptions(),
              ApplicationSettings::defaultConnectorOptimizationOptions());

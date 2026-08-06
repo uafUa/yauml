@@ -1,5 +1,6 @@
 import QtQuick
 import QtQuick.Controls
+import QtQuick.Controls.impl
 import QtQuick.Layouts
 import QtQuick.Dialogs
 import QtQml.Models
@@ -670,6 +671,7 @@ ApplicationWindow {
                 }
                 TreeView {
                     id: projectTree
+                    objectName: "projectTree"
                     Layout.fillWidth: true
                     Layout.fillHeight: true
                     model: projectController.treeModel
@@ -725,6 +727,9 @@ ApplicationWindow {
                             projectTree.collapse(row)
                         else
                             projectTree.expand(row)
+                    }
+                    function expandAllBranches() {
+                        expand(0)
                     }
                     function toggleBranchForObject(objectId, kind) {
                         // Delegate rows are flattened view coordinates and may
@@ -843,7 +848,11 @@ ApplicationWindow {
                         property int browserInsertionEdge: 0
                         readonly property url treeIconSource:
                             column === 0 ? iconRegistry.projectTreeIcon(
-                                kind, objectType, objectId, nested, expanded)
+                                model.kind || "",
+                                model.objectType || "",
+                                model.objectId || "",
+                                model.nested || false,
+                                expanded)
                                          : ""
                         highlighted: kind !== "root" && (
                                          kind === "diagram"
@@ -858,14 +867,15 @@ ApplicationWindow {
                             spacing: treeIcon.visible ? 4 : 0
                             visible: !treeDelegate.editing
 
-                            Image {
+                            ColorImage {
                                 id: treeIcon
-                                visible: treeDelegate.column === 0
-                                         && treeDelegate.treeIconSource.toString() !== ""
+                                objectName: "projectTreeIcon"
+                                visible: status === Image.Ready
                                 source: treeDelegate.treeIconSource
                                 fillMode: Image.PreserveAspectFit
                                 sourceSize.width: iconRegistry.defaultSize
                                 sourceSize.height: iconRegistry.defaultSize
+                                color: uiTheme.secondaryText
                                 Layout.preferredWidth: visible
                                                        ? iconRegistry.defaultSize : 0
                                 Layout.preferredHeight: visible
@@ -2157,6 +2167,8 @@ ApplicationWindow {
             diagramItemSizing.currentIndex =
                     applicationSettings.diagramItemSizingMode === "fixed"
                     ? 0 : 1
+            diagramTypeIcons.checked =
+                    applicationSettings.diagramTypeIconsVisible
             packageReassignment.currentIndex =
                     applicationSettings.packageReassignmentPolicy === "disallow"
                     ? 0
@@ -2211,6 +2223,8 @@ ApplicationWindow {
             applicationSettings.gridSpacing = gridSpacing.value
             applicationSettings.diagramItemSizingMode =
                     diagramItemSizing.currentIndex === 0 ? "fixed" : "content"
+            applicationSettings.diagramTypeIconsVisible =
+                    diagramTypeIcons.checked
             applicationSettings.packageReassignmentPolicy =
                     packageReassignment.currentIndex === 0
                     ? "disallow"
@@ -2316,6 +2330,10 @@ ApplicationWindow {
                             wrapMode: Text.Wrap
                             color: uiTheme.mutedText
                             text: qsTr("Controls the initial size of items added from the project tree. “Fit to content” remains available from the diagram context menu.")
+                        }
+                        CheckBox {
+                            id: diagramTypeIcons
+                            text: qsTr("Show type icons in diagram presentation titles")
                         }
                         CheckBox {
                             id: snapToGrid
@@ -2555,7 +2573,7 @@ ApplicationWindow {
                                 width: contextToolboxPreferencesList.width
                                 height: 42
                                 color: index % 2 === 0
-                                       ? uiTheme.panelBackground
+                                       ? uiTheme.surface
                                        : uiTheme.panelHeader
 
                                 RowLayout {

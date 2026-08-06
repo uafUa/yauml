@@ -21,6 +21,7 @@ constexpr auto kSnapToGridEnabledKey = "snapToGridEnabled";
 constexpr auto kAlignmentGuidesEnabledKey = "alignmentGuidesEnabled";
 constexpr auto kGridSpacingKey = "gridSpacing";
 constexpr auto kDiagramItemSizingModeKey = "itemSizingMode";
+constexpr auto kDiagramTypeIconsVisibleKey = "typeIconsVisible";
 constexpr auto kConnectorSettingsGroup = "preferences/connectors";
 constexpr auto kDefaultConnectorRoutingKey = "defaultRouting";
 constexpr auto kConnectorOptimizationOptionsKey = "optimizationOptions";
@@ -438,6 +439,11 @@ ApplicationSettings::ApplicationSettings(QObject *parent) : QObject(parent) {
           .value(QLatin1String(kDiagramItemSizingModeKey),
                  QLatin1String(kDefaultDiagramItemSizingMode))
           .toString());
+  m_diagramTypeIconsVisible =
+      settings
+          .value(QLatin1String(kDiagramTypeIconsVisibleKey),
+                 kDefaultDiagramTypeIconsVisible)
+          .toBool();
   settings.endGroup();
 
   settings.beginGroup(QLatin1String(kConnectorSettingsGroup));
@@ -689,6 +695,18 @@ void ApplicationSettings::setDiagramItemSizingMode(const QString &mode) {
   emit diagramItemSizingModeChanged();
 }
 
+bool ApplicationSettings::diagramTypeIconsVisible() const {
+  return m_diagramTypeIconsVisible;
+}
+
+void ApplicationSettings::setDiagramTypeIconsVisible(bool visible) {
+  if (m_diagramTypeIconsVisible == visible)
+    return;
+  m_diagramTypeIconsVisible = visible;
+  persistDiagramPreferences();
+  emit diagramTypeIconsVisibleChanged();
+}
+
 QString ApplicationSettings::defaultConnectorRouting() const {
   return toString(m_defaultConnectorRouting);
 }
@@ -902,6 +920,7 @@ void ApplicationSettings::resetDefaults() {
   setAlignmentGuidesEnabled(kDefaultAlignmentGuidesEnabled);
   setGridSpacing(kDefaultGridSpacing);
   setDiagramItemSizingMode(QLatin1String(kDefaultDiagramItemSizingMode));
+  setDiagramTypeIconsVisible(kDefaultDiagramTypeIconsVisible);
   setDefaultConnectorRouting(toString(kDefaultConnectorRouting));
   setConnectorOptimizationOptions(defaultConnectorOptimizationOptions());
   setAutomaticLayoutOptions(defaultAutomaticLayoutOptions());
@@ -995,6 +1014,8 @@ void ApplicationSettings::persistDiagramPreferences() const {
   settings.setValue(QLatin1String(kGridSpacingKey), m_gridSpacing);
   settings.setValue(QLatin1String(kDiagramItemSizingModeKey),
                     m_diagramItemSizingMode);
+  settings.setValue(QLatin1String(kDiagramTypeIconsVisibleKey),
+                    m_diagramTypeIconsVisible);
   settings.setValue(QLatin1String(kAutomaticLayoutOptionsKey),
                     m_automaticLayoutOptions);
   settings.endGroup();

@@ -409,6 +409,9 @@ QJsonObject diagramStyleToJson(const DiagramStyle &style) {
   object.insert(QStringLiteral("id"), style.id);
   object.insert(QStringLiteral("name"), style.name);
   object.insert(QStringLiteral("fill"), style.fill);
+  object.insert(QStringLiteral("classFill"), style.classFill);
+  object.insert(QStringLiteral("structFill"), style.structFill);
+  object.insert(QStringLiteral("enumerationFill"), style.enumerationFill);
   object.insert(QStringLiteral("headerFill"), style.headerFill);
   object.insert(QStringLiteral("border"), style.border);
   object.insert(QStringLiteral("primaryText"), style.primaryText);
@@ -1134,6 +1137,14 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
     style.id = object.value(QStringLiteral("id")).toString();
     style.name = object.value(QStringLiteral("name")).toString();
     style.fill = object.value(QStringLiteral("fill")).toString();
+    // Styles written before per-classifier fills existed remain visually
+    // identical: their generic fill is inherited by every classifier kind.
+    style.classFill =
+        object.value(QStringLiteral("classFill")).toString(style.fill);
+    style.structFill =
+        object.value(QStringLiteral("structFill")).toString(style.fill);
+    style.enumerationFill =
+        object.value(QStringLiteral("enumerationFill")).toString(style.fill);
     style.headerFill = object.value(QStringLiteral("headerFill")).toString();
     style.border = object.value(QStringLiteral("border")).toString();
     style.primaryText = object.value(QStringLiteral("primaryText")).toString();
@@ -1141,10 +1152,12 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
         object.value(QStringLiteral("secondaryText")).toString();
     style.divider = object.value(QStringLiteral("divider")).toString();
     style.extra = withoutKeys(
-        object, {QStringLiteral("id"), QStringLiteral("name"),
-                 QStringLiteral("fill"), QStringLiteral("headerFill"),
-                 QStringLiteral("border"), QStringLiteral("primaryText"),
-                 QStringLiteral("secondaryText"), QStringLiteral("divider")});
+        object,
+        {QStringLiteral("id"), QStringLiteral("name"), QStringLiteral("fill"),
+         QStringLiteral("classFill"), QStringLiteral("structFill"),
+         QStringLiteral("enumerationFill"), QStringLiteral("headerFill"),
+         QStringLiteral("border"), QStringLiteral("primaryText"),
+         QStringLiteral("secondaryText"), QStringLiteral("divider")});
     project.diagramStyles.append(std::move(style));
   }
   const QJsonValue stereotypesValue =
@@ -1751,6 +1764,9 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
     }
     const QList<QPair<QString, QString>> colors = {
         {QStringLiteral("fill"), style.fill},
+        {QStringLiteral("classFill"), style.classFill},
+        {QStringLiteral("structFill"), style.structFill},
+        {QStringLiteral("enumerationFill"), style.enumerationFill},
         {QStringLiteral("headerFill"), style.headerFill},
         {QStringLiteral("border"), style.border},
         {QStringLiteral("primaryText"), style.primaryText},

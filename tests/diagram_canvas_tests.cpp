@@ -129,6 +129,7 @@ private slots:
   void automaticConnectorRoutingReportsUnroutableConnectors();
   void optimizedRoutingChoosesFacingEndsAtomically();
   void optimizedRoutingPrioritizesFacingSidesAndSimplePaths();
+  void optimizedRoutingHandlesTightFacingPresentations();
   void optimizedRoutingUsesSimplerSecondarySidePair();
   void containerConnectorOptimizationIsRecursivelyScopedAndUndoable();
   void unifiedConnectorOptimizationHonorsFreeAndManualEndpointModes();
@@ -315,6 +316,51 @@ void DiagramCanvasTests::obstacleRoutingUsesClearanceAndIsDeterministic() {
       directRequest.sharedSegmentPenalty);
   QVERIFY(directMetrics.valid);
   QCOMPARE(directMetrics.bendCount, 0);
+
+  // A decorative endpoint clearance is reduced only when two facing
+  // presentations leave less than twice that distance between them. The
+  // connector must still use the compact two-bend lane in that tight gap.
+  ui::OrthogonalObstacleRoutingRequest tightRequest;
+  tightRequest.sourceBounds = {258.0, 107.0, 219.0, 359.0};
+  tightRequest.targetBounds = {101.0, 472.0, 227.0, 78.0};
+  tightRequest.source = {325.0, tightRequest.sourceBounds.bottom()};
+  tightRequest.target = {245.0, tightRequest.targetBounds.top()};
+  tightRequest.sourceSide = ConnectorSide::Bottom;
+  tightRequest.targetSide = ConnectorSide::Top;
+  tightRequest.endpointClearance = 12.0;
+  const QVector<QPointF> tightRoute =
+      ui::routeOrthogonallyAroundObstacles(tightRequest);
+  QCOMPARE(tightRoute,
+           QVector<QPointF>({tightRequest.source, QPointF(325.0, 469.0),
+                             QPointF(245.0, 469.0), tightRequest.target}));
+  const ui::OrthogonalRouteMetrics tightMetrics = ui::orthogonalRouteMetrics(
+      tightRoute, tightRequest.occupiedRoutes, tightRequest.crossingPenalty,
+      tightRequest.sharedSegmentPenalty);
+  QVERIFY(tightMetrics.valid);
+  QCOMPARE(tightMetrics.bendCount, 2);
+
+  // With enough room for the configured clearance, the visibility graph must
+  // contain the middle lane directly between the endpoint clearance zones.
+  // Without these Steiner points the router took a large loop around both
+  // endpoint rectangles.
+  ui::OrthogonalObstacleRoutingRequest narrowRequest = tightRequest;
+  narrowRequest.targetBounds.moveTop(496.0);
+  narrowRequest.target = {245.0, narrowRequest.targetBounds.top()};
+  const QVector<QPointF> narrowRoute =
+      ui::routeOrthogonallyAroundObstacles(narrowRequest);
+  QCOMPARE(narrowRoute.size(), 4);
+  QCOMPARE(narrowRoute.first(), narrowRequest.source);
+  QCOMPARE(narrowRoute.constLast(), narrowRequest.target);
+  QCOMPARE(narrowRoute.at(1).y(), narrowRoute.at(2).y());
+  QVERIFY(narrowRoute.at(1).y() >=
+          narrowRequest.source.y() + narrowRequest.endpointClearance);
+  QVERIFY(narrowRoute.at(1).y() <=
+          narrowRequest.target.y() - narrowRequest.endpointClearance);
+  const ui::OrthogonalRouteMetrics narrowMetrics = ui::orthogonalRouteMetrics(
+      narrowRoute, narrowRequest.occupiedRoutes, narrowRequest.crossingPenalty,
+      narrowRequest.sharedSegmentPenalty);
+  QVERIFY(narrowMetrics.valid);
+  QCOMPARE(narrowMetrics.bendCount, 2);
 
   ui::OrthogonalObstacleRoutingRequest request;
   request.source = {100.0, 50.0};
@@ -978,6 +1024,63 @@ void DiagramCanvasTests::
   QVERIFY(optimized->bendPoints.isEmpty());
   QCOMPARE(controller.undoText(),
            QStringLiteral("Optimize connector ends and route"));
+  controller.undo();
+  QCOMPARE(controller.data(), before);
+}
+
+void DiagramCanvasTests::optimizedRoutingHandlesTightFacingPresentations() {
+  ProjectController controller;
+  populate(controller, 2);
+  const QString diagramId = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+  controller.updateNodeGeometry(diagramId, nodes.at(0).id, 258.0, 107.0, 219.0,
+                                359.0);
+  controller.updateNodeGeometry(diagramId, nodes.at(1).id, 101.0, 472.0, 227.0,
+                                78.0);
+  const QString connectorId = controller.createRelationshipWithRouting(
+      diagramId, nodes.at(0).id, nodes.at(1).id, QStringLiteral("dependency"),
+      QStringLiteral("straight"));
+  QVERIFY(!connectorId.isEmpty());
+  const ProjectData before = controller.data();
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  QSignalSpy attention(controller.diagnostics(),
+                       &DiagnosticModel::attentionAdded);
+
+  const auto verifyCompactFacingRoute = [&]() {
+    const auto *connector =
+        findConnector(controller.data().diagrams.first(), connectorId);
+    QVERIFY(connector);
+    QCOMPARE(static_cast<int>(connector->sourceAnchor.side),
+             static_cast<int>(ConnectorSide::Bottom));
+    QCOMPARE(static_cast<int>(connector->targetAnchor.side),
+             static_cast<int>(ConnectorSide::Top));
+    QCOMPARE(static_cast<int>(connector->routing),
+             static_cast<int>(ConnectorRouting::Orthogonal));
+    QCOMPARE(connector->bendPoints.size(), 2);
+  };
+
+  canvas.optimizeConnectors(
+      QStringLiteral("visible"),
+      {{QStringLiteral("endpointMode"), QStringLiteral("free")},
+       {QStringLiteral("collapseIncoming"), false},
+       {QStringLiteral("preserveManual"), false},
+       {QStringLiteral("endpointClearance"), 12}});
+  verifyCompactFacingRoute();
+  QCOMPARE(attention.count(), 0);
+  controller.undo();
+  QCOMPARE(controller.data(), before);
+
+  canvas.optimizeConnectors(
+      QStringLiteral("visible"),
+      {{QStringLiteral("endpointMode"), QStringLiteral("snap")},
+       {QStringLiteral("collapseIncoming"), false},
+       {QStringLiteral("preserveManual"), false},
+       {QStringLiteral("endpointClearance"), 12},
+       {QStringLiteral("maximumAddedSnapPoints"), 8}});
+  verifyCompactFacingRoute();
+  QCOMPARE(attention.count(), 0);
   controller.undo();
   QCOMPARE(controller.data(), before);
 }

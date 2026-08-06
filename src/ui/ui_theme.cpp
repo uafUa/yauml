@@ -169,8 +169,8 @@ UiPalette makeDefaultPalette() {
   value.activeHandleFill = QColor(QStringLiteral("#9dceff"));
   value.packageFill = QColor(QStringLiteral("#fff1c2"));
   value.classFill = QColor(QStringLiteral("#f8fbff"));
-  value.structFill = QColor(QStringLiteral("#eefaf1"));
-  value.enumerationFill = QColor(QStringLiteral("#f7efff"));
+  value.structFill = value.classFill;
+  value.enumerationFill = value.classFill;
 
   value.dragGhostBorder = QColor(QStringLiteral("#8aa9cc"));
   value.dragGhostFill = QColor(QStringLiteral("#e2efff"));

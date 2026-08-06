@@ -15,6 +15,14 @@ Item {
     property string relationshipToolboxEdge
     property real relationshipToolboxSceneX: 0
     property real relationshipToolboxSceneY: 0
+    readonly property var typeIconSources: ({
+        "class": iconRegistry.projectTreeIcon(
+                     "element", "class", "", false, false),
+        "struct": iconRegistry.projectTreeIcon(
+                      "element", "struct", "", false, false),
+        "enumeration": iconRegistry.projectTreeIcon(
+                           "element", "enumeration", "", false, false)
+    })
 
     readonly property var relationshipToolboxActions: [
         {
@@ -384,6 +392,8 @@ Item {
         alignmentGuidesEnabled: applicationSettings.alignmentGuidesEnabled
         gridSpacing: applicationSettings.gridSpacing
         diagramItemSizingMode: applicationSettings.diagramItemSizingMode
+        typeIconsVisible: applicationSettings.diagramTypeIconsVisible
+        typeIconSources: root.typeIconSources
         sourceEditorDoubleClickEnabled:
             applicationSettings.sourceEditorDoubleClickEnabled
         defaultConnectorRouting: applicationSettings.defaultConnectorRouting
@@ -1025,6 +1035,8 @@ Item {
         id: diagramImageExporter
         project: projectController
         diagramId: root.diagramId
+        typeIconsVisible: applicationSettings.diagramTypeIconsVisible
+        typeIconSources: root.typeIconSources
     }
 
     FileDialog {

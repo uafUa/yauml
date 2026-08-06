@@ -26,6 +26,9 @@ class ApplicationSettings final : public QObject {
   Q_PROPERTY(QString diagramItemSizingMode READ diagramItemSizingMode WRITE
                  setDiagramItemSizingMode NOTIFY diagramItemSizingModeChanged)
   Q_PROPERTY(
+      bool diagramTypeIconsVisible READ diagramTypeIconsVisible WRITE
+          setDiagramTypeIconsVisible NOTIFY diagramTypeIconsVisibleChanged)
+  Q_PROPERTY(
       QString defaultConnectorRouting READ defaultConnectorRouting WRITE
           setDefaultConnectorRouting NOTIFY defaultConnectorRoutingChanged)
   Q_PROPERTY(
@@ -76,6 +79,7 @@ public:
   static constexpr int kMinimumGridSpacing = 5;
   static constexpr int kMaximumGridSpacing = 200;
   static constexpr auto kDefaultDiagramItemSizingMode = "content";
+  static constexpr bool kDefaultDiagramTypeIconsVisible = false;
   static constexpr ConnectorRouting kDefaultConnectorRouting =
       ConnectorRouting::Straight;
   static constexpr bool kDefaultAutomaticUpdateChecksEnabled = true;
@@ -111,6 +115,8 @@ public:
   void setGridSpacing(int spacing);
   QString diagramItemSizingMode() const;
   void setDiagramItemSizingMode(const QString &mode);
+  bool diagramTypeIconsVisible() const;
+  void setDiagramTypeIconsVisible(bool visible);
   QString defaultConnectorRouting() const;
   void setDefaultConnectorRouting(const QString &routing);
   QVariantMap connectorOptimizationOptions() const;
@@ -159,6 +165,7 @@ signals:
   void alignmentGuidesEnabledChanged();
   void gridSpacingChanged();
   void diagramItemSizingModeChanged();
+  void diagramTypeIconsVisibleChanged();
   void defaultConnectorRoutingChanged();
   void connectorOptimizationOptionsChanged();
   void automaticLayoutOptionsChanged();
@@ -191,6 +198,7 @@ private:
   bool m_alignmentGuidesEnabled = kDefaultAlignmentGuidesEnabled;
   int m_gridSpacing = kDefaultGridSpacing;
   QString m_diagramItemSizingMode = QStringLiteral("content");
+  bool m_diagramTypeIconsVisible = kDefaultDiagramTypeIconsVisible;
   ConnectorRouting m_defaultConnectorRouting = kDefaultConnectorRouting;
   QVariantMap m_connectorOptimizationOptions;
   QVariantMap m_automaticLayoutOptions;

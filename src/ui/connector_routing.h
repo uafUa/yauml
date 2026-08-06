@@ -33,9 +33,10 @@ struct OrthogonalObstacleRoutingRequest {
   ConnectorSide targetSide = ConnectorSide::Automatic;
   QVector<QRectF> obstacles;
   QVector<QVector<QPointF>> occupiedRoutes;
-  // Minimum straight lead between an attachment and its first/last bend.
-  // This is independent from obstacle clearance so diagrams can use generous
-  // readable endpoint stubs without pushing every route far from every node.
+  // Preferred minimum straight lead between an attachment and its first/last
+  // bend. Facing endpoints share a tighter gap when the full leads cannot fit;
+  // readability must not make an otherwise valid connector unroutable. This
+  // is independent from ordinary obstacle clearance.
   qreal endpointClearance = 12.0;
   qreal clearance = 12.0;
   qreal bendPenalty = 24.0;
@@ -44,9 +45,9 @@ struct OrthogonalObstacleRoutingRequest {
 };
 
 // Returns the complete source-to-target polyline, or an empty vector when no
-// route satisfying the requested clearance exists. The sparse rectilinear
-// visibility graph is independent of view zoom and therefore deterministic
-// for persisted diagram geometry.
+// obstacle-safe route exists. The sparse rectilinear visibility graph is
+// independent of view zoom and therefore deterministic for persisted diagram
+// geometry.
 QVector<QPointF> routeOrthogonallyAroundObstacles(
     const OrthogonalObstacleRoutingRequest &request);
 

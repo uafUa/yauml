@@ -133,7 +133,7 @@ struct ProjectTreeModel::TreeNode {
 ProjectTreeModel::ProjectTreeModel(ProjectController *controller)
     : QAbstractItemModel(controller), m_controller(controller) {
   rebuildTree();
-  connect(controller, &ProjectController::stateChanged, this,
+  connect(controller, &ProjectController::projectTreeChanged, this,
           &ProjectTreeModel::reset);
 }
 

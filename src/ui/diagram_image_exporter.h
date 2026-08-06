@@ -4,6 +4,7 @@
 #include <QPointer>
 #include <QSize>
 #include <QUrl>
+#include <QVariantMap>
 
 class QQuickWindow;
 
@@ -22,6 +23,10 @@ class DiagramImageExporter : public QObject {
                  projectChanged)
   Q_PROPERTY(QString diagramId READ diagramId WRITE setDiagramId NOTIFY
                  diagramIdChanged)
+  Q_PROPERTY(bool typeIconsVisible READ typeIconsVisible WRITE
+                 setTypeIconsVisible NOTIFY typeIconsVisibleChanged)
+  Q_PROPERTY(QVariantMap typeIconSources READ typeIconSources WRITE
+                 setTypeIconSources NOTIFY typeIconSourcesChanged)
   Q_PROPERTY(bool busy READ busy NOTIFY busyChanged)
 
 public:
@@ -32,6 +37,10 @@ public:
   void setProject(ProjectController *project);
   QString diagramId() const;
   void setDiagramId(const QString &diagramId);
+  bool typeIconsVisible() const;
+  void setTypeIconsVisible(bool visible);
+  QVariantMap typeIconSources() const;
+  void setTypeIconSources(const QVariantMap &sources);
   bool busy() const;
 
   Q_INVOKABLE void exportPng(const QUrl &fileUrl, qreal requestedScale = 1.0);
@@ -39,6 +48,8 @@ public:
 signals:
   void projectChanged();
   void diagramIdChanged();
+  void typeIconsVisibleChanged();
+  void typeIconSourcesChanged();
   void busyChanged();
   void exportSucceeded(const QUrl &fileUrl, const QSize &pixelSize);
   void exportFailed(const QString &message);
@@ -51,6 +62,8 @@ private:
 
   ProjectController *m_project = nullptr;
   QString m_diagramId;
+  bool m_typeIconsVisible = false;
+  QVariantMap m_typeIconSources;
   bool m_busy = false;
   QPointer<QQuickWindow> m_window;
   QPointer<DiagramCanvas> m_canvas;

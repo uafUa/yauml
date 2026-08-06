@@ -402,6 +402,7 @@ public slots:
 
 signals:
   void stateChanged();
+  void projectTreeChanged();
   void diagramsChanged();
   void projectChanged();
   void projectOpened(const QString &projectPath);

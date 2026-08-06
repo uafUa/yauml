@@ -86,6 +86,10 @@ class DiagramCanvas : public QQuickItem {
                  gridSpacingChanged)
   Q_PROPERTY(QString diagramItemSizingMode READ diagramItemSizingMode WRITE
                  setDiagramItemSizingMode NOTIFY diagramItemSizingModeChanged)
+  Q_PROPERTY(bool typeIconsVisible READ typeIconsVisible WRITE
+                 setTypeIconsVisible NOTIFY typeIconsVisibleChanged)
+  Q_PROPERTY(QVariantMap typeIconSources READ typeIconSources WRITE
+                 setTypeIconSources NOTIFY typeIconSourcesChanged)
   Q_PROPERTY(
       bool sourceEditorDoubleClickEnabled READ sourceEditorDoubleClickEnabled
           WRITE setSourceEditorDoubleClickEnabled NOTIFY
@@ -205,6 +209,10 @@ public:
   void setGridSpacing(int spacing);
   QString diagramItemSizingMode() const;
   void setDiagramItemSizingMode(const QString &mode);
+  bool typeIconsVisible() const;
+  void setTypeIconsVisible(bool visible);
+  QVariantMap typeIconSources() const;
+  void setTypeIconSources(const QVariantMap &sources);
   bool sourceEditorDoubleClickEnabled() const;
   void setSourceEditorDoubleClickEnabled(bool enabled);
   QString defaultConnectorRouting() const;
@@ -336,6 +344,8 @@ signals:
   void alignmentGuidesEnabledChanged();
   void gridSpacingChanged();
   void diagramItemSizingModeChanged();
+  void typeIconsVisibleChanged();
+  void typeIconSourcesChanged();
   void sourceEditorDoubleClickEnabledChanged();
   void defaultConnectorRoutingChanged();
   void relationshipGestureKeysChanged();
@@ -621,6 +631,8 @@ private:
   bool m_alignmentGuidesEnabled;
   int m_gridSpacing;
   QString m_diagramItemSizingMode = QStringLiteral("content");
+  bool m_typeIconsVisible = false;
+  QVariantMap m_typeIconSources;
   bool m_sourceEditorDoubleClickEnabled = false;
   ConnectorRouting m_defaultConnectorRouting;
   QVariantMap m_relationshipGestureKeys;

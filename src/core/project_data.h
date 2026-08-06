@@ -59,13 +59,18 @@ struct BrowserParent {
   bool operator==(const BrowserParent &) const = default;
 };
 
-// Named, project-owned diagram styles use generic roles that apply to both
-// classifier nodes and package/folder frames. Values are normalized serialized
-// QColor strings (#RRGGBB or #AARRGGBB).
+// Named, project-owned diagram styles share typography and borders while
+// retaining per-classifier body fills. `fill` is the package/folder fallback;
+// the type-specific fills preserve that distinction without requiring a
+// separate style object for every UML classifier kind. Values are normalized
+// serialized QColor strings (#RRGGBB or #AARRGGBB).
 struct DiagramStyle {
   QString id;
   QString name;
   QString fill;
+  QString classFill;
+  QString structFill;
+  QString enumerationFill;
   QString headerFill;
   QString border;
   QString primaryText;

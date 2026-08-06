@@ -82,6 +82,28 @@ void DiagramImageExporter::setDiagramId(const QString &diagramId) {
   emit diagramIdChanged();
 }
 
+bool DiagramImageExporter::typeIconsVisible() const {
+  return m_typeIconsVisible;
+}
+
+void DiagramImageExporter::setTypeIconsVisible(bool visible) {
+  if (m_typeIconsVisible == visible)
+    return;
+  m_typeIconsVisible = visible;
+  emit typeIconsVisibleChanged();
+}
+
+QVariantMap DiagramImageExporter::typeIconSources() const {
+  return m_typeIconSources;
+}
+
+void DiagramImageExporter::setTypeIconSources(const QVariantMap &sources) {
+  if (m_typeIconSources == sources)
+    return;
+  m_typeIconSources = sources;
+  emit typeIconSourcesChanged();
+}
+
 bool DiagramImageExporter::busy() const { return m_busy; }
 
 void DiagramImageExporter::exportPng(const QUrl &fileUrl,
@@ -124,6 +146,8 @@ void DiagramImageExporter::exportPng(const QUrl &fileUrl,
   m_canvas->setParentItem(m_window->contentItem());
   m_canvas->setProject(m_project);
   m_canvas->setDiagramId(m_diagramId);
+  m_canvas->setTypeIconsVisible(m_typeIconsVisible);
+  m_canvas->setTypeIconSources(m_typeIconSources);
   m_canvas->setClip(true);
 
   const QRectF contentBounds = m_canvas->diagramContentBounds(kExportMargin);

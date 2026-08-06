@@ -635,10 +635,29 @@ QVector<QPointF> routeOrthogonallyAroundObstacles(
       resolvedSide(request.sourceSide, request.sourceBounds, request.source);
   const ConnectorSide targetSide =
       resolvedSide(request.targetSide, request.targetBounds, request.target);
+  const QPointF sourceNormal = outwardNormal(sourceSide);
+  const QPointF targetNormal = outwardNormal(targetSide);
+
+  // Endpoint clearance controls where the first bend may appear; it must not
+  // turn a geometrically valid connector into an unroutable one. When two
+  // opposite sides face each other across a narrow corridor, share the
+  // available distance evenly. The resulting middle lane is still as far
+  // from both presentations as the geometry permits.
+  qreal sourceEndpointClearance = request.endpointClearance;
+  qreal targetEndpointClearance = request.endpointClearance;
+  const bool oppositeFacingSides =
+      QPointF::dotProduct(sourceNormal, targetNormal) < -1.0 + kGeometryEpsilon;
+  const qreal facingGap =
+      QPointF::dotProduct(request.target - request.source, sourceNormal);
+  if (oppositeFacingSides && facingGap >= 0.0 &&
+      facingGap < sourceEndpointClearance + targetEndpointClearance) {
+    sourceEndpointClearance = facingGap / 2.0;
+    targetEndpointClearance = facingGap - sourceEndpointClearance;
+  }
   const QPointF sourceEscape =
-      request.source + outwardNormal(sourceSide) * request.endpointClearance;
+      request.source + sourceNormal * sourceEndpointClearance;
   const QPointF targetEscape =
-      request.target + outwardNormal(targetSide) * request.endpointClearance;
+      request.target + targetNormal * targetEndpointClearance;
 
   QVector<QRectF> externalObstacles;
   externalObstacles.reserve(request.obstacles.size());
@@ -650,12 +669,10 @@ QVector<QPointF> routeOrthogonallyAroundObstacles(
   // outgoing sides. The short endpoint-to-escape legs are added afterward and
   // are intentionally the only segments allowed inside those two bounds.
   QVector<QRectF> routingObstacles = externalObstacles;
-  appendObstacleIfDistinct(
-      routingObstacles,
-      expanded(request.sourceBounds, request.endpointClearance));
-  appendObstacleIfDistinct(
-      routingObstacles,
-      expanded(request.targetBounds, request.endpointClearance));
+  appendObstacleIfDistinct(routingObstacles, expanded(request.sourceBounds,
+                                                      sourceEndpointClearance));
+  appendObstacleIfDistinct(routingObstacles, expanded(request.targetBounds,
+                                                      targetEndpointClearance));
 
   if (pointStrictlyInsideAny(sourceEscape, routingObstacles) ||
       pointStrictlyInsideAny(targetEscape, routingObstacles))
@@ -674,6 +691,27 @@ QVector<QPointF> routeOrthogonallyAroundObstacles(
                   routingObstacles);
   appendCandidate(candidates, {targetEscape.x(), sourceEscape.y()},
                   routingObstacles);
+
+  const Axis sourceAxis = axisForSide(sourceSide, request.source, sourceEscape);
+  const Axis targetAxis = axisForSide(targetSide, targetEscape, request.target);
+  if (sourceAxis == targetAxis) {
+    // Two facing parallel sides need a central lane. Cross-coordinate
+    // candidates alone can fall inside either expanded endpoint rectangle,
+    // which previously forced a large detour around otherwise empty space.
+    if (sourceAxis == Axis::Horizontal) {
+      const qreal middleX = (sourceEscape.x() + targetEscape.x()) / 2.0;
+      appendCandidate(candidates, {middleX, sourceEscape.y()},
+                      routingObstacles);
+      appendCandidate(candidates, {middleX, targetEscape.y()},
+                      routingObstacles);
+    } else {
+      const qreal middleY = (sourceEscape.y() + targetEscape.y()) / 2.0;
+      appendCandidate(candidates, {sourceEscape.x(), middleY},
+                      routingObstacles);
+      appendCandidate(candidates, {targetEscape.x(), middleY},
+                      routingObstacles);
+    }
+  }
   for (const QRectF &obstacle : routingObstacles) {
     appendCandidate(candidates, obstacle.topLeft(), routingObstacles);
     appendCandidate(candidates, obstacle.topRight(), routingObstacles);
@@ -701,9 +739,7 @@ QVector<QPointF> routeOrthogonallyAroundObstacles(
       candidates, routingObstacles, request.occupiedRoutes,
       request.crossingPenalty, request.sharedSegmentPenalty);
   const QVector<int> path =
-      leastCostPath(graph, sourceIndex, targetIndex,
-                    axisForSide(sourceSide, request.source, sourceEscape),
-                    axisForSide(targetSide, targetEscape, request.target));
+      leastCostPath(graph, sourceIndex, targetIndex, sourceAxis, targetAxis);
   if (path.isEmpty())
     return {};
 

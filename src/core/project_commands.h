@@ -1012,6 +1012,7 @@ public:
                           const ProjectData &project, DiagramStyle after);
 
 private:
+  bool affectsProjectTree() const override { return false; }
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
 
@@ -1027,6 +1028,7 @@ public:
                              const QString &description);
 
 private:
+  bool affectsProjectTree() const override { return false; }
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
   void apply(ProjectData &project, bool forward);
@@ -1040,6 +1042,7 @@ public:
                             const ProjectData &project, QString styleId);
 
 private:
+  bool affectsProjectTree() const override { return false; }
   void execute(ProjectData &project) override;
   void revert(ProjectData &project) override;
 

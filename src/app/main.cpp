@@ -15,7 +15,9 @@
 #include <QIcon>
 #include <QQmlApplicationEngine>
 #include <QQmlContext>
+#include <QQuickItem>
 #include <QQuickStyle>
+#include <QQuickWindow>
 #include <QSurfaceFormat>
 #include <QTimer>
 #include <QWindow>
@@ -71,6 +73,8 @@ int main(int argc, char *argv[]) {
       application.applicationVersion(),
       QUrl(QStringLiteral(YAUML_UPDATE_MANIFEST_URL)), &applicationSettings,
       project.diagnostics());
+  if (application.arguments().contains(QStringLiteral("--smoke-test")))
+    workspace.setProjectTreeVisible(true);
   for (const QString &error : iconRegistry.errors())
     project.diagnostics()->addWarning(QStringLiteral("icons"), error);
   QObject::connect(&project, &yauml::ProjectController::projectOpened,
@@ -187,6 +191,9 @@ int main(int argc, char *argv[]) {
           auto *tabs = rootObject ? rootObject->findChild<QObject *>(
                                         QStringLiteral("preferencesTabs"))
                                   : nullptr;
+          auto *projectTree = rootObject ? rootObject->findChild<QObject *>(
+                                               QStringLiteral("projectTree"))
+                                         : nullptr;
           if (!folderDialog ||
               !QMetaObject::invokeMethod(folderDialog, "open") ||
               !QMetaObject::invokeMethod(folderDialog, "close") ||
@@ -200,7 +207,7 @@ int main(int argc, char *argv[]) {
               !QMetaObject::invokeMethod(stereotypeDropdown, "openBelow") ||
               !QMetaObject::invokeMethod(stereotypeDropdown,
                                          "cancelDropdown") ||
-              !preferences || !tabs ||
+              !preferences || !tabs || !projectTree ||
               !QMetaObject::invokeMethod(preferences, "open")) {
             std::fprintf(stderr,
                          "UI smoke setup failed: folder=%d style=%d "
@@ -219,7 +226,46 @@ int main(int argc, char *argv[]) {
           // delegates, so visit each page during the smoke test.
           QTimer::singleShot(100, tabs,
                              [tabs] { tabs->setProperty("currentIndex", 3); });
+          QTimer::singleShot(150, projectTree, [projectTree] {
+            QMetaObject::invokeMethod(projectTree, "expandAllBranches");
+          });
         });
+    QTimer::singleShot(500, &application, [&engine] {
+      const auto roots = engine.rootObjects();
+      QObject *rootObject = roots.isEmpty() ? nullptr : roots.first();
+      QList<QObject *> treeIcons;
+      const auto collectTreeIcons = [&](const auto &self,
+                                        QQuickItem *item) -> void {
+        if (!item)
+          return;
+        if (item->objectName() == QStringLiteral("projectTreeIcon"))
+          treeIcons.append(item);
+        for (QQuickItem *child : item->childItems())
+          self(self, child);
+      };
+      auto *quickWindow = qobject_cast<QQuickWindow *>(rootObject);
+      collectTreeIcons(collectTreeIcons,
+                       quickWindow ? quickWindow->contentItem() : nullptr);
+      int assignedIcons = 0;
+      int readyIcons = 0;
+      for (QObject *icon : treeIcons) {
+        if (icon->property("source").toUrl().isEmpty())
+          continue;
+        ++assignedIcons;
+        if (icon->property("status").toInt() == 1 &&
+            icon->property("visible").toBool())
+          ++readyIcons;
+      }
+      if (assignedIcons == 0 || readyIcons != assignedIcons) {
+        std::fprintf(stderr,
+                     "UI smoke project-tree icons failed: assigned=%d "
+                     "ready=%d delegates=%lld\n",
+                     assignedIcons, readyIcons,
+                     static_cast<long long>(treeIcons.size()));
+        std::fflush(stderr);
+        QCoreApplication::exit(1);
+      }
+    });
     QTimer::singleShot(750, &application, [&engine] {
       const auto roots = engine.rootObjects();
       auto *window =

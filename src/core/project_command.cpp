@@ -10,6 +10,8 @@ ProjectCommand::ProjectCommand(ProjectController *controller,
   Q_ASSERT(m_controller);
 }
 
+bool ProjectCommand::affectsProjectTree() const { return true; }
+
 void ProjectCommand::undo() { m_controller->applyCommand(*this, false); }
 
 void ProjectCommand::redo() { m_controller->applyCommand(*this, true); }

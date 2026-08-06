@@ -42,6 +42,17 @@ QString baselineFileName() {
 #endif
 }
 
+QVariantMap canonicalTypeIconSources() {
+  const auto source = [](const char *relativePath) {
+    const QString path = QFINDTESTDATA(relativePath);
+    return path.isEmpty() ? QString{} : QUrl::fromLocalFile(path).toString();
+  };
+  return {
+      {QStringLiteral("class"), source("../assets/icons/tree-class.svg")},
+      {QStringLiteral("struct"), source("../assets/icons/tree-struct.svg")},
+      {QStringLiteral("enumeration"), source("../assets/icons/tree-enum.svg")}};
+}
+
 const NodePresentation *nodeForElement(const Diagram &diagram,
                                        const QString &elementId) {
   const auto match = std::find_if(diagram.nodes.cbegin(), diagram.nodes.cend(),
@@ -296,6 +307,8 @@ void RenderRegressionTests::canonicalDiagramMatchesBaseline() {
   canvas->setVisible(true);
   canvas->setProject(&controller);
   canvas->setDiagramId(controller.data().diagrams.first().id);
+  canvas->setTypeIconSources(canonicalTypeIconSources());
+  canvas->setTypeIconsVisible(true);
   canvas->setGridSpacing(20);
   window.show();
   if (QGuiApplication::platformName() != QStringLiteral("offscreen"))
