@@ -158,6 +158,13 @@ public:
   QString addElementCenteredAt(const QString &type, const QString &diagramId,
                                qreal centerX, qreal centerY);
   Q_INVOKABLE QString addDiagram();
+  // Creates an immediately valid, empty sequence diagram. Sequence diagrams
+  // require a participant, so the first free participant is created together
+  // with the diagram as one undoable project operation.
+  Q_INVOKABLE QString addSequenceDiagram();
+  // Imports the public sequence interchange format as one undoable diagram
+  // creation command. QML passes the selected local file URL directly.
+  Q_INVOKABLE QString importSequenceDiagram(const QUrl &fileUrl);
   Q_INVOKABLE QVariantList
   diagramTransferTargets(const QString &sourceDiagramId) const;
   Q_INVOKABLE QString transferDiagramPresentations(
@@ -267,6 +274,67 @@ public:
                                       qreal width, qreal height);
   Q_INVOKABLE void updateNodeGeometries(const QString &diagramId,
                                         const QVariantList &geometries);
+  Q_INVOKABLE void updateSequenceParticipantX(const QString &diagramId,
+                                              const QString &participantId,
+                                              qreal x);
+  Q_INVOKABLE void updateSequenceMessageY(const QString &diagramId,
+                                          const QString &messageId, qreal y);
+  Q_INVOKABLE QString addSequenceParticipant(const QString &diagramId,
+                                             qreal centerX,
+                                             const QString &name = {});
+  Q_INVOKABLE QVariantList
+  sequenceExecutionContexts(const QString &diagramId) const;
+  Q_INVOKABLE QString saveSequenceExecutionContext(const QString &diagramId,
+                                                   const QString &contextId,
+                                                   const QString &name,
+                                                   const QString &type);
+  Q_INVOKABLE bool deleteSequenceExecutionContext(const QString &diagramId,
+                                                  const QString &contextId);
+  Q_INVOKABLE bool
+  setSequenceParticipantExecutionContext(const QString &diagramId,
+                                         const QString &participantId,
+                                         const QString &contextId);
+  Q_INVOKABLE QString createSequenceMessage(
+      const QString &diagramId, const QString &sourceParticipantId,
+      const QString &targetParticipantId, const QString &type,
+      const QString &text = {}, const QString &targetOperationId = {},
+      qreal requestedY = -1.0, bool automaticActivation = false);
+  Q_INVOKABLE QVariantList sequenceMessageTargetOperationChoices(
+      const QString &diagramId, const QString &targetParticipantId) const;
+  Q_INVOKABLE bool
+  setSequenceMessageTargetOperation(const QString &diagramId,
+                                    const QString &messageId,
+                                    const QString &targetOperationId);
+  Q_INVOKABLE QVariantList sequenceActivationMessageChoices(
+      const QString &diagramId, const QString &participantId) const;
+  Q_INVOKABLE QString createSequenceActivation(
+      const QString &diagramId, const QString &participantId,
+      const QString &startMessageId, const QString &endMessageId,
+      const QString &label = {}, qreal startY = -1.0, qreal endY = -1.0,
+      const QString &executionContextId = {});
+  Q_INVOKABLE bool updateSequenceActivation(
+      const QString &diagramId, const QString &activationId,
+      const QString &startMessageId, const QString &endMessageId,
+      const QString &label = {}, qreal startY = -1.0, qreal endY = -1.0,
+      const QString &executionContextId = {});
+  Q_INVOKABLE QVariantList
+  sequenceMessageChoices(const QString &diagramId) const;
+  Q_INVOKABLE QString createSequenceCombinedFragment(
+      const QString &diagramId, const QStringList &participantIds,
+      const QString &type, const QString &startMessageId,
+      const QString &endMessageId, const QString &guard = {},
+      const QString &alternativeStartMessageId = {},
+      const QString &alternativeGuard = {});
+  Q_INVOKABLE bool updateSequenceCombinedFragment(
+      const QString &diagramId, const QString &fragmentId, const QString &type,
+      const QString &startMessageId, const QString &endMessageId,
+      const QString &guard = {}, const QString &alternativeStartMessageId = {},
+      const QString &alternativeGuard = {});
+  Q_INVOKABLE bool deleteSequenceItems(const QString &diagramId,
+                                       const QStringList &participantIds,
+                                       const QStringList &messageIds,
+                                       const QStringList &activationIds,
+                                       const QStringList &fragmentIds);
   Q_INVOKABLE void setNodePortSnapPoints(const QString &diagramId,
                                          const QString &nodeId,
                                          int horizontalPointCount,
@@ -448,6 +516,12 @@ private:
                                  const QString &connectorId,
                                  QList<ConnectorBendPoint> bendPoints,
                                  const QString &description);
+  // A browser type becomes a semantic participant when it is placed on a
+  // sequence diagram. Keeping this distinct from class-diagram placement
+  // prevents sequence diagrams from accumulating node presentations.
+  int addElementsToSequenceDiagram(const QString &diagramId,
+                                   const QStringList &elementIds,
+                                   qreal centerX);
 
   ProjectData m_data;
   QString m_projectPath;

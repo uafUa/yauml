@@ -172,6 +172,37 @@ void migrateVersionThreeToFour(ProjectJsonDocuments &documents) {
   documents.manifest.insert(QStringLiteral("schemaVersion"), 4);
 }
 
+void migrateVersionFourToFive(ProjectJsonDocuments &documents) {
+  // Schema 5 introduces multiple diagram kinds. All preceding diagrams are
+  // class diagrams, so make that fact explicit before the deserializer starts
+  // requiring a kind. Sequence-specific data is additive and needs no legacy
+  // conversion.
+  QJsonArray diagrams =
+      documents.diagrams.value(QStringLiteral("diagrams")).toArray();
+  for (int index = 0; index < diagrams.size(); ++index) {
+    if (!diagrams.at(index).isObject())
+      continue;
+    QJsonObject diagram = diagrams.at(index).toObject();
+    if (!diagram.contains(QStringLiteral("type")))
+      diagram.insert(QStringLiteral("type"), QStringLiteral("class"));
+    diagrams.replace(index, diagram);
+  }
+  documents.diagrams.insert(QStringLiteral("diagrams"), diagrams);
+  documents.manifest.insert(QStringLiteral("schemaVersion"), 5);
+}
+
+// Combined fragments are optional sequence-diagram records. Version six is
+// additive, so legacy documents need no materialized changes.
+void migrateVersionFiveToSix(ProjectJsonDocuments &documents) {
+  documents.manifest.insert(QStringLiteral("schemaVersion"), 6);
+}
+
+// Sequence-message operation links are optional. Version seven only advances
+// the manifest marker; absent links remain deliberately unlinked.
+void migrateVersionSixToSeven(ProjectJsonDocuments &documents) {
+  documents.manifest.insert(QStringLiteral("schemaVersion"), 7);
+}
+
 } // namespace
 
 SchemaMigrationOutcome
@@ -210,6 +241,18 @@ ProjectSchemaMigrator::migrate(ProjectJsonDocuments documents) {
     case 3:
       migrateVersionThreeToFour(outcome.documents);
       version = 4;
+      break;
+    case 4:
+      migrateVersionFourToFive(outcome.documents);
+      version = 5;
+      break;
+    case 5:
+      migrateVersionFiveToSix(outcome.documents);
+      version = 6;
+      break;
+    case 6:
+      migrateVersionSixToSeven(outcome.documents);
+      version = 7;
       break;
     default:
       outcome.diagnostics.append(schemaError(

@@ -14,6 +14,7 @@
 namespace yauml {
 
 enum class ElementType { Package, Class, Struct, Enumeration };
+enum class DiagramType { Class, Sequence };
 enum class RelationshipType {
   Dependency,
   Generalization,
@@ -28,9 +29,30 @@ enum class ConnectorRouting { Straight, Orthogonal };
 enum class MemberVisibility { Public, Protected, Private, Package };
 enum class OperationKind { Method, Constructor, Destructor };
 enum class OperationSignatureMode { Full, NameAndReturnType, NameOnly };
+enum class SequenceExecutionContextType { Thread, EventLoop, Executor, Task };
+enum class SequenceMessageType {
+  Synchronous,
+  Asynchronous,
+  Return,
+  Create,
+  Destroy
+};
+// A combined fragment groups a contiguous part of an interaction. This set
+// covers the common control-flow and concurrency constructs without imposing a
+// guard-expression language on the project model.
+enum class SequenceCombinedFragmentType {
+  Alternative,
+  Optional,
+  Loop,
+  Parallel,
+  Critical
+};
+enum class SequenceEvidenceConfidence { Confirmed, Inferred };
 
 QString toString(ElementType type);
 ElementType elementTypeFromString(const QString &value, bool *ok = nullptr);
+QString toString(DiagramType type);
+DiagramType diagramTypeFromString(const QString &value, bool *ok = nullptr);
 QString toString(RelationshipType type);
 RelationshipType relationshipTypeFromString(const QString &value,
                                             bool *ok = nullptr);
@@ -47,6 +69,21 @@ OperationKind operationKindFromString(const QString &value, bool *ok = nullptr);
 QString toString(OperationSignatureMode mode);
 OperationSignatureMode operationSignatureModeFromString(const QString &value,
                                                         bool *ok = nullptr);
+QString toString(SequenceExecutionContextType type);
+SequenceExecutionContextType
+sequenceExecutionContextTypeFromString(const QString &value,
+                                       bool *ok = nullptr);
+QString toString(SequenceMessageType type);
+SequenceMessageType sequenceMessageTypeFromString(const QString &value,
+                                                  bool *ok = nullptr);
+QString toString(SequenceCombinedFragmentType type);
+SequenceCombinedFragmentType
+sequenceCombinedFragmentTypeFromString(const QString &value,
+                                       bool *ok = nullptr);
+bool sequenceCombinedFragmentHasSecondOperand(SequenceCombinedFragmentType type);
+QString toString(SequenceEvidenceConfidence confidence);
+SequenceEvidenceConfidence
+sequenceEvidenceConfidenceFromString(const QString &value, bool *ok = nullptr);
 QString newId();
 
 // Browser organization is deliberately separate from UML/C++ ownership. An
@@ -300,9 +337,105 @@ struct DiagramFilter {
   bool operator==(const DiagramFilter &) const = default;
 };
 
+// Sequence-diagram records are diagram-local. Participants may refer to a
+// semantic model element, but messages and execution contexts describe one
+// behavioral view and therefore do not become structural model relationships.
+struct SequenceExecutionContext {
+  QString id;
+  QString key;
+  QString name;
+  SequenceExecutionContextType type = SequenceExecutionContextType::Thread;
+  QJsonObject extra;
+
+  bool operator==(const SequenceExecutionContext &) const = default;
+};
+
+struct SequenceParticipant {
+  QString id;
+  QString key;
+  QString name;
+  QString elementId;
+  QString defaultExecutionContextId;
+  QRectF headerGeometry;
+  QJsonObject extra;
+
+  bool operator==(const SequenceParticipant &) const = default;
+};
+
+struct SequenceSourceEvidence {
+  QString file;
+  int line = 0;
+  int column = 0;
+  SequenceEvidenceConfidence confidence = SequenceEvidenceConfidence::Confirmed;
+  QString note;
+  QJsonObject extra;
+
+  bool operator==(const SequenceSourceEvidence &) const = default;
+};
+
+struct SequenceMessage {
+  QString id;
+  QString key;
+  QString sourceParticipantId;
+  QString targetParticipantId;
+  SequenceMessageType type = SequenceMessageType::Synchronous;
+  QString text;
+  qreal y = 0.0;
+  SequenceSourceEvidence evidence;
+  QJsonObject extra;
+  // A message may name the operation invoked on its target lifeline. Keeping
+  // both IDs makes the reference unambiguous even when operation IDs originate
+  // from different C++ importers.
+  QString targetOperationElementId;
+  QString targetOperationId;
+
+  bool operator==(const SequenceMessage &) const = default;
+};
+
+// An activation can either follow message anchors or occupy an explicitly
+// positioned range on its lifeline. Message-bound activations survive message
+// reordering; free-positioned activations make manual authoring possible before
+// any messages exist. An empty endMessageId on a message-bound activation means
+// that it continues to the end of the interaction.
+struct SequenceActivation {
+  QString id;
+  QString key;
+  QString participantId;
+  QString executionContextId;
+  QString startMessageId;
+  QString endMessageId;
+  std::optional<qreal> startY;
+  std::optional<qreal> endY;
+  QString label;
+  QJsonObject extra;
+
+  bool operator==(const SequenceActivation &) const = default;
+};
+
+// Bounds use message IDs rather than rows, which keeps the frame semantically
+// attached when messages are repositioned. Alternative and parallel fragments
+// have two operands: the first begins at startMessageId and the second at
+// alternativeStartMessageId. The field retains its established serialized
+// name so existing sequence projects remain compatible.
+struct SequenceCombinedFragment {
+  QString id;
+  QString key;
+  SequenceCombinedFragmentType type = SequenceCombinedFragmentType::Optional;
+  QStringList participantIds;
+  QString startMessageId;
+  QString endMessageId;
+  QString guard;
+  QString alternativeStartMessageId;
+  QString alternativeGuard;
+  QJsonObject extra;
+
+  bool operator==(const SequenceCombinedFragment &) const = default;
+};
+
 struct Diagram {
   QString id;
   QString name;
+  DiagramType type = DiagramType::Class;
   bool showAttributes = true;
   bool showOperations = true;
   OperationSignatureMode operationSignatureMode = OperationSignatureMode::Full;
@@ -312,6 +445,12 @@ struct Diagram {
   QList<ConnectorPresentation> connectors;
   QList<NotePresentation> notes;
   QList<NoteAttachment> noteAttachments;
+  QList<SequenceExecutionContext> sequenceExecutionContexts;
+  QList<SequenceParticipant> sequenceParticipants;
+  QList<SequenceMessage> sequenceMessages;
+  QList<SequenceActivation> sequenceActivations;
+  QList<SequenceCombinedFragment> sequenceCombinedFragments;
+  QJsonObject sequenceExtra;
   QJsonObject extra;
 
   bool operator==(const Diagram &) const = default;
@@ -386,6 +525,24 @@ const NotePresentation *findNote(const Diagram &diagram, const QString &id);
 NoteAttachment *findNoteAttachment(Diagram &diagram, const QString &id);
 const NoteAttachment *findNoteAttachment(const Diagram &diagram,
                                          const QString &id);
+SequenceParticipant *findSequenceParticipant(Diagram &diagram,
+                                             const QString &id);
+const SequenceParticipant *findSequenceParticipant(const Diagram &diagram,
+                                                   const QString &id);
+SequenceMessage *findSequenceMessage(Diagram &diagram, const QString &id);
+const SequenceMessage *findSequenceMessage(const Diagram &diagram,
+                                           const QString &id);
+SequenceActivation *findSequenceActivation(Diagram &diagram, const QString &id);
+const SequenceActivation *findSequenceActivation(const Diagram &diagram,
+                                                 const QString &id);
+SequenceCombinedFragment *findSequenceCombinedFragment(Diagram &diagram,
+                                                        const QString &id);
+const SequenceCombinedFragment *
+findSequenceCombinedFragment(const Diagram &diagram, const QString &id);
+SequenceExecutionContext *findSequenceExecutionContext(Diagram &diagram,
+                                                       const QString &id);
+const SequenceExecutionContext *
+findSequenceExecutionContext(const Diagram &diagram, const QString &id);
 
 } // namespace yauml
 

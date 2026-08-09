@@ -1,0 +1,98 @@
+// This example uses free participants, so it can be imported into any yauml
+// project without requiring matching model element names.
+{
+  format: "yauml-sequence",
+  version: 1,
+
+  diagram: {
+    key: "standalone-sequence-demo",
+    name: "Sequence diagram demo",
+
+    contexts: [
+      { key: "ui", name: "UI thread", kind: "thread" },
+      { key: "workers", name: "Worker pool", kind: "executor" },
+    ],
+
+    participants: [
+      { key: "user", name: "User" },
+      { key: "controller", name: "Controller", context: "ui" },
+      { key: "worker", name: "Worker", context: "workers" },
+      { key: "result", name: "Result" },
+    ],
+
+    messages: [
+      {
+        key: "request",
+        from: "user",
+        to: "controller",
+        kind: "sync",
+        text: "submit(request)",
+      },
+      {
+        key: "dispatch",
+        from: "controller",
+        to: "worker",
+        kind: "async",
+        text: "dispatch(work)",
+        source: {
+          confidence: "inferred",
+          note: "Demonstrates inferred asynchronous behavior",
+        },
+      },
+      {
+        key: "prepare",
+        from: "worker",
+        to: "worker",
+        kind: "sync",
+        text: "prepare()",
+      },
+      {
+        key: "create-result",
+        from: "worker",
+        to: "result",
+        kind: "create",
+        text: "create",
+      },
+      {
+        key: "complete",
+        from: "worker",
+        to: "controller",
+        kind: "return",
+        text: "completed(result)",
+      },
+      {
+        key: "reply",
+        from: "controller",
+        to: "user",
+        kind: "return",
+        text: "accepted",
+      },
+      {
+        key: "destroy-result",
+        from: "controller",
+        to: "result",
+        kind: "destroy",
+        text: "release",
+      },
+    ],
+
+    activations: [
+      {
+        key: "controller-request",
+        participant: "controller",
+        context: "ui",
+        start: "request",
+        end: "reply",
+        label: "handle request",
+      },
+      {
+        key: "worker-dispatch",
+        participant: "worker",
+        context: "workers",
+        start: "dispatch",
+        end: "complete",
+        label: "perform work",
+      },
+    ],
+  },
+}

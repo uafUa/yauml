@@ -12,11 +12,18 @@ Menu {
     property bool createAtViewportCenter: false
     readonly property bool canvasAvailable:
         canvas !== null && canvas !== undefined
+    readonly property bool structuralDiagram:
+        canvasAvailable && canvas.diagramType === "class"
+    readonly property bool sequenceDiagram:
+        canvasAvailable && canvas.diagramType === "sequence"
 
     signal filterRequested()
     signal exportPngRequested()
     signal automaticLayoutRequested()
     signal connectorOptimizationRequested(string scope)
+    signal sequenceMessageRequested()
+    signal sequenceCombinedFragmentRequested()
+    signal sequenceExecutionContextsRequested()
 
     function createElement(type) {
         if (!canvasAvailable)
@@ -36,23 +43,39 @@ Menu {
             canvas.createNoteAtContextPosition()
     }
 
+    function createSequenceParticipant() {
+        if (!canvasAvailable)
+            return
+        if (createAtViewportCenter)
+            canvas.addSequenceParticipantAtViewportCenter()
+        else
+            canvas.addSequenceParticipantAtContextPosition()
+    }
+
     title: qsTr("Diagram")
     enabled: canvasAvailable
 
     MenuItem {
         text: root.canvasAvailable && root.canvas.filterActive
               ? qsTr("Edit active filter…") : qsTr("Filter items…")
+        visible: root.structuralDiagram
+        height: visible ? implicitHeight : 0
         onTriggered: root.filterRequested()
     }
     MenuItem {
         text: qsTr("Clear filter")
-        visible: root.canvasAvailable && root.canvas.filterActive
+        visible: root.structuralDiagram && root.canvas.filterActive
         height: visible ? implicitHeight : 0
         onTriggered: root.canvas.clearDiagramFilter()
     }
-    MenuSeparator {}
+    MenuSeparator {
+        visible: root.structuralDiagram
+        height: visible ? implicitHeight : 0
+    }
     Menu {
         title: qsTr("New element")
+        visible: root.structuralDiagram
+        height: visible ? implicitHeight : 0
         CatalogMenuItem {
             catalogId: "createElement.package"
             text: qsTr("Package")
@@ -76,11 +99,47 @@ Menu {
     }
     MenuItem {
         text: qsTr("New note")
+        visible: root.structuralDiagram
+        height: visible ? implicitHeight : 0
         onTriggered: root.createNote()
     }
-    MenuSeparator {}
+    CatalogMenuItem {
+        catalogId: "sequence.addParticipant"
+        text: qsTr("New participant")
+        visible: root.sequenceDiagram
+        height: visible ? implicitHeight : 0
+        onTriggered: root.createSequenceParticipant()
+    }
+    MenuItem {
+        text: qsTr("Execution contexts…")
+        visible: root.sequenceDiagram
+        height: visible ? implicitHeight : 0
+        onTriggered: root.sequenceExecutionContextsRequested()
+    }
+    CatalogMenuItem {
+        catalogId: "sequence.createMessage"
+        text: qsTr("New message…")
+        visible: root.sequenceDiagram
+        height: visible ? implicitHeight : 0
+        enabled: root.canvas.selectedSequenceParticipantCount === 2
+        onTriggered: root.sequenceMessageRequested()
+    }
+    CatalogMenuItem {
+        catalogId: "sequence.addFragment"
+        text: qsTr("New combined fragment…")
+        visible: root.sequenceDiagram
+        height: visible ? implicitHeight : 0
+        enabled: root.canvas.selectedSequenceParticipantCount > 0
+        onTriggered: root.sequenceCombinedFragmentRequested()
+    }
+    MenuSeparator {
+        visible: root.structuralDiagram
+        height: visible ? implicitHeight : 0
+    }
     Menu {
         title: qsTr("Compartment visibility")
+        visible: root.structuralDiagram
+        height: visible ? implicitHeight : 0
         MenuItem {
             text: qsTr("Show attributes")
             checkable: true
@@ -130,7 +189,10 @@ Menu {
             }
         }
     }
-    MenuSeparator {}
+    MenuSeparator {
+        visible: root.structuralDiagram
+        height: visible ? implicitHeight : 0
+    }
     CatalogMenuItem {
         catalogId: "diagram.exportPng"
         text: qsTr("Export diagram as PNG…")
@@ -145,11 +207,15 @@ Menu {
     CatalogMenuItem {
         catalogId: "arrange.autoLayoutDiagram"
         text: qsTr("Auto arrange diagram…")
+        visible: root.structuralDiagram
+        height: visible ? implicitHeight : 0
         onTriggered: root.automaticLayoutRequested()
     }
     CatalogMenuItem {
         catalogId: "diagram.optimizeVisibleConnectorEndsAndRoute"
         text: qsTr("Optimize connectors…")
+        visible: root.structuralDiagram
+        height: visible ? implicitHeight : 0
         onTriggered: root.connectorOptimizationRequested("visible")
     }
 }

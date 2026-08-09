@@ -36,6 +36,8 @@ Its main advantages are:
   relationships.
 - Preparing for refactoring or discussing architecture with a team.
 - Keeping explanatory UML diagrams synchronized with evolving source code.
+- Documenting runtime interactions, asynchronous hand-offs, and execution
+  contexts with sequence diagrams.
 
 The source model and its diagrams are separate. A type can appear on several
 diagrams, each with a different layout, level of detail, filter, or visual
@@ -84,6 +86,18 @@ folders.
 - Diagram filters by type, stereotype, name, field, or operation.
 - One-click expansion of incoming or outgoing type dependencies.
 
+### Sequence diagrams
+
+- Participants linked to model types or created as free runtime instances.
+- Synchronous, asynchronous, return, create, destroy, and self messages.
+- Automatic and manually adjustable activation spans.
+- UML combined fragments for `alt`, `opt`, `loop`, `par`, and `critical`
+  interactions.
+- Explicit threads, event loops, executors, and tasks as execution contexts.
+- Optional links from messages to C++ operations for source navigation.
+- A documented JSON5 interchange format for creating source-evidenced
+  sequence diagrams with tools such as Codex.
+
 ### Local and safe
 
 - Projects are ordinary local directories containing readable JSON5 files.
@@ -108,9 +122,9 @@ Development builds are also available from successful
 
 ## Current focus
 
-`yauml` currently concentrates on class and architecture diagrams for existing
-C++ systems. It is not intended to be a complete implementation of every UML
-diagram type or a code generator.
+`yauml` currently concentrates on class, architecture, and sequence diagrams
+for understanding existing C++ systems. It is not intended to be a complete
+implementation of every UML diagram type or a code generator.
 
 The product direction and completed feature slices are tracked in
 [the productization plan](docs/productization-plan.md). Release and packaging

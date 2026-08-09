@@ -58,6 +58,11 @@
         contexts: ["File menu"],
         svg: "",
       },
+      importSequence: {
+        label: "Import sequence diagram",
+        contexts: ["File menu"],
+        svg: "",
+      },
       applyCppSynchronization: {
         label: "Apply C++ synchronization",
         contexts: ["C++ synchronization preview"],
@@ -110,8 +115,8 @@
 
     workspace: {
       addDiagram: {
-        label: "Add diagram",
-        contexts: ["main toolbar"],
+        label: "New diagram",
+        contexts: ["main toolbar", "project tree > Diagrams menu"],
         svg: "",
       },
       detachDiagram: {
@@ -264,6 +269,49 @@
       cancel: {
         label: "Cancel connector creation",
         contexts: ["connector-creation prompt"],
+        svg: "",
+      },
+    },
+
+    sequence: {
+      addParticipant: {
+        label: "Add sequence participant",
+        contexts: ["sequence diagram context menu"],
+        svg: "",
+      },
+      createMessage: {
+        label: "Create sequence message",
+        contexts: ["sequence diagram context menu"],
+        svg: "",
+      },
+      addActivation: {
+        label: "Create sequence activation",
+        contexts: ["sequence participant context menu"],
+        svg: "",
+      },
+      editActivation: {
+        label: "Edit sequence activation",
+        contexts: ["sequence activation context menu"],
+        svg: "",
+      },
+      addFragment: {
+        label: "Create combined fragment",
+        contexts: ["sequence diagram context menu"],
+        svg: "",
+      },
+      editFragment: {
+        label: "Edit combined fragment",
+        contexts: ["combined fragment context menu"],
+        svg: "",
+      },
+      linkOperation: {
+        label: "Link sequence message target operation",
+        contexts: ["sequence message context menu"],
+        svg: "",
+      },
+      delete: {
+        label: "Delete selected sequence items",
+        contexts: ["sequence participant context menu", "sequence message context menu", "sequence activation context menu", "combined fragment context menu"],
         svg: "",
       },
     },

@@ -11,6 +11,7 @@
 #include "core/project_serializer.h"
 #include "core/project_serializer_test_support.h"
 #include "core/project_style.h"
+#include "core/sequence_diagram_import.h"
 #include "core/source_editor_controller.h"
 #include "core/stereotype_catalog.h"
 #include "core/update_manifest.h"
@@ -93,6 +94,11 @@ private slots:
   void json5SerializationUsesReadableKeys();
   void actionIconCatalogIsValid();
   void deterministicRoundTrip();
+  void sequenceImportValidatesResolvesAndPersists();
+  void sequenceImportRejectsBrokenReferences();
+  void sequenceGuiImportIsUndoable();
+  void sequenceDiagramCanBeCreatedFromUiApi();
+  void sequenceManualAuthoringIsUndoable();
   void unversionedProjectMigrates();
   void stereotypeCatalogSeedMigrationAndEmptyPersistence();
   void invalidProjectSchemaVersionsAreRejected();
@@ -430,6 +436,613 @@ void CoreTests::deterministicRoundTrip() {
                         return diagnostic.message.contains(
                             QStringLiteral("sourceEnd role must be a string"));
                       }));
+}
+
+void CoreTests::sequenceImportValidatesResolvesAndPersists() {
+  ProjectData project = createStarterProject(QStringLiteral("Sequence import"));
+  ModelElement controller;
+  controller.id = QStringLiteral("controller-id");
+  controller.name = QStringLiteral("sample::Controller");
+  project.elements.append(controller);
+  ModelElement worker;
+  worker.id = QStringLiteral("worker-id");
+  worker.name = QStringLiteral("sample::Worker");
+  project.elements.append(worker);
+
+  const QByteArray source = R"json5(
+    {
+      format: "yauml-sequence",
+      version: 1,
+      diagram: {
+        key: "submit-work",
+        name: "Submit work",
+        contexts: [
+          { key: "ui", name: "UI thread", kind: "thread" },
+          { key: "pool", name: "Worker pool", kind: "executor" },
+        ],
+        participants: [
+          { key: "controller", element: "sample::Controller", context: "ui" },
+          { key: "worker", element: "worker-id", context: "pool" },
+        ],
+        messages: [
+          {
+            key: "submit",
+            from: "controller",
+            to: "worker",
+            kind: "async",
+            text: "submit()",
+            source: {
+              file: "src/controller.cpp",
+              line: 42,
+              confidence: "confirmed",
+            },
+          },
+          {
+            key: "complete",
+            from: "worker",
+            to: "controller",
+            kind: "return",
+            text: "completed",
+            source: {
+              confidence: "inferred",
+              note: "Callback executor is selected at runtime",
+            },
+          },
+        ],
+        activations: [
+          {
+            key: "worker-run",
+            participant: "worker",
+            context: "pool",
+            start: "submit",
+            end: "complete",
+          },
+        ],
+      },
+    }
+  )json5";
+
+  const auto parsed = SequenceDiagramImportService::parse(source, project);
+  QVERIFY2(parsed.ok, qPrintable(parsed.diagnostics.isEmpty()
+                                     ? QString{}
+                                     : parsed.diagnostics.first().message));
+  QCOMPARE(toString(parsed.diagram.type), QStringLiteral("sequence"));
+  QCOMPARE(parsed.diagram.sequenceExecutionContexts.size(), 2);
+  QCOMPARE(parsed.diagram.sequenceParticipants.size(), 2);
+  QCOMPARE(parsed.diagram.sequenceMessages.size(), 2);
+  QCOMPARE(parsed.diagram.sequenceActivations.size(), 1);
+  QCOMPARE(parsed.diagram.sequenceParticipants.at(0).elementId, controller.id);
+  QCOMPARE(parsed.diagram.sequenceParticipants.at(1).elementId, worker.id);
+  QCOMPARE(toString(parsed.diagram.sequenceMessages.at(1).evidence.confidence),
+           QStringLiteral("inferred"));
+
+  ProjectData imported = project;
+  QVERIFY(SequenceDiagramImportService::append(imported, parsed));
+  QVERIFY(ProjectSerializer::validate(imported).isEmpty());
+
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(temporary.path(), imported).ok);
+  const auto reloaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(reloaded.ok);
+  QCOMPARE(reloaded.project, imported);
+}
+
+void CoreTests::sequenceImportRejectsBrokenReferences() {
+  const ProjectData project =
+      createStarterProject(QStringLiteral("Broken sequence import"));
+  const QByteArray source = R"json5(
+    {
+      format: "yauml-sequence",
+      version: 1,
+      diagram: {
+        name: "Broken",
+        participants: [
+          { key: "caller", name: "Caller" },
+          { key: "missing", element: "does::not::Exist" },
+        ],
+        messages: [
+          { key: "call", from: "caller", to: "absent", kind: "sync" },
+        ],
+        activations: [
+          { participant: "caller", start: "unknown-message" },
+        ],
+      },
+    }
+  )json5";
+
+  const auto parsed = SequenceDiagramImportService::parse(source, project);
+  QVERIFY(!parsed.ok);
+  const QStringList messages = [&] {
+    QStringList result;
+    for (const Diagnostic &diagnostic : parsed.diagnostics)
+      result.append(diagnostic.message);
+    return result;
+  }();
+  QVERIFY(std::any_of(
+      messages.cbegin(), messages.cend(), [](const QString &message) {
+        return message.contains(QStringLiteral("unknown model element"));
+      }));
+  QVERIFY(std::any_of(
+      messages.cbegin(), messages.cend(), [](const QString &message) {
+        return message.contains(QStringLiteral("unknown participant 'absent'"));
+      }));
+  QVERIFY(std::any_of(
+      messages.cbegin(), messages.cend(), [](const QString &message) {
+        return message.contains(QStringLiteral("unknown start message"));
+      }));
+}
+
+void CoreTests::sequenceGuiImportIsUndoable() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  const QString sourcePath =
+      temporary.filePath(QStringLiteral("demo.sequence.json5"));
+  writeTestFile(sourcePath, R"json5(
+    {
+      format: "yauml-sequence",
+      version: 1,
+      diagram: {
+        key: "gui-import",
+        name: "GUI import",
+        participants: [
+          { key: "caller", name: "Caller" },
+          { key: "service", name: "Service" },
+        ],
+        messages: [
+          { from: "caller", to: "service", kind: "sync", text: "call()" },
+        ],
+      },
+    }
+  )json5");
+
+  ProjectController controller;
+  QCOMPARE(controller.data().diagrams.size(), 1);
+  const QString diagramId =
+      controller.importSequenceDiagram(QUrl::fromLocalFile(sourcePath));
+  QVERIFY(!diagramId.isEmpty());
+  QCOMPARE(controller.data().diagrams.size(), 2);
+  const auto *diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(diagram->type == DiagramType::Sequence);
+  QCOMPARE(diagram->sequenceParticipants.size(), 2);
+  QCOMPARE(diagram->sequenceMessages.size(), 1);
+  QCOMPARE(controller.undoText(), QStringLiteral("Create diagram"));
+
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.size(), 1);
+  QVERIFY(!findDiagram(controller.data(), diagramId));
+  controller.redo();
+  QCOMPARE(controller.data().diagrams.size(), 2);
+  QVERIFY(findDiagram(controller.data(), diagramId));
+}
+
+void CoreTests::sequenceDiagramCanBeCreatedFromUiApi() {
+  ProjectController controller;
+  const qsizetype initialCount = controller.data().diagrams.size();
+
+  const QString diagramId = controller.addSequenceDiagram();
+  QVERIFY(!diagramId.isEmpty());
+  QCOMPARE(controller.data().diagrams.size(), initialCount + 1);
+  const auto *diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(diagram->type == DiagramType::Sequence);
+  QCOMPARE(diagram->sequenceParticipants.size(), 1);
+  const SequenceParticipant &participant =
+      diagram->sequenceParticipants.first();
+  QCOMPARE(participant.key, QStringLiteral("participant-1"));
+  QCOMPARE(participant.name, QStringLiteral("Participant 1"));
+  QCOMPARE(participant.headerGeometry, QRectF(80.0, 40.0, 160.0, 48.0));
+
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.size(), initialCount);
+  QVERIFY(!findDiagram(controller.data(), diagramId));
+  controller.redo();
+  QVERIFY(findDiagram(controller.data(), diagramId));
+
+  // Browser placement is polymorphic: a type becomes a bound participant on
+  // a sequence diagram rather than a class-diagram node presentation.
+  const QString typeId = controller.addElement(
+      QStringLiteral("class"), controller.data().diagrams.first().id);
+  QVERIFY(!typeId.isEmpty());
+  const QString nestedTypeId = controller.addElement(
+      QStringLiteral("struct"), controller.data().diagrams.first().id);
+  QVERIFY(!nestedTypeId.isEmpty());
+  const auto browserItemJson = [](const QString &id) {
+    return QString::fromUtf8(
+        QJsonDocument(QJsonArray{QJsonObject{
+                          {QStringLiteral("kind"), QStringLiteral("element")},
+                          {QStringLiteral("id"), id}}})
+            .toJson(QJsonDocument::Compact));
+  };
+  QVERIFY(controller.moveBrowserItems(browserItemJson(nestedTypeId),
+                                      QStringLiteral("element"), typeId));
+  QCOMPARE(controller.addBrowserItemToDiagram(
+               diagramId, QStringLiteral("element"), typeId),
+           1);
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QCOMPARE(diagram->nodes.size(), 0);
+  QCOMPARE(diagram->sequenceParticipants.size(), 2);
+  const SequenceParticipant &boundParticipant =
+      diagram->sequenceParticipants.last();
+  QCOMPARE(boundParticipant.elementId, typeId);
+  QVERIFY(boundParticipant.name.isEmpty());
+  QVERIFY(std::none_of(diagram->sequenceParticipants.cbegin(),
+                       diagram->sequenceParticipants.cend(),
+                       [&nestedTypeId](const SequenceParticipant &candidate) {
+                         return candidate.elementId == nestedTypeId;
+                       }));
+}
+
+void CoreTests::sequenceManualAuthoringIsUndoable() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  const QString sourcePath =
+      temporary.filePath(QStringLiteral("manual.sequence.json5"));
+  writeTestFile(sourcePath, R"json5(
+    {
+      format: "yauml-sequence",
+      version: 1,
+      diagram: {
+        key: "manual-authoring",
+        name: "Manual authoring",
+        participants: [
+          { key: "caller", name: "Caller" },
+          { key: "service", name: "Service" },
+        ],
+        messages: [
+          { from: "caller", to: "service", kind: "sync", text: "call()" },
+        ],
+      },
+    }
+  )json5");
+
+  ProjectController controller;
+  const QString diagramId =
+      controller.importSequenceDiagram(QUrl::fromLocalFile(sourcePath));
+  QVERIFY(!diagramId.isEmpty());
+  const auto *initialDiagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(initialDiagram);
+  const QString sourceId = initialDiagram->sequenceParticipants.at(0).id;
+  const QString targetId = initialDiagram->sequenceParticipants.at(1).id;
+  const QString initialMessageId = initialDiagram->sequenceMessages.at(0).id;
+
+  const QString participantId =
+      controller.addSequenceParticipant(diagramId, 760.0);
+  QVERIFY(!participantId.isEmpty());
+  const auto *diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  const auto *participant = findSequenceParticipant(*diagram, participantId);
+  QVERIFY(participant);
+  QCOMPARE(participant->name, QStringLiteral("Participant 3"));
+  QCOMPARE(participant->headerGeometry.center().x(), 760.0);
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Create sequence participant"));
+  // A manually created lifeline does not need a synthetic message merely to
+  // host an activation. The free-positioned range remains diagram-local.
+  QVERIFY(controller.sequenceActivationMessageChoices(diagramId, participantId)
+              .isEmpty());
+  const QString manualActivationId = controller.createSequenceActivation(
+      diagramId, participantId, {}, {}, QStringLiteral("manual work"), 140.0,
+      260.0);
+  QVERIFY(!manualActivationId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  const auto *manualActivation =
+      findSequenceActivation(*diagram, manualActivationId);
+  QVERIFY(manualActivation);
+  QVERIFY(manualActivation->startMessageId.isEmpty());
+  QVERIFY(manualActivation->startY.has_value());
+  QVERIFY(manualActivation->endY.has_value());
+  QCOMPARE(*manualActivation->startY, 140.0);
+  QCOMPARE(*manualActivation->endY, 260.0);
+  const QString persistedProjectPath =
+      temporary.filePath(QStringLiteral("manual-project"));
+  QVERIFY(ProjectSerializer::save(persistedProjectPath, controller.data()).ok);
+  const LoadOutcome reloaded = ProjectSerializer::load(persistedProjectPath);
+  QVERIFY(reloaded.ok);
+  const auto *reloadedDiagram = findDiagram(reloaded.project, diagramId);
+  QVERIFY(reloadedDiagram);
+  const auto *reloadedActivation =
+      findSequenceActivation(*reloadedDiagram, manualActivationId);
+  QVERIFY(reloadedActivation);
+  QVERIFY(reloadedActivation->startY.has_value());
+  QVERIFY(reloadedActivation->endY.has_value());
+  QCOMPARE(*reloadedActivation->startY, 140.0);
+  QCOMPARE(*reloadedActivation->endY, 260.0);
+
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceActivation(*diagram, manualActivationId));
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceParticipant(*diagram, participantId));
+  controller.redo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(findSequenceParticipant(*diagram, participantId));
+  controller.redo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(findSequenceActivation(*diagram, manualActivationId));
+
+  const QString uiThreadContextId = controller.saveSequenceExecutionContext(
+      diagramId, {}, QStringLiteral("UI thread"), QStringLiteral("thread"));
+  QVERIFY(!uiThreadContextId.isEmpty());
+  QVERIFY(controller.setSequenceParticipantExecutionContext(
+      diagramId, participantId, uiThreadContextId));
+  QVERIFY(controller.updateSequenceActivation(diagramId, manualActivationId, {},
+                                              {}, QStringLiteral("manual work"),
+                                              140.0, 260.0, uiThreadContextId));
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QCOMPARE(findSequenceParticipant(*diagram, participantId)
+               ->defaultExecutionContextId,
+           uiThreadContextId);
+  QCOMPARE(
+      findSequenceActivation(*diagram, manualActivationId)->executionContextId,
+      uiThreadContextId);
+  QCOMPARE(controller.sequenceExecutionContexts(diagramId).size(), 1);
+
+  // Context deletion clears every affected assignment without copying the
+  // rest of the project, and one undo restores all of them.
+  QVERIFY(
+      controller.deleteSequenceExecutionContext(diagramId, uiThreadContextId));
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceExecutionContext(*diagram, uiThreadContextId));
+  QVERIFY(findSequenceParticipant(*diagram, participantId)
+              ->defaultExecutionContextId.isEmpty());
+  QVERIFY(findSequenceActivation(*diagram, manualActivationId)
+              ->executionContextId.isEmpty());
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(findSequenceExecutionContext(*diagram, uiThreadContextId));
+  QCOMPARE(findSequenceParticipant(*diagram, participantId)
+               ->defaultExecutionContextId,
+           uiThreadContextId);
+  QCOMPARE(
+      findSequenceActivation(*diagram, manualActivationId)->executionContextId,
+      uiThreadContextId);
+
+  const QString messageId = controller.createSequenceMessage(
+      diagramId, sourceId, targetId, QStringLiteral("async"),
+      QStringLiteral("dispatch()"));
+  QVERIFY(!messageId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  const auto *message = findSequenceMessage(*diagram, messageId);
+  QVERIFY(message);
+  QVERIFY(message->type == SequenceMessageType::Asynchronous);
+  QCOMPARE(message->text, QStringLiteral("dispatch()"));
+  // The importer places the existing message at its canonical 180-pixel row;
+  // interactive creation preserves the 60-pixel default message rhythm.
+  QCOMPARE(message->y, 240.0);
+  QCOMPARE(controller.undoText(), QStringLiteral("Create sequence message"));
+
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceMessage(*diagram, messageId));
+  controller.redo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(findSequenceMessage(*diagram, messageId));
+
+  // Pointer-created messages are inserted at their visual row. If the gap is
+  // too narrow, the downstream tail moves as part of the same undo unit.
+  const QString insertedMessageId = controller.createSequenceMessage(
+      diagramId, sourceId, targetId, QStringLiteral("sync"),
+      QStringLiteral("inserted()"), {}, 232.0);
+  QVERIFY(!insertedMessageId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QCOMPARE(diagram->sequenceMessages.size(), 3);
+  QCOMPARE(diagram->sequenceMessages.at(1).id, insertedMessageId);
+  QCOMPARE(diagram->sequenceMessages.at(1).y, 232.0);
+  QCOMPARE(findSequenceMessage(*diagram, messageId)->y, 256.0);
+  QCOMPARE(controller.undoText(), QStringLiteral("Create sequence message"));
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceMessage(*diagram, insertedMessageId));
+  QCOMPARE(findSequenceMessage(*diagram, messageId)->y, 240.0);
+
+  const QString automaticCallId = controller.createSequenceMessage(
+      diagramId, sourceId, targetId, QStringLiteral("sync"),
+      QStringLiteral("automaticCall()"), {}, -1.0, true);
+  QVERIFY(!automaticCallId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  const auto automaticActivation =
+      std::find_if(diagram->sequenceActivations.cbegin(),
+                   diagram->sequenceActivations.cend(),
+                   [&automaticCallId](const SequenceActivation &candidate) {
+                     return candidate.startMessageId == automaticCallId;
+                   });
+  QVERIFY(automaticActivation != diagram->sequenceActivations.cend());
+  QCOMPARE(automaticActivation->participantId, targetId);
+  QVERIFY(automaticActivation->endMessageId.isEmpty());
+  const QString automaticActivationId = automaticActivation->id;
+
+  const QString automaticReturnId = controller.createSequenceMessage(
+      diagramId, targetId, sourceId, QStringLiteral("return"),
+      QStringLiteral("done"), {}, -1.0, true);
+  QVERIFY(!automaticReturnId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QCOMPARE(
+      findSequenceActivation(*diagram, automaticActivationId)->endMessageId,
+      automaticReturnId);
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceMessage(*diagram, automaticReturnId));
+  QVERIFY(findSequenceActivation(*diagram, automaticActivationId)
+              ->endMessageId.isEmpty());
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceMessage(*diagram, automaticCallId));
+  QVERIFY(!findSequenceActivation(*diagram, automaticActivationId));
+
+  // A create message starts an object's lifetime, not an execution span.
+  // Automatic handling must not leave an unbounded activation on its target.
+  const qsizetype activationCountBeforeCreate =
+      diagram->sequenceActivations.size();
+  const QString createMessageId = controller.createSequenceMessage(
+      diagramId, sourceId, targetId, QStringLiteral("create"),
+      QStringLiteral("construct"), {}, -1.0, true);
+  QVERIFY(!createMessageId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QCOMPARE(diagram->sequenceActivations.size(), activationCountBeforeCreate);
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceMessage(*diagram, createMessageId));
+
+  const QString activationId = controller.createSequenceActivation(
+      diagramId, sourceId, initialMessageId, messageId,
+      QStringLiteral("dispatch request"));
+  QVERIFY(!activationId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  const auto *activation = findSequenceActivation(*diagram, activationId);
+  QVERIFY(activation);
+  QCOMPARE(activation->startMessageId, initialMessageId);
+  QCOMPARE(activation->endMessageId, messageId);
+  QCOMPARE(activation->label, QStringLiteral("dispatch request"));
+  QCOMPARE(controller.undoText(), QStringLiteral("Create sequence activation"));
+
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceActivation(*diagram, activationId));
+  controller.redo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(findSequenceActivation(*diagram, activationId));
+
+  QVERIFY(controller.updateSequenceActivation(
+      diagramId, activationId, initialMessageId, {},
+      QStringLiteral("await callback")));
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  activation = findSequenceActivation(*diagram, activationId);
+  QVERIFY(activation);
+  QVERIFY(activation->endMessageId.isEmpty());
+  QCOMPARE(activation->label, QStringLiteral("await callback"));
+  QCOMPARE(controller.undoText(), QStringLiteral("Update sequence activation"));
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  activation = findSequenceActivation(*diagram, activationId);
+  QVERIFY(activation);
+  QCOMPARE(activation->endMessageId, messageId);
+
+  const QString fragmentId = controller.createSequenceCombinedFragment(
+      diagramId, {sourceId, targetId}, QStringLiteral("alt"), initialMessageId,
+      messageId, QStringLiteral("accepted"), messageId,
+      QStringLiteral("otherwise"));
+  QVERIFY(!fragmentId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  const auto *fragment = findSequenceCombinedFragment(*diagram, fragmentId);
+  QVERIFY(fragment);
+  QVERIFY(fragment->type == SequenceCombinedFragmentType::Alternative);
+
+  QVERIFY(controller.updateSequenceCombinedFragment(
+      diagramId, fragmentId, QStringLiteral("par"), initialMessageId, messageId,
+      QStringLiteral("main branch"), messageId,
+      QStringLiteral("parallel branch")));
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  fragment = findSequenceCombinedFragment(*diagram, fragmentId);
+  QVERIFY(fragment);
+  QVERIFY(fragment->type == SequenceCombinedFragmentType::Parallel);
+  QCOMPARE(toString(fragment->type), QStringLiteral("par"));
+  QCOMPARE(fragment->alternativeGuard, QStringLiteral("parallel branch"));
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  fragment = findSequenceCombinedFragment(*diagram, fragmentId);
+  QVERIFY(fragment);
+  QVERIFY(fragment->type == SequenceCombinedFragmentType::Alternative);
+  QCOMPARE(fragment->participantIds, QStringList({sourceId, targetId}));
+  QCOMPARE(fragment->alternativeStartMessageId, messageId);
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Create sequence combined fragment"));
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceCombinedFragment(*diagram, fragmentId));
+  controller.redo();
+
+  QVERIFY(controller.updateSequenceCombinedFragment(
+      diagramId, fragmentId, QStringLiteral("loop"), initialMessageId,
+      messageId, QStringLiteral("retry")));
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  fragment = findSequenceCombinedFragment(*diagram, fragmentId);
+  QVERIFY(fragment);
+  QVERIFY(fragment->type == SequenceCombinedFragmentType::Loop);
+  QVERIFY(fragment->alternativeStartMessageId.isEmpty());
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Update sequence combined fragment"));
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  fragment = findSequenceCombinedFragment(*diagram, fragmentId);
+  QVERIFY(fragment);
+  QVERIFY(fragment->type == SequenceCombinedFragmentType::Alternative);
+
+  // Removing a message must also remove the sequence records whose bounds
+  // would otherwise refer to it. The cascade remains a single undo step.
+  QVERIFY(controller.deleteSequenceItems(diagramId, {}, {messageId}, {}, {}));
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceMessage(*diagram, messageId));
+  QVERIFY(!findSequenceActivation(*diagram, activationId));
+  QVERIFY(findSequenceActivation(*diagram, manualActivationId));
+  QVERIFY(!findSequenceCombinedFragment(*diagram, fragmentId));
+  QCOMPARE(controller.undoText(), QStringLiteral("Delete sequence items"));
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(findSequenceMessage(*diagram, messageId));
+  QVERIFY(findSequenceActivation(*diagram, activationId));
+  QVERIFY(findSequenceCombinedFragment(*diagram, fragmentId));
+
+  // Participant deletion cascades to every touching message and the records
+  // bounded by those messages, without disturbing unrelated lifelines.
+  QVERIFY(controller.deleteSequenceItems(diagramId, {sourceId}, {}, {}, {}));
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceParticipant(*diagram, sourceId));
+  QVERIFY(findSequenceParticipant(*diagram, targetId));
+  QVERIFY(findSequenceParticipant(*diagram, participantId));
+  QVERIFY(diagram->sequenceMessages.isEmpty());
+  QCOMPARE(diagram->sequenceActivations.size(), 1);
+  QVERIFY(findSequenceActivation(*diagram, manualActivationId));
+  QVERIFY(diagram->sequenceCombinedFragments.isEmpty());
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(findSequenceParticipant(*diagram, sourceId));
+  QVERIFY(findSequenceMessage(*diagram, initialMessageId));
+  QVERIFY(findSequenceMessage(*diagram, messageId));
+  QVERIFY(findSequenceActivation(*diagram, activationId));
+  QVERIFY(findSequenceCombinedFragment(*diagram, fragmentId));
+
+  // The final participant belongs to the sequence diagram's validity
+  // invariant; remove the diagram itself instead when it is no longer needed.
+  QVERIFY(!controller.deleteSequenceItems(
+      diagramId, {sourceId, targetId, participantId}, {}, {}, {}));
 }
 
 void CoreTests::unversionedProjectMigrates() {
@@ -6007,6 +6620,36 @@ void CoreTests::sourceEditorNavigationUsesImportedLocations() {
                                         {QStringLiteral("column"), 2}});
   project.relationships.append(relationship);
 
+  Diagram sequence;
+  sequence.id = QStringLiteral("diagram-sequence");
+  sequence.name = QStringLiteral("Evidence sequence");
+  sequence.type = DiagramType::Sequence;
+  SequenceParticipant caller;
+  caller.id = QStringLiteral("sequence-caller");
+  caller.key = QStringLiteral("caller");
+  caller.name = QStringLiteral("Caller");
+  caller.headerGeometry = QRectF(40, 40, 120, 48);
+  sequence.sequenceParticipants.append(caller);
+  SequenceParticipant worker;
+  worker.id = QStringLiteral("sequence-worker");
+  worker.key = QStringLiteral("worker");
+  worker.name = QStringLiteral("Worker");
+  worker.elementId = imported.id;
+  worker.headerGeometry = QRectF(280, 40, 120, 48);
+  sequence.sequenceParticipants.append(worker);
+  SequenceMessage sequenceMessage;
+  sequenceMessage.id = QStringLiteral("sequence-message-imported");
+  sequenceMessage.key = QStringLiteral("dispatch");
+  sequenceMessage.sourceParticipantId = caller.id;
+  sequenceMessage.targetParticipantId = worker.id;
+  sequenceMessage.type = SequenceMessageType::Asynchronous;
+  sequenceMessage.text = QStringLiteral("dispatch()");
+  sequenceMessage.y = 160.0;
+  sequenceMessage.targetOperationElementId = imported.id;
+  sequenceMessage.targetOperationId = operation.id;
+  sequence.sequenceMessages.append(sequenceMessage);
+  project.diagrams.append(sequence);
+
   QVERIFY(ProjectSerializer::save(temporary.path(), project).ok);
   ProjectController controller;
   QVERIFY(controller.openProject(QUrl::fromLocalFile(temporary.path())));
@@ -6036,6 +6679,25 @@ void CoreTests::sourceEditorNavigationUsesImportedLocations() {
   QCOMPARE(relationshipLocation.value(QStringLiteral("column")).toInt(), 2);
   QVERIFY(sourceEditor.canOpenObject(QStringLiteral("relationship"),
                                      relationship.id));
+
+  const QVariantList targetOperationChoices =
+      controller.sequenceMessageTargetOperationChoices(sequence.id, worker.id);
+  QVERIFY(targetOperationChoices.size() >= 2);
+  QCOMPARE(targetOperationChoices.constLast()
+               .toMap()
+               .value(QStringLiteral("id"))
+               .toString(),
+           operation.id);
+
+  const QVariantMap sequenceLocation = sourceEditor.sourceLocation(
+      QStringLiteral("sequence-message"), sequenceMessage.id);
+  QCOMPARE(QDir::cleanPath(
+               sequenceLocation.value(QStringLiteral("file")).toString()),
+           QDir::cleanPath(sourceFile));
+  QCOMPARE(sequenceLocation.value(QStringLiteral("line")).toInt(), 20);
+  QCOMPARE(sequenceLocation.value(QStringLiteral("column")).toInt(), 7);
+  QVERIFY(sourceEditor.canOpenObject(QStringLiteral("sequence-message"),
+                                     sequenceMessage.id));
 
   QVERIFY(!sourceEditor.canOpenObject(QStringLiteral("element"), manual.id));
   QSignalSpy attention(controller.diagnostics(),

@@ -33,6 +33,7 @@ class DiagramCanvas : public QQuickItem {
                  NOTIFY workspaceChanged)
   Q_PROPERTY(QString diagramId READ diagramId WRITE setDiagramId NOTIFY
                  diagramIdChanged)
+  Q_PROPERTY(QString diagramType READ diagramType NOTIFY diagramIdChanged)
   Q_PROPERTY(qreal zoom READ zoom NOTIFY viewportChanged)
   Q_PROPERTY(bool filterActive READ filterActive NOTIFY diagramFilterChanged)
   Q_PROPERTY(
@@ -52,6 +53,17 @@ class DiagramCanvas : public QQuickItem {
                  canvasSelectionChanged)
   Q_PROPERTY(int selectedNoteCount READ selectedNoteCount NOTIFY
                  canvasSelectionChanged)
+  Q_PROPERTY(int selectedSequenceParticipantCount READ
+                 selectedSequenceParticipantCount NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(int selectedSequenceMessageCount READ selectedSequenceMessageCount
+                 NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(QString selectedSequenceMessageId READ selectedSequenceMessageId
+                 NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(int selectedSequenceActivationCount READ
+                 selectedSequenceActivationCount NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(
+      int selectedSequenceCombinedFragmentCount READ
+          selectedSequenceCombinedFragmentCount NOTIFY canvasSelectionChanged)
   Q_PROPERTY(bool noteSelected READ noteSelected NOTIFY canvasSelectionChanged)
   Q_PROPERTY(bool canReattachSelectedConnectorEnds READ
                  canReattachSelectedConnectorEnds NOTIFY canvasSelectionChanged)
@@ -176,6 +188,7 @@ public:
   void setWorkspace(WorkspaceController *workspace);
   QString diagramId() const;
   void setDiagramId(const QString &diagramId);
+  QString diagramType() const;
   qreal zoom() const;
   QRectF diagramContentBounds(qreal margin = 0.0) const;
   void configureExportViewport(const QRectF &contentBounds, qreal zoom);
@@ -188,6 +201,11 @@ public:
   int selectedContainerChildPresentationCount() const;
   int selectedConnectorCount() const;
   int selectedNoteCount() const;
+  int selectedSequenceParticipantCount() const;
+  int selectedSequenceMessageCount() const;
+  QString selectedSequenceMessageId() const;
+  int selectedSequenceActivationCount() const;
+  int selectedSequenceCombinedFragmentCount() const;
   bool noteSelected() const;
   bool canReattachSelectedConnectorEnds() const;
   bool canReattachSelectedConnectorEndsToFacingSides() const;
@@ -263,6 +281,47 @@ public:
   Q_INVOKABLE void createElementAtViewportCenter(const QString &type);
   Q_INVOKABLE QString createNoteAtContextPosition();
   Q_INVOKABLE QString createNoteAtViewportCenter();
+  Q_INVOKABLE QString addSequenceParticipantAtContextPosition();
+  Q_INVOKABLE QString addSequenceParticipantAtViewportCenter();
+  Q_INVOKABLE QVariantList sequenceExecutionContexts() const;
+  Q_INVOKABLE QString saveSequenceExecutionContext(const QString &contextId,
+                                                   const QString &name,
+                                                   const QString &type);
+  Q_INVOKABLE bool deleteSequenceExecutionContext(const QString &contextId);
+  Q_INVOKABLE QVariantMap sequenceParticipantContextEditorData() const;
+  Q_INVOKABLE bool
+  setSelectedSequenceParticipantExecutionContext(const QString &contextId);
+  Q_INVOKABLE bool createSequenceMessage(const QString &type,
+                                         const QString &text,
+                                         const QString &targetOperationId = {},
+                                         bool automaticActivation = false);
+  Q_INVOKABLE void cancelPendingSequenceMessage();
+  Q_INVOKABLE QString sequenceMessageEndpointSummary() const;
+  Q_INVOKABLE QVariantList sequenceMessageTargetOperationChoices() const;
+  Q_INVOKABLE QVariantMap sequenceMessageTargetOperationEditorData() const;
+  Q_INVOKABLE bool
+  setSelectedSequenceMessageTargetOperation(const QString &targetOperationId);
+  Q_INVOKABLE QVariantMap sequenceActivationEditorData() const;
+  Q_INVOKABLE bool
+  createSequenceActivation(const QString &startMessageId,
+                           const QString &endMessageId, const QString &label,
+                           qreal startY, qreal endY,
+                           const QString &executionContextId = {});
+  Q_INVOKABLE bool updateSelectedSequenceActivation(
+      const QString &startMessageId, const QString &endMessageId,
+      const QString &label, qreal startY, qreal endY,
+      const QString &executionContextId = {});
+  Q_INVOKABLE QVariantMap sequenceCombinedFragmentEditorData() const;
+  Q_INVOKABLE bool createSequenceCombinedFragment(
+      const QString &type, const QString &startMessageId,
+      const QString &endMessageId, const QString &guard,
+      const QString &alternativeStartMessageId,
+      const QString &alternativeGuard);
+  Q_INVOKABLE bool updateSelectedSequenceCombinedFragment(
+      const QString &type, const QString &startMessageId,
+      const QString &endMessageId, const QString &guard,
+      const QString &alternativeStartMessageId,
+      const QString &alternativeGuard);
   Q_INVOKABLE void editSelectedNote();
   Q_INVOKABLE bool startSelectedNoteAttachment();
   Q_INVOKABLE void removeSelectedNoteAttachments();
@@ -320,6 +379,8 @@ public:
   transferSelectedPresentations(const QString &targetDiagramId, bool move,
                                 const QString &newDiagramName = {});
   Q_INVOKABLE void deleteSelectedConnector();
+  Q_INVOKABLE void deleteSelectedSequenceItems();
+  Q_INVOKABLE void editSelectedSequenceItem();
   Q_INVOKABLE void clearCanvasSelection();
   Q_INVOKABLE void refreshTheme();
   Q_INVOKABLE bool beginToolboxRelationship(const QString &relationshipType,
@@ -368,6 +429,10 @@ signals:
   void noteEditRequested(const QString &noteId, const QString &text, qreal x,
                          qreal y, qreal width, qreal height,
                          qreal fontPixelSize);
+  // The canvas owns gesture geometry; QML owns the message-details dialog.
+  // Keeping that boundary explicit avoids introducing a QQuickItem per
+  // lifeline merely to launch an editor.
+  void sequenceMessageCreationRequested();
 
 protected:
   QSGNode *updatePaintNode(QSGNode *oldNode,
@@ -401,9 +466,16 @@ private:
     MoveBendPoint,
     MoveAnnotation,
     CreateConnector,
-    CreateNoteAttachment
+    CreateNoteAttachment,
+    MoveSequenceParticipant,
+    MoveSequenceMessage,
+    ResizeSequenceActivationStart,
+    ResizeSequenceActivationEnd,
+    PendingSequenceMessage,
+    CreateSequenceMessage
   };
   enum class ResizeHandle { None, TopLeft, TopRight, BottomLeft, BottomRight };
+  enum class SequenceActivationResizeEdge { None, Start, End };
   struct ConnectorEndpoints {
     QPointF source;
     QPointF target;
@@ -537,6 +609,21 @@ private:
   void selectNode(const QString &nodeId, bool toggle);
   void selectConnector(const QString &connectorId, bool toggle);
   void selectNote(const QString &noteId, bool toggle);
+  void selectSequenceParticipant(const QString &participantId, bool toggle);
+  void selectSequenceMessage(const QString &messageId, bool toggle);
+  void selectSequenceActivation(const QString &activationId, bool toggle);
+  void selectSequenceCombinedFragment(const QString &fragmentId, bool toggle);
+  SequenceActivationResizeEdge
+  sequenceActivationResizeEdgeAt(const QRectF &activationRect,
+                                 const QPointF &scenePoint) const;
+  const SequenceMessage *nearestSequenceActivationBoundaryMessage(
+      const Diagram &diagram, const SequenceActivation &activation, qreal y,
+      qreal minimumY, qreal maximumY, qreal tolerance) const;
+  void updateSequenceActivationResize(const QPointF &scenePoint,
+                                      bool suppressSnapping);
+  void commitSequenceActivationResize();
+  void cancelSequenceActivationResize();
+  void clearSequenceSelection();
   void requestNoteEdit(const NotePresentation &note);
 
   ProjectController *m_project = nullptr;
@@ -561,6 +648,17 @@ private:
   QString m_selectedConnector;
   QSet<QString> m_selectedNotes;
   QString m_selectedNote;
+  QSet<QString> m_selectedSequenceParticipants;
+  // QSet enables efficient render-time membership checks, while this list
+  // deliberately preserves selection order for directed sequence messages.
+  QStringList m_selectedSequenceParticipantOrder;
+  QString m_selectedSequenceParticipant;
+  QSet<QString> m_selectedSequenceMessages;
+  QString m_selectedSequenceMessage;
+  QSet<QString> m_selectedSequenceActivations;
+  QString m_selectedSequenceActivation;
+  QSet<QString> m_selectedSequenceCombinedFragments;
+  QString m_selectedSequenceCombinedFragment;
   Interaction m_interaction = Interaction::None;
   QPointF m_pressView;
   QPointF m_pressScene;
@@ -584,6 +682,22 @@ private:
   Qt::KeyboardModifiers m_lassoModifiers = Qt::NoModifier;
   bool m_lassoActive = false;
   QString m_interactionNode;
+  QString m_interactionSequenceItem;
+  qreal m_sequenceOriginalCoordinate = 0.0;
+  qreal m_sequencePreviewCoordinate = 0.0;
+  qreal m_sequenceActivationOriginalStartY = 0.0;
+  qreal m_sequenceActivationOriginalEndY = 0.0;
+  qreal m_sequenceActivationPreviewStartY = 0.0;
+  qreal m_sequenceActivationPreviewEndY = 0.0;
+  QString m_sequenceGestureSourceParticipant;
+  QString m_sequenceGestureTargetParticipant;
+  QPointF m_sequenceGesturePointer;
+  qreal m_sequenceGestureY = 0.0;
+  // These survive after mouse release while the modal message editor is open.
+  // A negative Y means the older two-selected-participants command path.
+  QString m_pendingSequenceMessageSource;
+  QString m_pendingSequenceMessageTarget;
+  qreal m_pendingSequenceMessageY = -1.0;
   ResizeHandle m_resizeHandle = ResizeHandle::None;
   QHash<QString, QRectF> m_originalGeometry;
   QHash<QString, QRectF> m_previewGeometry;

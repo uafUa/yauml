@@ -9,6 +9,7 @@
 #include "ui/diagram_clipping.h"
 #include "ui/diagram_snapping.h"
 #include "ui/relationship_style.h"
+#include "ui/sequence_diagram_layout.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -116,6 +117,7 @@ class DiagramCanvasTests final : public QObject {
 
 private slots:
   void arrangementGeometryRulesAreDeterministic();
+  void sequenceLayoutInteractionAndUndoAreDeterministic();
   void snappingGeometryRulesAreDeterministic();
   void nestedContainerClippingAndOverflowAreDeterministic();
   void connectorRoutingGeometryIsOrthogonalAndTracksBends();
@@ -256,6 +258,328 @@ void DiagramCanvasTests::arrangementGeometryRulesAreDeterministic() {
       graphNodes, graphEdges, verticalOptions);
   QVERIFY(geometryById(topToBottom, QStringLiteral("a")).bottom() <
           geometryById(topToBottom, QStringLiteral("b")).top());
+}
+
+void DiagramCanvasTests::sequenceLayoutInteractionAndUndoAreDeterministic() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+
+  ProjectData project = createStarterProject(QStringLiteral("Sequence test"));
+  Diagram &diagram = project.diagrams.first();
+  diagram.type = DiagramType::Sequence;
+  diagram.nodes.clear();
+  diagram.containers.clear();
+  diagram.connectors.clear();
+  diagram.notes.clear();
+  diagram.noteAttachments.clear();
+  ModelElement package;
+  package.id = QStringLiteral("package-sample");
+  package.type = ElementType::Package;
+  package.name = QStringLiteral("sample");
+  project.elements.append(package);
+  ModelElement serviceType;
+  serviceType.id = QStringLiteral("element-service");
+  serviceType.name = QStringLiteral("Service");
+  serviceType.packageId = package.id;
+  project.elements.append(serviceType);
+  diagram.sequenceExecutionContexts.append(
+      {QStringLiteral("context-main"),
+       QStringLiteral("main"),
+       QStringLiteral("main"),
+       SequenceExecutionContextType::Thread,
+       {}});
+  diagram.sequenceParticipants.append({QStringLiteral("participant-client"),
+                                       QStringLiteral("client"),
+                                       QStringLiteral("Client"),
+                                       {},
+                                       QStringLiteral("context-main"),
+                                       QRectF(80.0, 40.0, 160.0, 60.0),
+                                       {}});
+  diagram.sequenceParticipants.append({QStringLiteral("participant-service"),
+                                       QStringLiteral("service"),
+                                       {},
+                                       serviceType.id,
+                                       {},
+                                       QRectF(380.0, 40.0, 160.0, 60.0),
+                                       {}});
+  diagram.sequenceMessages.append({QStringLiteral("message-call"),
+                                   QStringLiteral("call"),
+                                   QStringLiteral("participant-client"),
+                                   QStringLiteral("participant-service"),
+                                   SequenceMessageType::Synchronous,
+                                   QStringLiteral("request()"),
+                                   160.0,
+                                   {},
+                                   {}});
+  diagram.sequenceMessages.append({QStringLiteral("message-self"),
+                                   QStringLiteral("self"),
+                                   QStringLiteral("participant-service"),
+                                   QStringLiteral("participant-service"),
+                                   SequenceMessageType::Asynchronous,
+                                   QStringLiteral("dispatch()"),
+                                   220.0,
+                                   {QStringLiteral("worker.cpp"),
+                                    42,
+                                    3,
+                                    SequenceEvidenceConfidence::Inferred,
+                                    {},
+                                    {}},
+                                   {}});
+  diagram.sequenceMessages.append({QStringLiteral("message-return"),
+                                   QStringLiteral("return"),
+                                   QStringLiteral("participant-service"),
+                                   QStringLiteral("participant-client"),
+                                   SequenceMessageType::Return,
+                                   QStringLiteral("result"),
+                                   300.0,
+                                   {},
+                                   {}});
+  diagram.sequenceActivations.append({QStringLiteral("activation-service"),
+                                      QStringLiteral("activation"),
+                                      QStringLiteral("participant-service"),
+                                      QStringLiteral("context-main"),
+                                      QStringLiteral("message-call"),
+                                      QStringLiteral("message-return"),
+                                      {},
+                                      {},
+                                      QStringLiteral("handle"),
+                                      {}});
+  diagram.sequenceCombinedFragments.append(
+      {QStringLiteral("fragment-request"),
+       QStringLiteral("request-flow"),
+       SequenceCombinedFragmentType::Parallel,
+       {QStringLiteral("participant-client"),
+        QStringLiteral("participant-service")},
+       QStringLiteral("message-call"),
+       QStringLiteral("message-return"),
+       QStringLiteral("accepted"),
+       QStringLiteral("message-self"),
+       QStringLiteral("otherwise"),
+       {}});
+
+  const ui::SequenceDiagramLayout initialLayout =
+      ui::buildSequenceDiagramLayout(project, diagram);
+  QCOMPARE(initialLayout.participants.size(), 2);
+  QCOMPARE(initialLayout.messages.size(), 3);
+  QCOMPARE(initialLayout.activations.size(), 1);
+  QCOMPARE(initialLayout.fragments.size(), 1);
+  QCOMPARE(initialLayout.fragments.first().alternativeDividerY, 208.0);
+  QCOMPARE(initialLayout.participants.first().executionContextLabel,
+           QStringLiteral("«thread» main"));
+  QCOMPARE(initialLayout.participants.at(1).name, QStringLiteral("Service"));
+  QCOMPARE(initialLayout.participants.at(1).qualifier,
+           QStringLiteral("sample"));
+  // Incoming and outgoing messages attach to the nearest edge of the active
+  // execution bar instead of disappearing below its fill at the lifeline.
+  QCOMPARE(initialLayout.messages.first().points.constLast().x(), 453.0);
+  QCOMPARE(initialLayout.messages.constLast().points.constFirst().x(), 453.0);
+  QCOMPARE(initialLayout.messages.at(1).points.size(), 4);
+  QVERIFY(initialLayout.messages.at(1).confidence ==
+          SequenceEvidenceConfidence::Inferred);
+  QCOMPARE(ui::hitSequenceParticipant(initialLayout, QPointF(160.0, 70.0))->id,
+           QStringLiteral("participant-client"));
+  QCOMPARE(
+      ui::hitSequenceLifeline(initialLayout, QPointF(160.0, 120.0), 2.0)->id,
+      QStringLiteral("participant-client"));
+  QCOMPARE(
+      ui::hitSequenceMessage(initialLayout, QPointF(310.0, 160.0), 2.0)->id,
+      QStringLiteral("message-call"));
+  QCOMPARE(
+      ui::hitSequenceCombinedFragment(initialLayout, QPointF(64.0, 140.0), 4.0)
+          ->id,
+      QStringLiteral("fragment-request"));
+  QVERIFY(initialLayout.contentBounds.contains(QPointF(460.0, 300.0)));
+
+  // A create message lowers the target participant header to the creation
+  // row. Its arrow meets the header edge, and no pre-creation lifeline is
+  // exposed above the header.
+  Diagram createLayoutDiagram = diagram;
+  createLayoutDiagram.sequenceMessages.prepend(
+      {QStringLiteral("message-create"),
+       QStringLiteral("create"),
+       QStringLiteral("participant-client"),
+       QStringLiteral("participant-service"),
+       SequenceMessageType::Create,
+       QStringLiteral("create"),
+       132.0,
+       {},
+       {}});
+  const ui::SequenceDiagramLayout createLayout =
+      ui::buildSequenceDiagramLayout(project, createLayoutDiagram);
+  QCOMPARE(createLayout.participants.at(0).headerRect.center().y(), 70.0);
+  QCOMPARE(createLayout.participants.at(1).headerRect.center().y(), 132.0);
+  QCOMPARE(createLayout.participants.at(1).lifelineStartY, 162.0);
+  QCOMPARE(createLayout.messages.first().points.constLast().x(), 380.0);
+  QVERIFY(!ui::hitSequenceLifeline(createLayout, QPointF(460.0, 150.0), 2.0));
+  QVERIFY(ui::hitSequenceLifeline(createLayout, QPointF(460.0, 170.0), 2.0));
+
+  QVERIFY(ProjectSerializer::save(temporary.path(), project).ok);
+  ProjectController controller;
+  QVERIFY(controller.openProject(QUrl::fromLocalFile(temporary.path())));
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  QCOMPARE(canvas.diagramType(), QStringLiteral("sequence"));
+
+  // The canvas starts with a 30-pixel pan at 100% zoom.
+  canvas.drag(QPointF(190.0, 100.0), QPointF(240.0, 100.0));
+  QCOMPARE(findSequenceParticipant(controller.data().diagrams.first(),
+                                   QStringLiteral("participant-client"))
+               ->headerGeometry.left(),
+           130.0);
+  QCOMPARE(controller.undoText(), QStringLiteral("Move sequence participant"));
+  controller.undo();
+  QCOMPARE(findSequenceParticipant(controller.data().diagrams.first(),
+                                   QStringLiteral("participant-client"))
+               ->headerGeometry.left(),
+           80.0);
+
+  canvas.drag(QPointF(340.0, 190.0), QPointF(340.0, 215.0));
+  QCOMPARE(findSequenceMessage(controller.data().diagrams.first(),
+                               QStringLiteral("message-call"))
+               ->y,
+           185.0);
+  QCOMPARE(controller.undoText(), QStringLiteral("Move sequence message"));
+  controller.undo();
+  QCOMPARE(findSequenceMessage(controller.data().diagrams.first(),
+                               QStringLiteral("message-call"))
+               ->y,
+           160.0);
+
+  QSignalSpy edits(&canvas, &DiagramCanvas::editRequested);
+  canvas.doubleClick(QPointF(190.0, 100.0));
+  QCOMPARE(edits.count(), 1);
+  QCOMPARE(edits.first().at(0).toString(),
+           QStringLiteral("participant-client"));
+  QCOMPARE(edits.first().at(1).toString(),
+           QStringLiteral("sequenceParticipantName"));
+
+  controller.editText(QStringLiteral("participant-client"),
+                      QStringLiteral("sequenceParticipantName"), -1,
+                      QStringLiteral("Caller"));
+  QCOMPARE(findSequenceParticipant(controller.data().diagrams.first(),
+                                   QStringLiteral("participant-client"))
+               ->name,
+           QStringLiteral("Caller"));
+  controller.undo();
+  QCOMPARE(findSequenceParticipant(controller.data().diagrams.first(),
+                                   QStringLiteral("participant-client"))
+               ->name,
+           QStringLiteral("Client"));
+
+  const QVariantMap participantContext =
+      canvas.sequenceParticipantContextEditorData();
+  QCOMPARE(
+      participantContext.value(QStringLiteral("executionContextId")).toString(),
+      QStringLiteral("context-main"));
+  QCOMPARE(participantContext.value(QStringLiteral("choices")).toList().size(),
+           2);
+  QVERIFY(canvas.setSelectedSequenceParticipantExecutionContext({}));
+  QVERIFY(findSequenceParticipant(controller.data().diagrams.first(),
+                                  QStringLiteral("participant-client"))
+              ->defaultExecutionContextId.isEmpty());
+  controller.undo();
+
+  // Dragging from one lifeline to another defers semantic details to QML but
+  // keeps the chosen endpoints and row in the canvas until the dialog commits.
+  QSignalSpy messageCreationRequests(
+      &canvas, &DiagramCanvas::sequenceMessageCreationRequested);
+  canvas.drag(QPointF(190.0, 150.0), QPointF(490.0, 150.0));
+  QCOMPARE(messageCreationRequests.count(), 1);
+  QCOMPARE(canvas.sequenceMessageEndpointSummary(),
+           QStringLiteral("Client \u2192 Service"));
+  QVERIFY(canvas.createSequenceMessage(
+      QStringLiteral("sync"), QStringLiteral("earlyCall()"), {}, true));
+  QCOMPARE(controller.data().diagrams.first().sequenceMessages.first().text,
+           QStringLiteral("earlyCall()"));
+  QCOMPARE(controller.data().diagrams.first().sequenceMessages.first().y,
+           132.0);
+  QCOMPARE(controller.data().diagrams.first().sequenceActivations.size(), 2);
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first().sequenceMessages.size(), 3);
+  QCOMPARE(controller.data().diagrams.first().sequenceActivations.size(), 1);
+
+  // Activation bars are independently selectable, so their duration can be
+  // edited through the same message-boundary dialog as newly created bars.
+  canvas.press(QPointF(490.0, 270.0));
+  canvas.release(QPointF(490.0, 270.0));
+  QCOMPARE(canvas.selectedSequenceActivationCount(), 1);
+  const QVariantMap activationEditorData =
+      canvas.sequenceActivationEditorData();
+  QCOMPARE(
+      activationEditorData.value(QStringLiteral("startMessageId")).toString(),
+      QStringLiteral("message-call"));
+  QCOMPARE(
+      activationEditorData.value(QStringLiteral("endMessageId")).toString(),
+      QStringLiteral("message-return"));
+
+  // Selected activation bars expose top and bottom resize handles. Dragging a
+  // handle onto a message row preserves semantic message anchoring, and the
+  // complete resize remains one undoable operation.
+  canvas.drag(QPointF(490.0, 330.0), QPointF(490.0, 250.0));
+  QCOMPARE(findSequenceActivation(controller.data().diagrams.first(),
+                                  QStringLiteral("activation-service"))
+               ->endMessageId,
+           QStringLiteral("message-self"));
+  QCOMPARE(controller.undoText(), QStringLiteral("Update sequence activation"));
+  controller.undo();
+  QCOMPARE(findSequenceActivation(controller.data().diagrams.first(),
+                                  QStringLiteral("activation-service"))
+               ->endMessageId,
+           QStringLiteral("message-return"));
+
+  // A boundary deliberately dropped away from a message converts the span to
+  // explicit geometry instead of retaining a misleading semantic anchor.
+  canvas.drag(QPointF(490.0, 330.0), QPointF(490.0, 280.0), Qt::AltModifier);
+  const auto *freeResizedActivation = findSequenceActivation(
+      controller.data().diagrams.first(), QStringLiteral("activation-service"));
+  QVERIFY(freeResizedActivation->startMessageId.isEmpty());
+  QCOMPARE(freeResizedActivation->startY.value_or(-1.0), 160.0);
+  QCOMPARE(freeResizedActivation->endY.value_or(-1.0), 250.0);
+  controller.undo();
+
+  canvas.key(Qt::Key_A, Qt::ControlModifier);
+  QCOMPARE(canvas.selectedSequenceParticipantCount(), 2);
+  QCOMPARE(canvas.selectedSequenceMessageCount(), 3);
+
+  // Participant selection order defines a directed manual message. The
+  // background menu intentionally keeps this selection intact so its command
+  // can be invoked without another click on either lifeline.
+  canvas.press(QPointF(190.0, 100.0));
+  canvas.release(QPointF(190.0, 100.0));
+  canvas.press(QPointF(490.0, 100.0), Qt::ControlModifier);
+  canvas.release(QPointF(490.0, 100.0), Qt::ControlModifier);
+  QCOMPARE(canvas.selectedSequenceParticipantCount(), 2);
+  QCOMPARE(canvas.sequenceMessageEndpointSummary(),
+           QStringLiteral("Client \u2192 Service"));
+  QSignalSpy contextRequests(&canvas, &DiagramCanvas::contextMenuRequested);
+  canvas.rightClick(QPointF(800.0, 500.0));
+  QCOMPARE(canvas.selectedSequenceParticipantCount(), 2);
+  QCOMPARE(contextRequests.count(), 1);
+  QCOMPARE(contextRequests.first().at(0).toString(),
+           QStringLiteral("sequence-canvas"));
+  QVERIFY(canvas.createSequenceMessage(QStringLiteral("async"),
+                                       QStringLiteral("dispatch()")));
+  QCOMPARE(controller.data().diagrams.first().sequenceMessages.size(), 4);
+  QCOMPARE(controller.undoText(), QStringLiteral("Create sequence message"));
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first().sequenceMessages.size(), 3);
+
+  QSignalSpy participantEdits(&canvas, &DiagramCanvas::editRequested);
+  const QString manualParticipantId =
+      canvas.addSequenceParticipantAtViewportCenter();
+  QVERIFY(!manualParticipantId.isEmpty());
+  QVERIFY(findSequenceParticipant(controller.data().diagrams.first(),
+                                  manualParticipantId));
+  QCOMPARE(participantEdits.count(), 1);
+  QCOMPARE(participantEdits.first().at(1).toString(),
+           QStringLiteral("sequenceParticipantName"));
+
+  // Structural drop/create APIs are intentionally inert on behavioral views.
+  const qsizetype elementCount = controller.data().elements.size();
+  canvas.createElementAtViewportCenter(QStringLiteral("class"));
+  canvas.createNoteAtViewportCenter();
+  QCOMPARE(controller.data().elements.size(), elementCount);
+  QVERIFY(controller.data().diagrams.first().notes.isEmpty());
 }
 
 void DiagramCanvasTests::connectorRoutingGeometryIsOrthogonalAndTracksBends() {

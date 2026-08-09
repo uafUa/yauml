@@ -10,6 +10,7 @@
 #include "core/project_serializer.h"
 #include "core/project_style.h"
 #include "core/project_tree_model.h"
+#include "core/sequence_diagram_import.h"
 #include "core/stereotype_catalog.h"
 
 #include <QColor>
@@ -24,6 +25,7 @@
 #include <limits>
 #include <memory>
 #include <optional>
+#include <utility>
 
 namespace yauml {
 
@@ -33,6 +35,99 @@ constexpr qreal kDefaultNodeX = 50.0;
 constexpr qreal kDefaultNodeY = 50.0;
 constexpr qreal kNodeClearance = 12.0;
 constexpr int kPlacementColumns = 12;
+
+bool sequenceMessageTouchesParticipant(const SequenceMessage &message,
+                                       const QString &participantId) {
+  return message.sourceParticipantId == participantId ||
+         message.targetParticipantId == participantId;
+}
+
+const SequenceActivation *
+latestOpenMessageBoundActivation(const Diagram &diagram,
+                                 const QString &participantId, qreal beforeY) {
+  const SequenceActivation *result = nullptr;
+  qreal latestStartY = -std::numeric_limits<qreal>::infinity();
+  for (const SequenceActivation &activation : diagram.sequenceActivations) {
+    if (activation.participantId != participantId ||
+        activation.startMessageId.isEmpty() ||
+        !activation.endMessageId.isEmpty())
+      continue;
+    const auto *startMessage =
+        findSequenceMessage(diagram, activation.startMessageId);
+    if (!startMessage || startMessage->y >= beforeY ||
+        startMessage->y < latestStartY)
+      continue;
+    result = &activation;
+    latestStartY = startMessage->y;
+  }
+  return result;
+}
+
+const ModelOperation *findOperation(const ModelElement &element,
+                                    const QString &operationId) {
+  const auto found =
+      std::find_if(element.operations.cbegin(), element.operations.cend(),
+                   [&operationId](const ModelOperation &operation) {
+                     return operation.id == operationId;
+                   });
+  return found == element.operations.cend() ? nullptr : &*found;
+}
+
+bool validSequenceActivationBounds(const Diagram &diagram,
+                                   const QString &participantId,
+                                   const QString &startMessageId,
+                                   const QString &endMessageId, qreal startY,
+                                   qreal endY) {
+  if (!findSequenceParticipant(diagram, participantId))
+    return false;
+
+  // Free-positioned activations are diagram geometry, not synthetic messages.
+  // Keeping the two modes mutually exclusive avoids ambiguous layout rules.
+  if (startMessageId.isEmpty())
+    return endMessageId.isEmpty() && std::isfinite(startY) &&
+           std::isfinite(endY) && startY >= 0.0 && endY > startY;
+
+  const auto *start = findSequenceMessage(diagram, startMessageId);
+  if (!start || !sequenceMessageTouchesParticipant(*start, participantId))
+    return false;
+  if (endMessageId.isEmpty())
+    return true;
+  const auto *end = findSequenceMessage(diagram, endMessageId);
+  if (!end || !sequenceMessageTouchesParticipant(*end, participantId))
+    return false;
+  return diagram.sequenceMessages.indexOf(*end) >=
+         diagram.sequenceMessages.indexOf(*start);
+}
+
+bool validSequenceCombinedFragmentBounds(
+    const Diagram &diagram, const QStringList &participantIds,
+    SequenceCombinedFragmentType type, const QString &startMessageId,
+    const QString &endMessageId, const QString &alternativeStartMessageId) {
+  if (participantIds.isEmpty())
+    return false;
+  QSet<QString> uniqueParticipantIds;
+  for (const QString &participantId : participantIds) {
+    if (!findSequenceParticipant(diagram, participantId) ||
+        uniqueParticipantIds.contains(participantId))
+      return false;
+    uniqueParticipantIds.insert(participantId);
+  }
+  const auto *start = findSequenceMessage(diagram, startMessageId);
+  const auto *end = findSequenceMessage(diagram, endMessageId);
+  if (!start || !end ||
+      diagram.sequenceMessages.indexOf(*end) <
+          diagram.sequenceMessages.indexOf(*start))
+    return false;
+  if (!sequenceCombinedFragmentHasSecondOperand(type))
+    return alternativeStartMessageId.isEmpty();
+  const auto *alternativeStart =
+      findSequenceMessage(diagram, alternativeStartMessageId);
+  return alternativeStart &&
+         diagram.sequenceMessages.indexOf(*alternativeStart) >
+             diagram.sequenceMessages.indexOf(*start) &&
+         diagram.sequenceMessages.indexOf(*alternativeStart) <=
+             diagram.sequenceMessages.indexOf(*end);
+}
 
 QVariantMap diagramStyleMap(const DiagramStyle &style) {
   return {{QStringLiteral("id"), style.id},
@@ -1231,7 +1326,8 @@ QString ProjectController::selectedType() const {
     if (const auto *relationship = findRelationship(m_data, m_selectedId))
       return toString(relationship->type);
   } else if (m_selectedKind == QStringLiteral("diagram")) {
-    return QStringLiteral("class diagram");
+    if (const auto *diagram = findDiagram(m_data, m_selectedId))
+      return toString(diagram->type) + QStringLiteral(" diagram");
   }
   return {};
 }
@@ -2032,6 +2128,55 @@ QString ProjectController::addDiagram() {
   return diagram.id;
 }
 
+QString ProjectController::addSequenceDiagram() {
+  Diagram diagram;
+  diagram.id = newId();
+  diagram.name =
+      QStringLiteral("Sequence Diagram %1").arg(m_data.diagrams.size() + 1);
+  diagram.type = DiagramType::Sequence;
+
+  // An empty sequence diagram is not a valid persisted diagram: at least one
+  // lifeline participant is required. Keep this starter participant free of a
+  // model type so the diagram can be authored before its interaction is known.
+  SequenceParticipant participant;
+  participant.id = newId();
+  participant.key = QStringLiteral("participant-1");
+  participant.name = QStringLiteral("Participant 1");
+  participant.headerGeometry = QRectF(80.0, 40.0, 160.0, 48.0);
+  diagram.sequenceParticipants.append(std::move(participant));
+
+  pushCommand(std::make_unique<CreateDiagramCommand>(this, m_data, diagram));
+  selectObject(diagram.id, QStringLiteral("diagram"));
+  return diagram.id;
+}
+
+QString ProjectController::importSequenceDiagram(const QUrl &fileUrl) {
+  const QString filePath =
+      fileUrl.isLocalFile() ? fileUrl.toLocalFile() : fileUrl.toString();
+  if (filePath.isEmpty()) {
+    m_diagnostics.addError(QStringLiteral("sequence-import"),
+                           QStringLiteral("No sequence diagram file selected"));
+    return {};
+  }
+
+  SequenceDiagramImportOutcome outcome =
+      SequenceDiagramImportService::load(filePath, m_data);
+  logDiagnostics(outcome.diagnostics);
+  if (!outcome.ok)
+    return {};
+
+  const QString diagramId = outcome.diagram.id;
+  const QString diagramName = outcome.diagram.name;
+  pushCommand(std::make_unique<CreateDiagramCommand>(
+      this, m_data, std::move(outcome.diagram)));
+  selectObject(diagramId, QStringLiteral("diagram"));
+  m_diagnostics.addInfo(
+      QStringLiteral("sequence-import"),
+      QStringLiteral("Imported sequence diagram %1").arg(diagramName),
+      diagramId);
+  return diagramId;
+}
+
 QVariantList ProjectController::diagramTransferTargets(
     const QString &sourceDiagramId) const {
   QVariantList targets;
@@ -2483,6 +2628,113 @@ int ProjectController::addBrowserItemToDiagram(const QString &diagramId,
                                sizingMode);
 }
 
+int ProjectController::addElementsToSequenceDiagram(
+    const QString &diagramId, const QStringList &elementIds, qreal centerX) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || diagram->type != DiagramType::Sequence ||
+      elementIds.isEmpty()) {
+    return 0;
+  }
+
+  // A participant may be deliberately created more than once by an import to
+  // model distinct runtime instances. Browser placement, however, has no
+  // instance identity to distinguish duplicates, so keep that operation
+  // idempotent for a given model type.
+  QSet<QString> representedElementIds;
+  for (const SequenceParticipant &participant : diagram->sequenceParticipants) {
+    if (!participant.elementId.isEmpty())
+      representedElementIds.insert(participant.elementId);
+  }
+
+  QStringList acceptedIds;
+  QSet<QString> seenIds;
+  int duplicateCount = 0;
+  for (const QString &elementId : elementIds) {
+    const ModelElement *element = findElement(m_data, elementId);
+    if (!element || element->type == ElementType::Package ||
+        seenIds.contains(elementId)) {
+      continue;
+    }
+    seenIds.insert(elementId);
+    if (representedElementIds.contains(elementId)) {
+      ++duplicateCount;
+      continue;
+    }
+    acceptedIds.append(elementId);
+  }
+
+  if (acceptedIds.isEmpty()) {
+    m_diagnostics.addWarning(
+        QStringLiteral("sequence"),
+        duplicateCount == 1
+            ? QStringLiteral("The selected type is already represented on this "
+                             "sequence diagram")
+            : QStringLiteral("The selected types are already represented on "
+                             "this sequence diagram"));
+    return 0;
+  }
+
+  constexpr qreal kParticipantWidth = 160.0;
+  constexpr qreal kParticipantGap = 80.0;
+  qreal firstCenterX = centerX;
+  if (!std::isfinite(firstCenterX)) {
+    qreal rightmostHeader = 0.0;
+    bool hasParticipants = false;
+    for (const SequenceParticipant &participant :
+         diagram->sequenceParticipants) {
+      rightmostHeader =
+          qMax(rightmostHeader, participant.headerGeometry.right());
+      hasParticipants = true;
+    }
+    firstCenterX = hasParticipants ? rightmostHeader + kParticipantGap +
+                                         kParticipantWidth / 2.0
+                                   : kParticipantWidth / 2.0;
+  }
+
+  m_undoStack.beginMacro(acceptedIds.size() == 1
+                             ? QStringLiteral("Add type to sequence diagram")
+                             : QStringLiteral("Add types to sequence diagram"));
+  QSet<QString> participantKeys;
+  for (const SequenceParticipant &participant : diagram->sequenceParticipants)
+    participantKeys.insert(participant.key);
+  int keyIndex = 1;
+  for (int index = 0; index < acceptedIds.size(); ++index) {
+    const QString &elementId = acceptedIds.at(index);
+    const ModelElement *element = findElement(m_data, elementId);
+    Q_ASSERT(element);
+
+    QString key;
+    do {
+      key = QStringLiteral("participant-%1").arg(keyIndex++);
+    } while (participantKeys.contains(key));
+    participantKeys.insert(key);
+
+    SequenceParticipant participant;
+    participant.id = newId();
+    participant.key = key;
+    // The semantic type already supplies the participant title. Leave the
+    // diagram-local name empty until the user assigns an instance/role alias.
+    participant.name.clear();
+    participant.elementId = elementId;
+    participant.headerGeometry =
+        QRectF(firstCenterX + index * (kParticipantWidth + kParticipantGap) -
+                   kParticipantWidth / 2.0,
+               40.0, kParticipantWidth, 48.0);
+    pushCommand(std::make_unique<CreateSequenceParticipantCommand>(
+        this, m_data, diagramId, std::move(participant)));
+  }
+  m_undoStack.endMacro();
+
+  if (duplicateCount > 0) {
+    m_diagnostics.addInfo(
+        QStringLiteral("sequence"),
+        QStringLiteral(
+            "Skipped %1 type(s) already represented on the sequence diagram")
+            .arg(duplicateCount));
+  }
+  return acceptedIds.size();
+}
+
 int ProjectController::addElementsToDiagram(const QString &diagramId,
                                             const QStringList &elementIds,
                                             qreal x, qreal y,
@@ -2490,6 +2742,8 @@ int ProjectController::addElementsToDiagram(const QString &diagramId,
   const auto *diagram = findDiagram(m_data, diagramId);
   if (!diagram || elementIds.isEmpty())
     return 0;
+  if (diagram->type == DiagramType::Sequence)
+    return addElementsToSequenceDiagram(diagramId, elementIds, x);
 
   QSet<QString> existingElementIds;
   existingElementIds.reserve(diagram->nodes.size());
@@ -2652,6 +2906,60 @@ int ProjectController::addTreeItemsToDiagram(const QString &diagramId,
   const auto *diagram = findDiagram(m_data, diagramId);
   if (!diagram)
     return 0;
+  // Sequence diagrams deliberately have no package/folder presentations.
+  // An explicitly selected type maps to exactly one participant; only an
+  // explicitly selected package/folder expands recursively. This is distinct
+  // from class-diagram placement, where a type may also be a visual container
+  // for nested types.
+  if (diagram->type == DiagramType::Sequence) {
+    QJsonParseError parseError;
+    const QJsonDocument subjects =
+        QJsonDocument::fromJson(subjectsJson.toUtf8(), &parseError);
+    QSet<QString> requestedIds;
+    if (parseError.error == QJsonParseError::NoError && subjects.isArray()) {
+      for (const QJsonValue &value : subjects.array()) {
+        const QJsonObject object = value.toObject();
+        const QString kind = object.value(QStringLiteral("kind")).toString();
+        const QString id = object.value(QStringLiteral("id")).toString();
+        if (kind == QStringLiteral("folder")) {
+          const QModelIndex item =
+              m_treeModel->indexForObject(id, QStringLiteral("folder"));
+          const QStringList descendants =
+              m_treeModel->elementIdsForIndexes({item});
+          for (const QString &elementId : descendants)
+            requestedIds.insert(elementId);
+          continue;
+        }
+        if (kind != QStringLiteral("element"))
+          continue;
+        const ModelElement *element = findElement(m_data, id);
+        if (!element)
+          continue;
+        if (element->type == ElementType::Package) {
+          const QModelIndex item =
+              m_treeModel->indexForObject(id, QStringLiteral("element"));
+          const QStringList descendants =
+              m_treeModel->elementIdsForIndexes({item});
+          for (const QString &elementId : descendants)
+            requestedIds.insert(elementId);
+        } else {
+          requestedIds.insert(id);
+        }
+      }
+    }
+    // Preserve model order for predictable left-to-right bulk placement. The
+    // fallback supports non-tree callers of this API without changing the
+    // exact-element semantics of addElementsToDiagram().
+    QStringList sequenceElementIds;
+    if (subjects.isArray()) {
+      for (const ModelElement &element : m_data.elements)
+        if (requestedIds.contains(element.id))
+          sequenceElementIds.append(element.id);
+    } else {
+      sequenceElementIds = elementIds;
+    }
+    return addElementsToSequenceDiagram(diagramId, sequenceElementIds, x);
+  }
 
   struct ContainerSubject {
     QString kind;
@@ -3756,6 +4064,643 @@ void ProjectController::updateNodeGeometries(const QString &diagramId,
                                              const QVariantList &geometries) {
   updatePresentationGeometries(
       diagramId, geometries, QStringLiteral("Move or resize diagram elements"));
+}
+
+void ProjectController::updateSequenceParticipantX(const QString &diagramId,
+                                                   const QString &participantId,
+                                                   qreal x) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *participant =
+      diagram ? findSequenceParticipant(*diagram, participantId) : nullptr;
+  if (!participant || diagram->type != DiagramType::Sequence ||
+      !std::isfinite(x))
+    return;
+  QRectF after = participant->headerGeometry;
+  after.moveLeft(x);
+  if (after == participant->headerGeometry)
+    return;
+  pushCommand(std::make_unique<UpdateSequenceParticipantGeometryCommand>(
+      this, diagramId, participantId, participant->headerGeometry, after));
+}
+
+void ProjectController::updateSequenceMessageY(const QString &diagramId,
+                                               const QString &messageId,
+                                               qreal y) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *message =
+      diagram ? findSequenceMessage(*diagram, messageId) : nullptr;
+  if (!message || diagram->type != DiagramType::Sequence || !std::isfinite(y) ||
+      qFuzzyCompare(message->y, y))
+    return;
+  const qsizetype index = diagram->sequenceMessages.indexOf(*message);
+  const bool orderedAfterPrevious =
+      index <= 0 || diagram->sequenceMessages.at(index - 1).y < y;
+  const bool orderedBeforeNext =
+      index + 1 >= diagram->sequenceMessages.size() ||
+      y < diagram->sequenceMessages.at(index + 1).y;
+  if (!orderedAfterPrevious || !orderedBeforeNext) {
+    m_diagnostics.addWarning(
+        QStringLiteral("sequence"),
+        QStringLiteral("Message order must remain strictly increasing"),
+        messageId);
+    return;
+  }
+  pushCommand(std::make_unique<UpdateSequenceMessagePositionCommand>(
+      this, diagramId, messageId, message->y, y));
+}
+
+QString ProjectController::addSequenceParticipant(const QString &diagramId,
+                                                  qreal centerX,
+                                                  const QString &name) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || diagram->type != DiagramType::Sequence ||
+      !std::isfinite(centerX))
+    return {};
+
+  QString displayName = name.trimmed();
+  if (displayName.isEmpty())
+    displayName = QStringLiteral("Participant %1")
+                      .arg(diagram->sequenceParticipants.size() + 1);
+  QSet<QString> keys;
+  for (const SequenceParticipant &participant : diagram->sequenceParticipants)
+    keys.insert(participant.key);
+  int keyIndex = 1;
+  QString key;
+  do {
+    key = QStringLiteral("participant-%1").arg(keyIndex++);
+  } while (keys.contains(key));
+
+  constexpr qreal kParticipantWidth = 160.0;
+  constexpr qreal kParticipantHeight = 48.0;
+  SequenceParticipant participant;
+  participant.id = newId();
+  participant.key = key;
+  participant.name = displayName;
+  participant.headerGeometry = QRectF(centerX - kParticipantWidth / 2.0, 40.0,
+                                      kParticipantWidth, kParticipantHeight);
+  const QString participantId = participant.id;
+  pushCommand(std::make_unique<CreateSequenceParticipantCommand>(
+      this, m_data, diagramId, std::move(participant)));
+  return participantId;
+}
+
+QVariantList
+ProjectController::sequenceExecutionContexts(const QString &diagramId) const {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || diagram->type != DiagramType::Sequence)
+    return {};
+
+  QVariantList result;
+  result.reserve(diagram->sequenceExecutionContexts.size());
+  for (const SequenceExecutionContext &context :
+       diagram->sequenceExecutionContexts) {
+    result.append(QVariantMap{
+        {QStringLiteral("id"), context.id},
+        {QStringLiteral("key"), context.key},
+        {QStringLiteral("name"), context.name},
+        {QStringLiteral("type"), toString(context.type)},
+        {QStringLiteral("label"),
+         QStringLiteral("«%1» %2").arg(toString(context.type), context.name)}});
+  }
+  return result;
+}
+
+QString ProjectController::saveSequenceExecutionContext(
+    const QString &diagramId, const QString &contextId, const QString &name,
+    const QString &type) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  bool typeOk = false;
+  const SequenceExecutionContextType contextType =
+      sequenceExecutionContextTypeFromString(type, &typeOk);
+  const QString trimmedName = name.trimmed();
+  const auto *existing = diagram && !contextId.isEmpty()
+                             ? findSequenceExecutionContext(*diagram, contextId)
+                             : nullptr;
+  if (!diagram || diagram->type != DiagramType::Sequence || !typeOk ||
+      trimmedName.isEmpty() || (!contextId.isEmpty() && !existing)) {
+    m_diagnostics.addError(
+        QStringLiteral("sequence"),
+        QStringLiteral("An execution context needs a valid name and type"));
+    return {};
+  }
+  const bool duplicateName = std::any_of(
+      diagram->sequenceExecutionContexts.cbegin(),
+      diagram->sequenceExecutionContexts.cend(),
+      [&](const SequenceExecutionContext &candidate) {
+        return candidate.id != contextId &&
+               candidate.name.compare(trimmedName, Qt::CaseInsensitive) == 0;
+      });
+  if (duplicateName) {
+    m_diagnostics.addError(
+        QStringLiteral("sequence"),
+        QStringLiteral("Execution-context names must be unique in a diagram"));
+    return {};
+  }
+
+  SequenceExecutionContext context;
+  if (existing) {
+    context = *existing;
+  } else {
+    QSet<QString> keys;
+    for (const SequenceExecutionContext &candidate :
+         diagram->sequenceExecutionContexts)
+      keys.insert(candidate.key);
+    int keyIndex = 1;
+    do {
+      context.key = QStringLiteral("context-%1").arg(keyIndex++);
+    } while (keys.contains(context.key));
+    context.id = newId();
+  }
+  context.name = trimmedName;
+  context.type = contextType;
+  const QString savedId = context.id;
+  pushCommand(std::make_unique<SaveSequenceExecutionContextCommand>(
+      this, m_data, diagramId, std::move(context)));
+  return savedId;
+}
+
+bool ProjectController::deleteSequenceExecutionContext(
+    const QString &diagramId, const QString &contextId) {
+  auto command = std::make_unique<DeleteSequenceExecutionContextCommand>(
+      this, m_data, diagramId, contextId);
+  if (!command->hasChanges())
+    return false;
+  pushCommand(std::move(command));
+  return true;
+}
+
+bool ProjectController::setSequenceParticipantExecutionContext(
+    const QString &diagramId, const QString &participantId,
+    const QString &contextId) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *participant =
+      diagram ? findSequenceParticipant(*diagram, participantId) : nullptr;
+  if (!diagram || diagram->type != DiagramType::Sequence || !participant ||
+      (!contextId.isEmpty() &&
+       !findSequenceExecutionContext(*diagram, contextId))) {
+    return false;
+  }
+  if (participant->defaultExecutionContextId == contextId)
+    return true;
+  pushCommand(std::make_unique<SetSequenceParticipantExecutionContextCommand>(
+      this, diagramId, participantId, participant->defaultExecutionContextId,
+      contextId));
+  return true;
+}
+
+QString ProjectController::createSequenceMessage(
+    const QString &diagramId, const QString &sourceParticipantId,
+    const QString &targetParticipantId, const QString &type,
+    const QString &text, const QString &targetOperationId, qreal requestedY,
+    bool automaticActivation) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  bool typeOk = false;
+  const SequenceMessageType messageType =
+      sequenceMessageTypeFromString(type, &typeOk);
+  const auto *targetParticipant =
+      diagram ? findSequenceParticipant(*diagram, targetParticipantId)
+              : nullptr;
+  if (!diagram || diagram->type != DiagramType::Sequence || !typeOk ||
+      !findSequenceParticipant(*diagram, sourceParticipantId) ||
+      !targetParticipant) {
+    m_diagnostics.addError(QStringLiteral("sequence"),
+                           QStringLiteral("Cannot create sequence message"));
+    return {};
+  }
+  const ModelElement *targetElement =
+      targetParticipant->elementId.isEmpty()
+          ? nullptr
+          : findElement(m_data, targetParticipant->elementId);
+  if (!targetOperationId.isEmpty() &&
+      (!targetElement || !findOperation(*targetElement, targetOperationId))) {
+    m_diagnostics.addError(QStringLiteral("sequence"),
+                           QStringLiteral("The selected operation does not "
+                                          "belong to the target participant"));
+    return {};
+  }
+
+  QSet<QString> keys;
+  qreal lastY = 100.0;
+  for (const SequenceMessage &message : diagram->sequenceMessages) {
+    keys.insert(message.key);
+    lastY = std::max(lastY, message.y);
+  }
+  int keyIndex = 1;
+  QString key;
+  do {
+    key = QStringLiteral("message-%1").arg(keyIndex++);
+  } while (keys.contains(key));
+
+  SequenceMessage message;
+  message.id = newId();
+  message.key = key;
+  message.sourceParticipantId = sourceParticipantId;
+  message.targetParticipantId = targetParticipantId;
+  message.type = messageType;
+  message.text = text;
+  const bool insertAtPointer = std::isfinite(requestedY) && requestedY >= 0.0;
+  message.y = diagram->sequenceMessages.isEmpty() ? 160.0 : lastY + 60.0;
+  qsizetype insertionIndex = diagram->sequenceMessages.size();
+  qreal downstreamShift = 0.0;
+  if (insertAtPointer) {
+    constexpr qreal kHeaderClearance = 32.0;
+    constexpr qreal kMinimumMessageGap = 24.0;
+    qreal firstMessageY = 0.0;
+    for (const SequenceParticipant &participant :
+         diagram->sequenceParticipants) {
+      firstMessageY = std::max(
+          firstMessageY,
+          participant.headerGeometry.normalized().bottom() + kHeaderClearance);
+    }
+    message.y = std::max(requestedY, firstMessageY);
+    const auto insertion = std::lower_bound(
+        diagram->sequenceMessages.cbegin(), diagram->sequenceMessages.cend(),
+        message.y, [](const SequenceMessage &candidate, qreal y) {
+          return candidate.y < y;
+        });
+    insertionIndex =
+        std::distance(diagram->sequenceMessages.cbegin(), insertion);
+    if (insertionIndex > 0) {
+      message.y = std::max(message.y,
+                           diagram->sequenceMessages.at(insertionIndex - 1).y +
+                               kMinimumMessageGap);
+    }
+    if (insertionIndex < diagram->sequenceMessages.size()) {
+      downstreamShift =
+          std::max(0.0, message.y + kMinimumMessageGap -
+                            diagram->sequenceMessages.at(insertionIndex).y);
+    }
+  }
+  if (!targetOperationId.isEmpty()) {
+    message.targetOperationElementId = targetElement->id;
+    message.targetOperationId = targetOperationId;
+  }
+  const QString messageId = message.id;
+  const bool startsTargetActivation =
+      automaticActivation && (messageType == SequenceMessageType::Synchronous ||
+                              messageType == SequenceMessageType::Asynchronous);
+  const QString activationToCloseParticipant =
+      !automaticActivation                          ? QString{}
+      : messageType == SequenceMessageType::Return  ? sourceParticipantId
+      : messageType == SequenceMessageType::Destroy ? targetParticipantId
+                                                    : QString{};
+  const auto *activationToClose =
+      activationToCloseParticipant.isEmpty()
+          ? nullptr
+          : latestOpenMessageBoundActivation(
+                *diagram, activationToCloseParticipant, message.y);
+  const QString activationToCloseId =
+      activationToClose ? activationToClose->id : QString{};
+  const bool useMacro = downstreamShift > 0.0 || startsTargetActivation ||
+                        !activationToCloseId.isEmpty();
+  if (useMacro)
+    m_undoStack.beginMacro(QStringLiteral("Create sequence message"));
+  if (downstreamShift > 0.0) {
+    // Message-bound activations and fragments refer to stable IDs, so moving
+    // the tail preserves their semantics while making a real row for the new
+    // interaction. Each move remains reversible inside the single macro.
+    for (qsizetype index = insertionIndex;
+         index < diagram->sequenceMessages.size(); ++index) {
+      const SequenceMessage &existing = diagram->sequenceMessages.at(index);
+      pushCommand(std::make_unique<UpdateSequenceMessagePositionCommand>(
+          this, diagramId, existing.id, existing.y,
+          existing.y + downstreamShift));
+    }
+  }
+  pushCommand(std::make_unique<CreateSequenceMessageCommand>(
+      this, m_data, diagramId, std::move(message)));
+  if (startsTargetActivation) {
+    createSequenceActivation(diagramId, targetParticipantId, messageId, {}, {},
+                             -1.0, -1.0, {});
+  } else if (!activationToCloseId.isEmpty()) {
+    const auto *updatedDiagram = findDiagram(m_data, diagramId);
+    const auto *activation =
+        updatedDiagram
+            ? findSequenceActivation(*updatedDiagram, activationToCloseId)
+            : nullptr;
+    if (activation) {
+      updateSequenceActivation(
+          diagramId, activation->id, activation->startMessageId, messageId,
+          activation->label, activation->startY.value_or(-1.0),
+          activation->endY.value_or(-1.0), activation->executionContextId);
+    }
+  }
+  if (useMacro)
+    m_undoStack.endMacro();
+  return messageId;
+}
+
+QVariantList ProjectController::sequenceMessageTargetOperationChoices(
+    const QString &diagramId, const QString &targetParticipantId) const {
+  QVariantList choices;
+  choices.append(
+      QVariantMap{{QStringLiteral("id"), QString{}},
+                  {QStringLiteral("label"), tr("No linked operation")}});
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *participant =
+      diagram ? findSequenceParticipant(*diagram, targetParticipantId)
+              : nullptr;
+  const auto *element = participant && !participant->elementId.isEmpty()
+                            ? findElement(m_data, participant->elementId)
+                            : nullptr;
+  if (!diagram || diagram->type != DiagramType::Sequence || !element)
+    return choices;
+
+  for (const ModelOperation &operation : element->operations) {
+    choices.append(
+        QVariantMap{{QStringLiteral("id"), operation.id},
+                    {QStringLiteral("label"),
+                     QStringLiteral("%1::%2").arg(
+                         element->name, modelOperationSignature(operation))}});
+  }
+  return choices;
+}
+
+bool ProjectController::setSequenceMessageTargetOperation(
+    const QString &diagramId, const QString &messageId,
+    const QString &targetOperationId) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *message =
+      diagram ? findSequenceMessage(*diagram, messageId) : nullptr;
+  const auto *targetParticipant =
+      diagram && message
+          ? findSequenceParticipant(*diagram, message->targetParticipantId)
+          : nullptr;
+  if (!diagram || diagram->type != DiagramType::Sequence || !message ||
+      !targetParticipant) {
+    return false;
+  }
+
+  SequenceMessage updated = *message;
+  if (targetOperationId.isEmpty()) {
+    updated.targetOperationElementId.clear();
+    updated.targetOperationId.clear();
+  } else {
+    const auto *targetElement =
+        targetParticipant->elementId.isEmpty()
+            ? nullptr
+            : findElement(m_data, targetParticipant->elementId);
+    if (!targetElement || !findOperation(*targetElement, targetOperationId)) {
+      m_diagnostics.addError(
+          QStringLiteral("sequence"),
+          QStringLiteral("The selected operation does not belong to the target "
+                         "participant"));
+      return false;
+    }
+    updated.targetOperationElementId = targetElement->id;
+    updated.targetOperationId = targetOperationId;
+  }
+  if (updated == *message)
+    return true;
+  pushCommand(std::make_unique<UpdateSequenceMessageCommand>(
+      this, diagramId, messageId, *message, std::move(updated)));
+  return true;
+}
+
+QVariantList ProjectController::sequenceActivationMessageChoices(
+    const QString &diagramId, const QString &participantId) const {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || diagram->type != DiagramType::Sequence ||
+      !findSequenceParticipant(*diagram, participantId))
+    return {};
+
+  QVariantList choices;
+  for (const SequenceMessage &message : diagram->sequenceMessages) {
+    if (!sequenceMessageTouchesParticipant(message, participantId))
+      continue;
+    const QString description = message.text.trimmed().isEmpty()
+                                    ? toString(message.type)
+                                    : message.text.trimmed();
+    QVariantMap choice;
+    choice.insert(QStringLiteral("id"), message.id);
+    choice.insert(
+        QStringLiteral("label"),
+        QStringLiteral("%1  %2").arg(message.y, 0, 'f', 0).arg(description));
+    choices.append(choice);
+  }
+  return choices;
+}
+
+QString ProjectController::createSequenceActivation(
+    const QString &diagramId, const QString &participantId,
+    const QString &startMessageId, const QString &endMessageId,
+    const QString &label, qreal startY, qreal endY,
+    const QString &executionContextId) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || diagram->type != DiagramType::Sequence ||
+      !validSequenceActivationBounds(*diagram, participantId, startMessageId,
+                                     endMessageId, startY, endY) ||
+      (!executionContextId.isEmpty() &&
+       !findSequenceExecutionContext(*diagram, executionContextId))) {
+    m_diagnostics.addError(
+        QStringLiteral("sequence"),
+        QStringLiteral("An activation must use valid messages or a valid "
+                       "free-positioned range on its participant"));
+    return {};
+  }
+
+  QSet<QString> keys;
+  for (const SequenceActivation &activation : diagram->sequenceActivations)
+    keys.insert(activation.key);
+  int keyIndex = 1;
+  QString key;
+  do {
+    key = QStringLiteral("activation-%1").arg(keyIndex++);
+  } while (keys.contains(key));
+
+  SequenceActivation activation;
+  activation.id = newId();
+  activation.key = key;
+  activation.participantId = participantId;
+  activation.executionContextId = executionContextId;
+  activation.startMessageId = startMessageId;
+  activation.endMessageId = endMessageId;
+  if (startMessageId.isEmpty()) {
+    activation.startY = startY;
+    activation.endY = endY;
+  }
+  activation.label = label.trimmed();
+  const QString activationId = activation.id;
+  pushCommand(std::make_unique<CreateSequenceActivationCommand>(
+      this, m_data, diagramId, std::move(activation)));
+  return activationId;
+}
+
+bool ProjectController::updateSequenceActivation(
+    const QString &diagramId, const QString &activationId,
+    const QString &startMessageId, const QString &endMessageId,
+    const QString &label, qreal startY, qreal endY,
+    const QString &executionContextId) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *activation =
+      diagram ? findSequenceActivation(*diagram, activationId) : nullptr;
+  if (!diagram || diagram->type != DiagramType::Sequence || !activation ||
+      !validSequenceActivationBounds(*diagram, activation->participantId,
+                                     startMessageId, endMessageId, startY,
+                                     endY) ||
+      (!executionContextId.isEmpty() &&
+       !findSequenceExecutionContext(*diagram, executionContextId))) {
+    m_diagnostics.addError(
+        QStringLiteral("sequence"),
+        QStringLiteral("An activation must use valid messages or a valid "
+                       "free-positioned range on its participant"));
+    return false;
+  }
+
+  SequenceActivation updated = *activation;
+  updated.startMessageId = startMessageId;
+  updated.endMessageId = endMessageId;
+  updated.startY.reset();
+  updated.endY.reset();
+  if (startMessageId.isEmpty()) {
+    updated.startY = startY;
+    updated.endY = endY;
+  }
+  updated.label = label.trimmed();
+  updated.executionContextId = executionContextId;
+  if (updated == *activation)
+    return true;
+  pushCommand(std::make_unique<UpdateSequenceActivationCommand>(
+      this, diagramId, activationId, *activation, std::move(updated)));
+  return true;
+}
+
+QVariantList
+ProjectController::sequenceMessageChoices(const QString &diagramId) const {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || diagram->type != DiagramType::Sequence)
+    return {};
+
+  QVariantList choices;
+  for (const SequenceMessage &message : diagram->sequenceMessages) {
+    const QString description = message.text.trimmed().isEmpty()
+                                    ? toString(message.type)
+                                    : message.text.trimmed();
+    QVariantMap choice;
+    choice.insert(QStringLiteral("id"), message.id);
+    choice.insert(
+        QStringLiteral("label"),
+        QStringLiteral("%1  %2").arg(message.y, 0, 'f', 0).arg(description));
+    choices.append(choice);
+  }
+  return choices;
+}
+
+QString ProjectController::createSequenceCombinedFragment(
+    const QString &diagramId, const QStringList &participantIds,
+    const QString &type, const QString &startMessageId,
+    const QString &endMessageId, const QString &guard,
+    const QString &alternativeStartMessageId, const QString &alternativeGuard) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  bool typeOk = false;
+  const SequenceCombinedFragmentType fragmentType =
+      sequenceCombinedFragmentTypeFromString(type, &typeOk);
+  if (!diagram || diagram->type != DiagramType::Sequence || !typeOk ||
+      !validSequenceCombinedFragmentBounds(
+          *diagram, participantIds, fragmentType, startMessageId, endMessageId,
+          alternativeStartMessageId)) {
+    m_diagnostics.addError(
+        QStringLiteral("sequence"),
+        QStringLiteral("A combined fragment needs valid scoped participants "
+                       "and message boundaries"));
+    return {};
+  }
+
+  QSet<QString> keys;
+  for (const SequenceCombinedFragment &fragment :
+       diagram->sequenceCombinedFragments)
+    keys.insert(fragment.key);
+  int keyIndex = 1;
+  QString key;
+  do {
+    key = QStringLiteral("fragment-%1").arg(keyIndex++);
+  } while (keys.contains(key));
+
+  SequenceCombinedFragment fragment;
+  fragment.id = newId();
+  fragment.key = key;
+  fragment.type = fragmentType;
+  fragment.participantIds = participantIds;
+  fragment.startMessageId = startMessageId;
+  fragment.endMessageId = endMessageId;
+  fragment.guard = guard.trimmed();
+  fragment.alternativeStartMessageId = alternativeStartMessageId;
+  fragment.alternativeGuard = alternativeGuard.trimmed();
+  const QString fragmentId = fragment.id;
+  pushCommand(std::make_unique<CreateSequenceCombinedFragmentCommand>(
+      this, m_data, diagramId, std::move(fragment)));
+  return fragmentId;
+}
+
+bool ProjectController::updateSequenceCombinedFragment(
+    const QString &diagramId, const QString &fragmentId, const QString &type,
+    const QString &startMessageId, const QString &endMessageId,
+    const QString &guard, const QString &alternativeStartMessageId,
+    const QString &alternativeGuard) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *fragment =
+      diagram ? findSequenceCombinedFragment(*diagram, fragmentId) : nullptr;
+  bool typeOk = false;
+  const SequenceCombinedFragmentType fragmentType =
+      sequenceCombinedFragmentTypeFromString(type, &typeOk);
+  if (!diagram || diagram->type != DiagramType::Sequence || !fragment ||
+      !typeOk ||
+      !validSequenceCombinedFragmentBounds(
+          *diagram, fragment->participantIds, fragmentType, startMessageId,
+          endMessageId, alternativeStartMessageId)) {
+    m_diagnostics.addError(
+        QStringLiteral("sequence"),
+        QStringLiteral("A combined fragment needs valid scoped participants "
+                       "and message boundaries"));
+    return false;
+  }
+
+  SequenceCombinedFragment updated = *fragment;
+  updated.type = fragmentType;
+  updated.startMessageId = startMessageId;
+  updated.endMessageId = endMessageId;
+  updated.guard = guard.trimmed();
+  updated.alternativeStartMessageId = alternativeStartMessageId;
+  updated.alternativeGuard = alternativeGuard.trimmed();
+  if (updated == *fragment)
+    return true;
+  pushCommand(std::make_unique<UpdateSequenceCombinedFragmentCommand>(
+      this, diagramId, fragmentId, *fragment, std::move(updated)));
+  return true;
+}
+
+bool ProjectController::deleteSequenceItems(const QString &diagramId,
+                                            const QStringList &participantIds,
+                                            const QStringList &messageIds,
+                                            const QStringList &activationIds,
+                                            const QStringList &fragmentIds) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || diagram->type != DiagramType::Sequence)
+    return false;
+
+  const QSet<QString> requestedParticipants(participantIds.cbegin(),
+                                            participantIds.cend());
+  int participantCount = 0;
+  for (const SequenceParticipant &participant : diagram->sequenceParticipants)
+    if (requestedParticipants.contains(participant.id))
+      ++participantCount;
+  // A sequence diagram always needs an actor to remain valid. Deleting the
+  // diagram itself remains the deliberate way to remove its final lifeline.
+  if (participantCount >= diagram->sequenceParticipants.size()) {
+    m_diagnostics.addWarning(
+        QStringLiteral("sequence"),
+        QStringLiteral(
+            "A sequence diagram must retain at least one participant"));
+    return false;
+  }
+
+  auto command = std::make_unique<DeleteSequenceItemsCommand>(
+      this, m_data, diagramId, participantIds, messageIds, activationIds,
+      fragmentIds);
+  if (!command->hasChanges())
+    return false;
+  pushCommand(std::move(command));
+  return true;
 }
 
 void ProjectController::setNodePortSnapPoints(const QString &diagramId,
@@ -4993,6 +5938,31 @@ void ProjectController::editText(const QString &objectId, const QString &field,
       pushCommand(std::make_unique<EditRelationshipTextCommand>(
           this, objectId, property, before, trimmed, description));
     return;
+  }
+  for (const Diagram &diagram : std::as_const(m_data.diagrams)) {
+    if (const auto *participant = findSequenceParticipant(diagram, objectId)) {
+      if (field != QStringLiteral("sequenceParticipantName"))
+        return;
+      if (trimmed.isEmpty() && participant->elementId.isEmpty()) {
+        m_diagnostics.addError(
+            QStringLiteral("validation"),
+            QStringLiteral("Sequence participant names cannot be empty"),
+            objectId);
+      } else if (participant->name != trimmed) {
+        pushCommand(std::make_unique<EditSequenceTextCommand>(
+            this, diagram.id, objectId, SequenceTextProperty::ParticipantName,
+            participant->name, trimmed));
+      }
+      return;
+    }
+    if (const auto *message = findSequenceMessage(diagram, objectId)) {
+      if (field == QStringLiteral("sequenceMessageText") &&
+          message->text != trimmed)
+        pushCommand(std::make_unique<EditSequenceTextCommand>(
+            this, diagram.id, objectId, SequenceTextProperty::MessageText,
+            message->text, trimmed));
+      return;
+    }
   }
   if (trimmed.isEmpty()) {
     m_diagnostics.addError(QStringLiteral("validation"),

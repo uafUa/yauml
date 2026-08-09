@@ -377,7 +377,12 @@ QJsonObject sourceBinding(const Relationship &relationship) {
              : QJsonObject{};
 }
 
-bool isCppImplementationFile(const QString &path);
+bool isCppImplementationFile(const QString &path) {
+  static const QSet<QString> extensions{
+      QStringLiteral("cpp"), QStringLiteral("cc"),  QStringLiteral("cxx"),
+      QStringLiteral("c++"), QStringLiteral("ixx"), QStringLiteral("cppm")};
+  return extensions.contains(QFileInfo(path).suffix().toLower());
+}
 
 ModelElement sourceElement(const CppSourceSymbol &symbol,
                            const QString &desiredId, const QString &packageId,
@@ -1815,13 +1820,6 @@ struct CompileCommand {
   // and keep parser failures as errors.
   bool bestEffort = false;
 };
-
-bool isCppImplementationFile(const QString &path) {
-  static const QSet<QString> extensions{
-      QStringLiteral("cpp"), QStringLiteral("cc"),  QStringLiteral("cxx"),
-      QStringLiteral("c++"), QStringLiteral("ixx"), QStringLiteral("cppm")};
-  return extensions.contains(QFileInfo(path).suffix().toLower());
-}
 
 bool isCppHeaderFile(const QString &path) {
   static const QSet<QString> extensions{

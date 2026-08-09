@@ -441,7 +441,7 @@ void ProjectTreeModel::rebuildTree() {
     node->label = diagram.name;
     node->objectId = diagram.id;
     node->kind = QStringLiteral("diagram");
-    node->objectType = QStringLiteral("class diagram");
+    node->objectType = toString(diagram.type) + QStringLiteral(" diagram");
     m_diagramNodes.insert(diagram.id, node);
     attach(m_diagramRoot, node);
   }

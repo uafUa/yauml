@@ -1250,6 +1250,480 @@ void UpdatePresentationGeometriesCommand::apply(ProjectData &project,
       element->packageId = forward ? change.after : change.before;
 }
 
+UpdateSequenceParticipantGeometryCommand::
+    UpdateSequenceParticipantGeometryCommand(ProjectController *controller,
+                                             QString diagramId,
+                                             QString participantId,
+                                             QRectF before, QRectF after)
+    : ProjectCommand(controller, QStringLiteral("Move sequence participant")),
+      m_diagramId(std::move(diagramId)),
+      m_participantId(std::move(participantId)), m_before(before),
+      m_after(after) {}
+
+void UpdateSequenceParticipantGeometryCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void UpdateSequenceParticipantGeometryCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void UpdateSequenceParticipantGeometryCommand::apply(ProjectData &project,
+                                                     const QRectF &geometry) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    if (auto *participant = findSequenceParticipant(*diagram, m_participantId))
+      participant->headerGeometry = geometry;
+}
+
+CreateSequenceParticipantCommand::CreateSequenceParticipantCommand(
+    ProjectController *controller, const ProjectData &project,
+    QString diagramId, SequenceParticipant participant)
+    : ProjectCommand(controller, QStringLiteral("Create sequence participant")),
+      m_diagramId(std::move(diagramId)), m_participant(std::move(participant)) {
+  if (const auto *diagram = findDiagram(project, m_diagramId))
+    m_index = diagram->sequenceParticipants.size();
+}
+
+void CreateSequenceParticipantCommand::execute(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    insertAtRecordedPosition(diagram->sequenceParticipants, m_index,
+                             m_participant);
+}
+
+void CreateSequenceParticipantCommand::revert(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    removeRecordedValue(diagram->sequenceParticipants, m_index,
+                        m_participant.id);
+}
+
+SaveSequenceExecutionContextCommand::SaveSequenceExecutionContextCommand(
+    ProjectController *controller, const ProjectData &project,
+    QString diagramId, SequenceExecutionContext context)
+    : ProjectCommand(controller, QStringLiteral("Save execution context")),
+      m_diagramId(std::move(diagramId)), m_after(std::move(context)) {
+  if (const auto *diagram = findDiagram(project, m_diagramId)) {
+    m_index = indexOfId(diagram->sequenceExecutionContexts, m_after.id);
+    if (m_index >= 0)
+      m_before = diagram->sequenceExecutionContexts.at(m_index);
+    else
+      m_index = diagram->sequenceExecutionContexts.size();
+  }
+}
+
+void SaveSequenceExecutionContextCommand::execute(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    if (auto *context = findSequenceExecutionContext(*diagram, m_after.id))
+      *context = m_after;
+    else
+      insertAtRecordedPosition(diagram->sequenceExecutionContexts, m_index,
+                               m_after);
+  }
+}
+
+void SaveSequenceExecutionContextCommand::revert(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId)) {
+    if (m_before) {
+      if (auto *context = findSequenceExecutionContext(*diagram, m_after.id))
+        *context = *m_before;
+    } else {
+      removeRecordedValue(diagram->sequenceExecutionContexts, m_index,
+                          m_after.id);
+    }
+  }
+}
+
+DeleteSequenceExecutionContextCommand::DeleteSequenceExecutionContextCommand(
+    ProjectController *controller, const ProjectData &project,
+    QString diagramId, QString contextId)
+    : ProjectCommand(controller, QStringLiteral("Delete execution context")),
+      m_diagramId(std::move(diagramId)) {
+  const auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram)
+    return;
+  m_index = indexOfId(diagram->sequenceExecutionContexts, contextId);
+  if (m_index < 0)
+    return;
+  m_context = diagram->sequenceExecutionContexts.at(m_index);
+  for (const SequenceParticipant &participant : diagram->sequenceParticipants) {
+    if (participant.defaultExecutionContextId == contextId)
+      m_participantIds.append(participant.id);
+  }
+  for (const SequenceActivation &activation : diagram->sequenceActivations) {
+    if (activation.executionContextId == contextId)
+      m_activationIds.append(activation.id);
+  }
+}
+
+void DeleteSequenceExecutionContextCommand::execute(ProjectData &project) {
+  auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram || m_index < 0)
+    return;
+  removeRecordedValue(diagram->sequenceExecutionContexts, m_index,
+                      m_context.id);
+  for (const QString &participantId : std::as_const(m_participantIds))
+    if (auto *participant = findSequenceParticipant(*diagram, participantId))
+      participant->defaultExecutionContextId.clear();
+  for (const QString &activationId : std::as_const(m_activationIds))
+    if (auto *activation = findSequenceActivation(*diagram, activationId))
+      activation->executionContextId.clear();
+}
+
+void DeleteSequenceExecutionContextCommand::revert(ProjectData &project) {
+  auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram || m_index < 0)
+    return;
+  insertAtRecordedPosition(diagram->sequenceExecutionContexts, m_index,
+                           m_context);
+  for (const QString &participantId : std::as_const(m_participantIds))
+    if (auto *participant = findSequenceParticipant(*diagram, participantId))
+      participant->defaultExecutionContextId = m_context.id;
+  for (const QString &activationId : std::as_const(m_activationIds))
+    if (auto *activation = findSequenceActivation(*diagram, activationId))
+      activation->executionContextId = m_context.id;
+}
+
+SetSequenceParticipantExecutionContextCommand::
+    SetSequenceParticipantExecutionContextCommand(ProjectController *controller,
+                                                  QString diagramId,
+                                                  QString participantId,
+                                                  QString before, QString after)
+    : ProjectCommand(controller,
+                     QStringLiteral("Set participant execution context")),
+      m_diagramId(std::move(diagramId)),
+      m_participantId(std::move(participantId)), m_before(std::move(before)),
+      m_after(std::move(after)) {}
+
+void SetSequenceParticipantExecutionContextCommand::execute(
+    ProjectData &project) {
+  apply(project, m_after);
+}
+
+void SetSequenceParticipantExecutionContextCommand::revert(
+    ProjectData &project) {
+  apply(project, m_before);
+}
+
+void SetSequenceParticipantExecutionContextCommand::apply(
+    ProjectData &project, const QString &contextId) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    if (auto *participant = findSequenceParticipant(*diagram, m_participantId))
+      participant->defaultExecutionContextId = contextId;
+}
+
+UpdateSequenceMessagePositionCommand::UpdateSequenceMessagePositionCommand(
+    ProjectController *controller, QString diagramId, QString messageId,
+    qreal before, qreal after)
+    : ProjectCommand(controller, QStringLiteral("Move sequence message")),
+      m_diagramId(std::move(diagramId)), m_messageId(std::move(messageId)),
+      m_before(before), m_after(after) {}
+
+void UpdateSequenceMessagePositionCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void UpdateSequenceMessagePositionCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void UpdateSequenceMessagePositionCommand::apply(ProjectData &project,
+                                                 qreal y) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    if (auto *message = findSequenceMessage(*diagram, m_messageId))
+      message->y = y;
+}
+
+CreateSequenceMessageCommand::CreateSequenceMessageCommand(
+    ProjectController *controller, const ProjectData &project,
+    QString diagramId, SequenceMessage message)
+    : ProjectCommand(controller, QStringLiteral("Create sequence message")),
+      m_diagramId(std::move(diagramId)), m_message(std::move(message)) {
+  if (const auto *diagram = findDiagram(project, m_diagramId)) {
+    const auto insertion = std::lower_bound(
+        diagram->sequenceMessages.cbegin(), diagram->sequenceMessages.cend(),
+        m_message.y, [](const SequenceMessage &candidate, qreal y) {
+          return candidate.y < y;
+        });
+    m_index = std::distance(diagram->sequenceMessages.cbegin(), insertion);
+  }
+}
+
+void CreateSequenceMessageCommand::execute(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    insertAtRecordedPosition(diagram->sequenceMessages, m_index, m_message);
+}
+
+void CreateSequenceMessageCommand::revert(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    removeRecordedValue(diagram->sequenceMessages, m_index, m_message.id);
+}
+
+UpdateSequenceMessageCommand::UpdateSequenceMessageCommand(
+    ProjectController *controller, QString diagramId, QString messageId,
+    SequenceMessage before, SequenceMessage after)
+    : ProjectCommand(controller,
+                     QStringLiteral("Link sequence message operation")),
+      m_diagramId(std::move(diagramId)), m_messageId(std::move(messageId)),
+      m_before(std::move(before)), m_after(std::move(after)) {}
+
+void UpdateSequenceMessageCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void UpdateSequenceMessageCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void UpdateSequenceMessageCommand::apply(ProjectData &project,
+                                         const SequenceMessage &message) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    if (auto *existing = findSequenceMessage(*diagram, m_messageId))
+      *existing = message;
+}
+
+CreateSequenceActivationCommand::CreateSequenceActivationCommand(
+    ProjectController *controller, const ProjectData &project,
+    QString diagramId, SequenceActivation activation)
+    : ProjectCommand(controller, QStringLiteral("Create sequence activation")),
+      m_diagramId(std::move(diagramId)), m_activation(std::move(activation)) {
+  if (const auto *diagram = findDiagram(project, m_diagramId))
+    m_index = diagram->sequenceActivations.size();
+}
+
+void CreateSequenceActivationCommand::execute(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    insertAtRecordedPosition(diagram->sequenceActivations, m_index,
+                             m_activation);
+}
+
+void CreateSequenceActivationCommand::revert(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    removeRecordedValue(diagram->sequenceActivations, m_index, m_activation.id);
+}
+
+UpdateSequenceActivationCommand::UpdateSequenceActivationCommand(
+    ProjectController *controller, QString diagramId, QString activationId,
+    SequenceActivation before, SequenceActivation after)
+    : ProjectCommand(controller, QStringLiteral("Update sequence activation")),
+      m_diagramId(std::move(diagramId)),
+      m_activationId(std::move(activationId)), m_before(std::move(before)),
+      m_after(std::move(after)) {}
+
+void UpdateSequenceActivationCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void UpdateSequenceActivationCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void UpdateSequenceActivationCommand::apply(
+    ProjectData &project, const SequenceActivation &activation) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    if (auto *existing = findSequenceActivation(*diagram, m_activationId))
+      *existing = activation;
+}
+
+CreateSequenceCombinedFragmentCommand::CreateSequenceCombinedFragmentCommand(
+    ProjectController *controller, const ProjectData &project,
+    QString diagramId, SequenceCombinedFragment fragment)
+    : ProjectCommand(controller,
+                     QStringLiteral("Create sequence combined fragment")),
+      m_diagramId(std::move(diagramId)), m_fragment(std::move(fragment)) {
+  if (const auto *diagram = findDiagram(project, m_diagramId))
+    m_index = diagram->sequenceCombinedFragments.size();
+}
+
+void CreateSequenceCombinedFragmentCommand::execute(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    insertAtRecordedPosition(diagram->sequenceCombinedFragments, m_index,
+                             m_fragment);
+}
+
+void CreateSequenceCombinedFragmentCommand::revert(ProjectData &project) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    removeRecordedValue(diagram->sequenceCombinedFragments, m_index,
+                        m_fragment.id);
+}
+
+UpdateSequenceCombinedFragmentCommand::UpdateSequenceCombinedFragmentCommand(
+    ProjectController *controller, QString diagramId, QString fragmentId,
+    SequenceCombinedFragment before, SequenceCombinedFragment after)
+    : ProjectCommand(controller,
+                     QStringLiteral("Update sequence combined fragment")),
+      m_diagramId(std::move(diagramId)), m_fragmentId(std::move(fragmentId)),
+      m_before(std::move(before)), m_after(std::move(after)) {}
+
+void UpdateSequenceCombinedFragmentCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void UpdateSequenceCombinedFragmentCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void UpdateSequenceCombinedFragmentCommand::apply(
+    ProjectData &project, const SequenceCombinedFragment &fragment) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    if (auto *existing = findSequenceCombinedFragment(*diagram, m_fragmentId))
+      *existing = fragment;
+}
+
+DeleteSequenceItemsCommand::DeleteSequenceItemsCommand(
+    ProjectController *controller, const ProjectData &project,
+    QString diagramId, const QStringList &participantIds,
+    const QStringList &messageIds, const QStringList &activationIds,
+    const QStringList &fragmentIds)
+    : ProjectCommand(controller, QStringLiteral("Delete sequence items")),
+      m_diagramId(std::move(diagramId)) {
+  const auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram || diagram->type != DiagramType::Sequence)
+    return;
+
+  const QSet<QString> requestedParticipants(participantIds.cbegin(),
+                                            participantIds.cend());
+  const QSet<QString> requestedMessages(messageIds.cbegin(), messageIds.cend());
+  const QSet<QString> requestedActivations(activationIds.cbegin(),
+                                           activationIds.cend());
+  const QSet<QString> requestedFragments(fragmentIds.cbegin(),
+                                         fragmentIds.cend());
+  QSet<QString> removedParticipantIds;
+  for (qsizetype index = 0; index < diagram->sequenceParticipants.size();
+       ++index) {
+    const SequenceParticipant &participant =
+        diagram->sequenceParticipants.at(index);
+    if (!requestedParticipants.contains(participant.id))
+      continue;
+    m_participants.append({index, participant});
+    removedParticipantIds.insert(participant.id);
+  }
+
+  QSet<QString> removedMessageIds;
+  for (qsizetype index = 0; index < diagram->sequenceMessages.size(); ++index) {
+    const SequenceMessage &message = diagram->sequenceMessages.at(index);
+    if (!requestedMessages.contains(message.id) &&
+        !removedParticipantIds.contains(message.sourceParticipantId) &&
+        !removedParticipantIds.contains(message.targetParticipantId)) {
+      continue;
+    }
+    m_messages.append({index, message});
+    removedMessageIds.insert(message.id);
+  }
+
+  for (qsizetype index = 0; index < diagram->sequenceActivations.size();
+       ++index) {
+    const SequenceActivation &activation =
+        diagram->sequenceActivations.at(index);
+    if (!requestedActivations.contains(activation.id) &&
+        !removedParticipantIds.contains(activation.participantId) &&
+        !removedMessageIds.contains(activation.startMessageId) &&
+        !removedMessageIds.contains(activation.endMessageId)) {
+      continue;
+    }
+    m_activations.append({index, activation});
+  }
+
+  for (qsizetype index = 0; index < diagram->sequenceCombinedFragments.size();
+       ++index) {
+    const SequenceCombinedFragment &fragment =
+        diagram->sequenceCombinedFragments.at(index);
+    const bool participantRemoved = std::any_of(
+        fragment.participantIds.cbegin(), fragment.participantIds.cend(),
+        [&removedParticipantIds](const QString &participantId) {
+          return removedParticipantIds.contains(participantId);
+        });
+    if (!requestedFragments.contains(fragment.id) && !participantRemoved &&
+        !removedMessageIds.contains(fragment.startMessageId) &&
+        !removedMessageIds.contains(fragment.endMessageId) &&
+        !removedMessageIds.contains(fragment.alternativeStartMessageId)) {
+      continue;
+    }
+    m_fragments.append({index, fragment});
+  }
+}
+
+bool DeleteSequenceItemsCommand::hasChanges() const {
+  return !m_participants.isEmpty() || !m_messages.isEmpty() ||
+         !m_activations.isEmpty() || !m_fragments.isEmpty();
+}
+
+void DeleteSequenceItemsCommand::execute(ProjectData &project) {
+  auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram)
+    return;
+  for (auto record = m_fragments.crbegin(); record != m_fragments.crend();
+       ++record) {
+    removeRecordedValue(diagram->sequenceCombinedFragments, record->index,
+                        record->value.id);
+  }
+  for (auto record = m_activations.crbegin(); record != m_activations.crend();
+       ++record) {
+    removeRecordedValue(diagram->sequenceActivations, record->index,
+                        record->value.id);
+  }
+  for (auto record = m_messages.crbegin(); record != m_messages.crend();
+       ++record) {
+    removeRecordedValue(diagram->sequenceMessages, record->index,
+                        record->value.id);
+  }
+  for (auto record = m_participants.crbegin(); record != m_participants.crend();
+       ++record) {
+    removeRecordedValue(diagram->sequenceParticipants, record->index,
+                        record->value.id);
+  }
+}
+
+void DeleteSequenceItemsCommand::revert(ProjectData &project) {
+  auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram)
+    return;
+  for (const auto &record : m_participants)
+    insertAtRecordedPosition(diagram->sequenceParticipants, record.index,
+                             record.value);
+  for (const auto &record : m_messages)
+    insertAtRecordedPosition(diagram->sequenceMessages, record.index,
+                             record.value);
+  for (const auto &record : m_activations)
+    insertAtRecordedPosition(diagram->sequenceActivations, record.index,
+                             record.value);
+  for (const auto &record : m_fragments)
+    insertAtRecordedPosition(diagram->sequenceCombinedFragments, record.index,
+                             record.value);
+}
+
+EditSequenceTextCommand::EditSequenceTextCommand(ProjectController *controller,
+                                                 QString diagramId,
+                                                 QString subjectId,
+                                                 SequenceTextProperty property,
+                                                 QString before, QString after)
+    : ProjectCommand(controller,
+                     property == SequenceTextProperty::ParticipantName
+                         ? QStringLiteral("Rename sequence participant")
+                         : QStringLiteral("Edit sequence message")),
+      m_diagramId(std::move(diagramId)), m_subjectId(std::move(subjectId)),
+      m_property(property), m_before(std::move(before)),
+      m_after(std::move(after)) {}
+
+void EditSequenceTextCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void EditSequenceTextCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void EditSequenceTextCommand::apply(ProjectData &project,
+                                    const QString &value) {
+  auto *diagram = findDiagram(project, m_diagramId);
+  if (!diagram)
+    return;
+  if (m_property == SequenceTextProperty::ParticipantName) {
+    if (auto *participant = findSequenceParticipant(*diagram, m_subjectId))
+      participant->name = value;
+  } else if (auto *message = findSequenceMessage(*diagram, m_subjectId)) {
+    message->text = value;
+  }
+}
+
 SetNodePortSnapPointsCommand::SetNodePortSnapPointsCommand(
     ProjectController *controller, QString diagramId,
     NodePortSnapPointChange change)

@@ -240,6 +240,10 @@ Rectangle {
                                         targetView.openAutomaticLayoutDialog(
                                                     "diagram")
                                 }
+                                onSequenceExecutionContextsRequested: {
+                                    if (targetView)
+                                        targetView.openSequenceExecutionContextsDialog()
+                                }
 
                                 MenuSeparator {}
                                 MenuItem {

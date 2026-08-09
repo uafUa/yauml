@@ -10,6 +10,7 @@
 #include <QProcess>
 #include <QRegularExpression>
 #include <QStandardPaths>
+#include <algorithm>
 #include <utility>
 
 namespace yauml {
@@ -124,6 +125,39 @@ SourceEditorController::resolveLocation(const QString &objectKind,
       return {};
     return fromBinding(
         relationship->extra.value(QStringLiteral("sourceBinding")).toObject());
+  }
+
+  if (objectKind == QStringLiteral("sequence-message")) {
+    // Sequence messages are diagram-local rather than project-tree objects.
+    // Their optional evidence is nevertheless first-class source provenance,
+    // so resolve it through the same configured editor boundary.
+    for (const Diagram &diagram : m_project->data().diagrams) {
+      const SequenceMessage *message =
+          findSequenceMessage(diagram, objectId);
+      if (!message)
+        continue;
+      if (!message->evidence.file.trimmed().isEmpty()) {
+        return {absoluteSourcePath(message->evidence.file,
+                                   m_project->projectPath()),
+                qMax(1, message->evidence.line),
+                qMax(1, message->evidence.column)};
+      }
+      const ModelElement *element =
+          findElement(m_project->data(), message->targetOperationElementId);
+      if (!element)
+        return {};
+      const auto operation = std::find_if(
+          element->operations.cbegin(), element->operations.cend(),
+          [message](const ModelOperation &candidate) {
+            return candidate.id == message->targetOperationId;
+          });
+      if (operation == element->operations.cend())
+        return {};
+      return {absoluteSourcePath(operation->sourceFile,
+                                 m_project->projectPath()),
+              qMax(1, operation->sourceLine),
+              qMax(1, operation->sourceColumn)};
+    }
   }
 
   return {};

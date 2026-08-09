@@ -617,6 +617,291 @@ private:
   QList<ElementPackageChange> m_packageChanges;
 };
 
+class UpdateSequenceParticipantGeometryCommand final : public ProjectCommand {
+public:
+  UpdateSequenceParticipantGeometryCommand(ProjectController *controller,
+                                           QString diagramId,
+                                           QString participantId, QRectF before,
+                                           QRectF after);
+
+private:
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, const QRectF &geometry);
+
+  QString m_diagramId;
+  QString m_participantId;
+  QRectF m_before;
+  QRectF m_after;
+};
+
+class CreateSequenceParticipantCommand final : public ProjectCommand {
+public:
+  CreateSequenceParticipantCommand(ProjectController *controller,
+                                   const ProjectData &project,
+                                   QString diagramId,
+                                   SequenceParticipant participant);
+
+private:
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  SequenceParticipant m_participant;
+  qsizetype m_index = -1;
+};
+
+class SaveSequenceExecutionContextCommand final : public ProjectCommand {
+public:
+  SaveSequenceExecutionContextCommand(ProjectController *controller,
+                                      const ProjectData &project,
+                                      QString diagramId,
+                                      SequenceExecutionContext context);
+
+private:
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  SequenceExecutionContext m_after;
+  std::optional<SequenceExecutionContext> m_before;
+  qsizetype m_index = -1;
+};
+
+// Removing a context clears only references to that context. Recording those
+// small assignments keeps deletion proportional to the affected diagram and
+// restores participant defaults and activation overrides exactly on undo.
+class DeleteSequenceExecutionContextCommand final : public ProjectCommand {
+public:
+  DeleteSequenceExecutionContextCommand(ProjectController *controller,
+                                        const ProjectData &project,
+                                        QString diagramId, QString contextId);
+
+  [[nodiscard]] bool hasChanges() const { return m_index >= 0; }
+
+private:
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  SequenceExecutionContext m_context;
+  qsizetype m_index = -1;
+  QStringList m_participantIds;
+  QStringList m_activationIds;
+};
+
+class SetSequenceParticipantExecutionContextCommand final
+    : public ProjectCommand {
+public:
+  SetSequenceParticipantExecutionContextCommand(ProjectController *controller,
+                                                QString diagramId,
+                                                QString participantId,
+                                                QString before, QString after);
+
+private:
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, const QString &contextId);
+
+  QString m_diagramId;
+  QString m_participantId;
+  QString m_before;
+  QString m_after;
+};
+
+class UpdateSequenceMessagePositionCommand final : public ProjectCommand {
+public:
+  UpdateSequenceMessagePositionCommand(ProjectController *controller,
+                                       QString diagramId, QString messageId,
+                                       qreal before, qreal after);
+
+private:
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, qreal y);
+
+  QString m_diagramId;
+  QString m_messageId;
+  qreal m_before;
+  qreal m_after;
+};
+
+class CreateSequenceMessageCommand final : public ProjectCommand {
+public:
+  CreateSequenceMessageCommand(ProjectController *controller,
+                               const ProjectData &project, QString diagramId,
+                               SequenceMessage message);
+
+private:
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  SequenceMessage m_message;
+  qsizetype m_index = -1;
+};
+
+class UpdateSequenceMessageCommand final : public ProjectCommand {
+public:
+  UpdateSequenceMessageCommand(ProjectController *controller, QString diagramId,
+                               QString messageId, SequenceMessage before,
+                               SequenceMessage after);
+
+private:
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, const SequenceMessage &message);
+
+  QString m_diagramId;
+  QString m_messageId;
+  SequenceMessage m_before;
+  SequenceMessage m_after;
+};
+
+class CreateSequenceActivationCommand final : public ProjectCommand {
+public:
+  CreateSequenceActivationCommand(ProjectController *controller,
+                                  const ProjectData &project, QString diagramId,
+                                  SequenceActivation activation);
+
+private:
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  SequenceActivation m_activation;
+  qsizetype m_index = -1;
+};
+
+class UpdateSequenceActivationCommand final : public ProjectCommand {
+public:
+  UpdateSequenceActivationCommand(ProjectController *controller,
+                                  QString diagramId, QString activationId,
+                                  SequenceActivation before,
+                                  SequenceActivation after);
+
+private:
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, const SequenceActivation &activation);
+
+  QString m_diagramId;
+  QString m_activationId;
+  SequenceActivation m_before;
+  SequenceActivation m_after;
+};
+
+class CreateSequenceCombinedFragmentCommand final : public ProjectCommand {
+public:
+  CreateSequenceCombinedFragmentCommand(ProjectController *controller,
+                                        const ProjectData &project,
+                                        QString diagramId,
+                                        SequenceCombinedFragment fragment);
+
+private:
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  SequenceCombinedFragment m_fragment;
+  qsizetype m_index = -1;
+};
+
+class UpdateSequenceCombinedFragmentCommand final : public ProjectCommand {
+public:
+  UpdateSequenceCombinedFragmentCommand(ProjectController *controller,
+                                        QString diagramId, QString fragmentId,
+                                        SequenceCombinedFragment before,
+                                        SequenceCombinedFragment after);
+
+private:
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, const SequenceCombinedFragment &fragment);
+
+  QString m_diagramId;
+  QString m_fragmentId;
+  SequenceCombinedFragment m_before;
+  SequenceCombinedFragment m_after;
+};
+
+// Deleting a sequence item has a small but important dependency graph:
+// participant -> messages -> activations / combined fragments.  Recording
+// only the affected records and their original positions keeps the command
+// cheap for large projects while still making a cascade one undo operation.
+class DeleteSequenceItemsCommand final : public ProjectCommand {
+public:
+  DeleteSequenceItemsCommand(ProjectController *controller,
+                             const ProjectData &project, QString diagramId,
+                             const QStringList &participantIds,
+                             const QStringList &messageIds,
+                             const QStringList &activationIds,
+                             const QStringList &fragmentIds);
+
+  [[nodiscard]] bool hasChanges() const;
+
+private:
+  struct ParticipantRecord {
+    qsizetype index = -1;
+    SequenceParticipant value;
+  };
+  struct MessageRecord {
+    qsizetype index = -1;
+    SequenceMessage value;
+  };
+  struct ActivationRecord {
+    qsizetype index = -1;
+    SequenceActivation value;
+  };
+  struct FragmentRecord {
+    qsizetype index = -1;
+    SequenceCombinedFragment value;
+  };
+
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+
+  QString m_diagramId;
+  QList<ParticipantRecord> m_participants;
+  QList<MessageRecord> m_messages;
+  QList<ActivationRecord> m_activations;
+  QList<FragmentRecord> m_fragments;
+};
+
+enum class SequenceTextProperty { ParticipantName, MessageText };
+
+class EditSequenceTextCommand final : public ProjectCommand {
+public:
+  EditSequenceTextCommand(ProjectController *controller, QString diagramId,
+                          QString subjectId, SequenceTextProperty property,
+                          QString before, QString after);
+
+private:
+  bool affectsProjectTree() const override { return false; }
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, const QString &value);
+
+  QString m_diagramId;
+  QString m_subjectId;
+  SequenceTextProperty m_property;
+  QString m_before;
+  QString m_after;
+};
+
 class SetNodePortSnapPointsCommand final : public ProjectCommand {
 public:
   SetNodePortSnapPointsCommand(ProjectController *controller, QString diagramId,

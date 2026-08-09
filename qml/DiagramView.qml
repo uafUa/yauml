@@ -381,6 +381,61 @@ Item {
         presentationTransferDialog.open()
     }
 
+    function openSequenceMessageDialog() {
+        sequenceMessageDialog.endpointSummary =
+                canvas.sequenceMessageEndpointSummary()
+        sequenceMessageDialog.operationChoices =
+                canvas.sequenceMessageTargetOperationChoices()
+        sequenceMessageDialog.open()
+    }
+
+    function openSequenceMessageOperationDialog() {
+        sequenceMessageOperationDialog.editorData =
+                canvas.sequenceMessageTargetOperationEditorData()
+        sequenceMessageOperationDialog.open()
+    }
+
+    function openSequenceActivationDialog(editing) {
+        const data = canvas.sequenceActivationEditorData()
+        if (!data || !data.participantId)
+            return
+        sequenceActivationDialog.editing = editing
+        sequenceActivationDialog.editorData = data
+        sequenceActivationDialog.messageChoices = data.messageChoices || []
+        sequenceActivationDialog.endChoices = [
+            {
+                id: "",
+                label: qsTr("Continue to the interaction end")
+            }
+        ].concat(sequenceActivationDialog.messageChoices)
+        sequenceActivationDialog.contextChoices =
+                data.executionContextChoices || []
+        sequenceActivationDialog.open()
+    }
+
+    function openSequenceExecutionContextsDialog() {
+        sequenceExecutionContextsDialog.refresh("")
+        sequenceExecutionContextsDialog.open()
+    }
+
+    function openSequenceParticipantContextDialog() {
+        const data = canvas.sequenceParticipantContextEditorData()
+        if (!data || !data.choices)
+            return
+        sequenceParticipantContextDialog.editorData = data
+        sequenceParticipantContextDialog.open()
+    }
+
+    function openSequenceCombinedFragmentDialog(editing) {
+        const data = canvas.sequenceCombinedFragmentEditorData()
+        if (!data || !data.participantIds || data.participantIds.length === 0)
+            return
+        sequenceCombinedFragmentDialog.editing = editing
+        sequenceCombinedFragmentDialog.editorData = data
+        sequenceCombinedFragmentDialog.messageChoices = data.messageChoices || []
+        sequenceCombinedFragmentDialog.open()
+    }
+
     DiagramCanvas {
         id: canvas
         anchors.fill: parent
@@ -400,10 +455,17 @@ Item {
         relationshipGestureKeys: applicationSettings.relationshipGestureKeys
 
         onContextMenuRequested: function(target, menuX, menuY) {
-            const menu = target === "element" ? elementMenu
+            let menu = target === "sequence-fragment" ? sequenceFragmentMenu
+                       : target === "element" ? elementMenu
                        : target === "connector" ? connectorMenu
                        : target === "container" ? containerMenu
-                       : target === "note" ? noteMenu : canvasMenu
+                       : target === "note" ? noteMenu
+                       : target === "sequence-participant"
+                         ? sequenceParticipantMenu
+                       : target === "sequence-message"
+                         ? sequenceMessageMenu
+                       : target === "sequence-activation"
+                         ? sequenceActivationMenu : canvasMenu
             menu.x = menuX
             menu.y = menuY
             menu.open()
@@ -472,6 +534,10 @@ Item {
 
     Connections {
         target: canvas
+
+        function onSequenceMessageCreationRequested() {
+            root.openSequenceMessageDialog()
+        }
 
         function onRelationshipToolboxCandidateChanged() {
             if (root.relationshipToolboxGestureActive)
@@ -1077,6 +1143,7 @@ Item {
         anchors.rightMargin: 10
         anchors.topMargin: 52
         z: 10
+        visible: canvas.diagramType === "class"
         highlighted: canvas.filterActive
         text: canvas.filterActive
               ? qsTr("Filtered: %1 of %2").arg(canvas.visibleNodeCount)
@@ -1101,6 +1168,720 @@ Item {
             root.openAutomaticLayoutDialog("diagram")
         onConnectorOptimizationRequested: function(scope) {
             root.openConnectorOptimizationDialog(scope)
+        }
+        onSequenceMessageRequested: root.openSequenceMessageDialog()
+        onSequenceCombinedFragmentRequested:
+            root.openSequenceCombinedFragmentDialog(false)
+        onSequenceExecutionContextsRequested:
+            root.openSequenceExecutionContextsDialog()
+    }
+
+    Menu {
+        id: sequenceParticipantMenu
+        title: qsTr("Sequence participant")
+        MenuItem {
+            text: qsTr("Edit participant name…")
+            enabled: canvas.selectedSequenceParticipantCount === 1
+            onTriggered: canvas.editSelectedSequenceItem()
+        }
+        MenuItem {
+            text: qsTr("Execution context…")
+            enabled: canvas.selectedSequenceParticipantCount === 1
+            onTriggered: root.openSequenceParticipantContextDialog()
+        }
+        CatalogMenuItem {
+            catalogId: "sequence.addActivation"
+            text: qsTr("New activation…")
+            enabled: canvas.selectedSequenceParticipantCount === 1
+            onTriggered: root.openSequenceActivationDialog(false)
+        }
+        CatalogMenuItem {
+            catalogId: "sequence.delete"
+            text: qsTr("Delete participant")
+            onTriggered: canvas.deleteSelectedSequenceItems()
+        }
+    }
+
+    Menu {
+        id: sequenceFragmentMenu
+        title: qsTr("Combined fragment")
+        CatalogMenuItem {
+            catalogId: "sequence.editFragment"
+            text: qsTr("Edit combined fragment…")
+            enabled: canvas.selectedSequenceCombinedFragmentCount === 1
+            onTriggered: root.openSequenceCombinedFragmentDialog(true)
+        }
+        CatalogMenuItem {
+            catalogId: "sequence.delete"
+            text: qsTr("Delete combined fragment")
+            onTriggered: canvas.deleteSelectedSequenceItems()
+        }
+    }
+
+    Menu {
+        id: sequenceMessageMenu
+        title: qsTr("Sequence message")
+        CatalogMenuItem {
+            catalogId: "source.open"
+            text: qsTr("Open in VS Code")
+            enabled: canvas.selectedSequenceMessageCount === 1
+                     && sourceEditorController.canOpenObject(
+                         "sequence-message", canvas.selectedSequenceMessageId)
+            onTriggered: sourceEditorController.openObject(
+                             "sequence-message", canvas.selectedSequenceMessageId)
+        }
+        MenuSeparator {}
+        CatalogMenuItem {
+            catalogId: "sequence.linkOperation"
+            text: qsTr("Link target operation…")
+            enabled: canvas.selectedSequenceMessageCount === 1
+            onTriggered: root.openSequenceMessageOperationDialog()
+        }
+        MenuSeparator {}
+        MenuItem {
+            text: qsTr("Edit message text…")
+            enabled: canvas.selectedSequenceMessageCount === 1
+            onTriggered: canvas.editSelectedSequenceItem()
+        }
+        CatalogMenuItem {
+            catalogId: "sequence.delete"
+            text: qsTr("Delete message")
+            onTriggered: canvas.deleteSelectedSequenceItems()
+        }
+    }
+
+    Menu {
+        id: sequenceActivationMenu
+        title: qsTr("Sequence activation")
+        CatalogMenuItem {
+            catalogId: "sequence.editActivation"
+            text: qsTr("Edit activation…")
+            enabled: canvas.selectedSequenceActivationCount === 1
+            onTriggered: root.openSequenceActivationDialog(true)
+        }
+        CatalogMenuItem {
+            catalogId: "sequence.delete"
+            text: qsTr("Delete activation")
+            onTriggered: canvas.deleteSelectedSequenceItems()
+        }
+    }
+
+    CatalogDialog {
+        id: sequenceExecutionContextsDialog
+        property var contexts: []
+        property string selectedId: ""
+
+        function indexOfContext(id) {
+            for (let index = 0; index < contexts.length; ++index) {
+                if (contexts[index].id === id)
+                    return index
+            }
+            return -1
+        }
+
+        function selectContext(context) {
+            selectedId = context ? context.id : ""
+            contextName.text = context ? context.name : ""
+            contextType.currentIndex = context
+                    ? contextType.indexOfValue(context.type) : 0
+        }
+
+        function refresh(preferredId) {
+            contexts = canvas.sequenceExecutionContexts()
+            const index = indexOfContext(preferredId)
+            contextList.currentIndex = index
+            selectContext(index >= 0 ? contexts[index] : null)
+        }
+
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(620, parent.width - 40)
+        height: Math.min(430, parent.height - 40)
+        modal: true
+        focus: true
+        title: qsTr("Execution contexts")
+        standardButtons: Dialog.Close
+
+        contentItem: RowLayout {
+            spacing: 12
+
+            Frame {
+                Layout.preferredWidth: 250
+                Layout.fillHeight: true
+                ListView {
+                    id: contextList
+                    anchors.fill: parent
+                    clip: true
+                    model: sequenceExecutionContextsDialog.contexts
+                    delegate: ItemDelegate {
+                        required property var modelData
+                        required property int index
+                        width: ListView.view.width
+                        text: modelData.label
+                        highlighted: ListView.isCurrentItem
+                        onClicked: {
+                            contextList.currentIndex = index
+                            sequenceExecutionContextsDialog.selectContext(
+                                        modelData)
+                        }
+                    }
+                    Label {
+                        anchors.centerIn: parent
+                        visible: contextList.count === 0
+                        text: qsTr("No execution contexts")
+                        color: uiTheme.mutedText
+                    }
+                }
+            }
+
+            ColumnLayout {
+                Layout.fillWidth: true
+                Layout.fillHeight: true
+                Label { text: qsTr("Name") }
+                TextField {
+                    id: contextName
+                    Layout.fillWidth: true
+                    placeholderText: qsTr("e.g. UI thread")
+                    Keys.onReturnPressed: saveContextButton.clicked()
+                }
+                Label { text: qsTr("Kind") }
+                ComboBox {
+                    id: contextType
+                    Layout.fillWidth: true
+                    textRole: "label"
+                    valueRole: "value"
+                    model: [
+                        { label: qsTr("Thread"), value: "thread" },
+                        { label: qsTr("Event loop"), value: "event-loop" },
+                        { label: qsTr("Executor"), value: "executor" },
+                        { label: qsTr("Task"), value: "task" }
+                    ]
+                }
+                Item { Layout.fillHeight: true }
+                RowLayout {
+                    Layout.fillWidth: true
+                    Button {
+                        text: qsTr("New")
+                        onClicked: {
+                            contextList.currentIndex = -1
+                            sequenceExecutionContextsDialog.selectContext(null)
+                            contextName.forceActiveFocus()
+                        }
+                    }
+                    Button {
+                        id: saveContextButton
+                        text: qsTr("Save")
+                        enabled: contextName.text.trim().length > 0
+                        onClicked: {
+                            const id = canvas.saveSequenceExecutionContext(
+                                         sequenceExecutionContextsDialog.selectedId,
+                                         contextName.text,
+                                         contextType.currentValue)
+                            if (id)
+                                sequenceExecutionContextsDialog.refresh(id)
+                        }
+                    }
+                    Item { Layout.fillWidth: true }
+                    Button {
+                        text: qsTr("Delete")
+                        enabled: sequenceExecutionContextsDialog.selectedId.length > 0
+                        onClicked: deleteExecutionContextDialog.open()
+                    }
+                }
+            }
+        }
+    }
+
+    CatalogDialog {
+        id: deleteExecutionContextDialog
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(430, parent.width - 40)
+        modal: true
+        focus: true
+        title: qsTr("Delete execution context?")
+        standardButtons: Dialog.Yes | Dialog.Cancel
+        onAccepted: {
+            if (canvas.deleteSequenceExecutionContext(
+                        sequenceExecutionContextsDialog.selectedId))
+                sequenceExecutionContextsDialog.refresh("")
+        }
+        contentItem: Label {
+            width: parent ? parent.width : implicitWidth
+            wrapMode: Text.Wrap
+            text: qsTr("Participant defaults and activation overrides using this context will be cleared. The change can be undone.")
+        }
+    }
+
+    CatalogDialog {
+        id: sequenceParticipantContextDialog
+        property var editorData: ({})
+
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(460, parent.width - 40)
+        modal: true
+        focus: true
+        title: qsTr("Participant execution context")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            participantContext.currentIndex = participantContext.indexOfValue(
+                        editorData.executionContextId || "")
+        }
+        onAccepted: canvas.setSelectedSequenceParticipantExecutionContext(
+                        participantContext.currentValue)
+
+        contentItem: ColumnLayout {
+            spacing: 10
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: uiTheme.mutedText
+                text: qsTr("Participant: %1").arg(
+                          sequenceParticipantContextDialog.editorData.participantName || "")
+            }
+            Label { text: qsTr("Default execution context") }
+            ComboBox {
+                id: participantContext
+                Layout.fillWidth: true
+                model: sequenceParticipantContextDialog.editorData.choices || []
+                textRole: "label"
+                valueRole: "id"
+            }
+        }
+    }
+
+    CatalogDialog {
+        id: sequenceMessageDialog
+        property string endpointSummary: ""
+        property var operationChoices: []
+
+        function indexOfOperation(id) {
+            for (let index = 0; index < operationChoices.length; ++index) {
+                if (operationChoices[index].id === id)
+                    return index
+            }
+            return 0
+        }
+
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(430, parent.width - 40)
+        modal: true
+        focus: true
+        title: qsTr("Create sequence message")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            sequenceMessageText.clear()
+            sequenceMessageTargetOperation.currentIndex = indexOfOperation("")
+            sequenceMessageAutomaticActivation.checked = true
+            sequenceMessageText.forceActiveFocus()
+        }
+        onAccepted: canvas.createSequenceMessage(
+                        sequenceMessageType.currentValue,
+                        sequenceMessageText.text,
+                        sequenceMessageTargetOperation.currentValue,
+                        sequenceMessageAutomaticActivation.checked)
+        onRejected: canvas.cancelPendingSequenceMessage()
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: uiTheme.mutedText
+                text: sequenceMessageDialog.endpointSummary
+            }
+            Label { text: qsTr("Message type") }
+            ComboBox {
+                id: sequenceMessageType
+                Layout.fillWidth: true
+                textRole: "label"
+                valueRole: "value"
+                model: [
+                    { label: qsTr("Synchronous call"), value: "sync" },
+                    { label: qsTr("Asynchronous signal"), value: "async" },
+                    { label: qsTr("Return"), value: "return" },
+                    { label: qsTr("Create"), value: "create" },
+                    { label: qsTr("Destroy"), value: "destroy" }
+                ]
+            }
+            CheckBox {
+                id: sequenceMessageAutomaticActivation
+                Layout.fillWidth: true
+                visible: sequenceMessageType.currentValue !== "create"
+                text: sequenceMessageType.currentValue === "return"
+                      ? qsTr("End the source activation automatically")
+                      : sequenceMessageType.currentValue === "destroy"
+                        ? qsTr("End the target activation automatically")
+                        : qsTr("Start a target activation automatically")
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: sequenceMessageType.currentValue === "create"
+                wrapMode: Text.Wrap
+                color: uiTheme.mutedText
+                text: qsTr("The target participant begins at this message; an activation is not opened automatically.")
+            }
+            Label { text: qsTr("Message text (optional)") }
+            TextField {
+                id: sequenceMessageText
+                Layout.fillWidth: true
+                placeholderText: qsTr("e.g. submit(request)")
+                Keys.onReturnPressed: sequenceMessageDialog.accept()
+            }
+            Label { text: qsTr("Target operation (optional)") }
+            ComboBox {
+                id: sequenceMessageTargetOperation
+                Layout.fillWidth: true
+                model: sequenceMessageDialog.operationChoices
+                textRole: "label"
+                valueRole: "id"
+            }
+        }
+    }
+
+    CatalogDialog {
+        id: sequenceMessageOperationDialog
+        property var editorData: ({})
+
+        function indexOfOperation(id) {
+            const choices = editorData.choices || []
+            for (let index = 0; index < choices.length; ++index) {
+                if (choices[index].id === id)
+                    return index
+            }
+            return 0
+        }
+
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(500, parent.width - 40)
+        modal: true
+        focus: true
+        title: qsTr("Link target operation")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            linkedTargetOperation.currentIndex = indexOfOperation(
+                        editorData.targetOperationId || "")
+        }
+        onAccepted: canvas.setSelectedSequenceMessageTargetOperation(
+                        linkedTargetOperation.currentValue)
+
+        contentItem: ColumnLayout {
+            spacing: 10
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: uiTheme.mutedText
+                text: qsTr("Target participant: %1").arg(
+                          sequenceMessageOperationDialog.editorData.targetName || "")
+            }
+            Label { text: qsTr("Target operation") }
+            ComboBox {
+                id: linkedTargetOperation
+                Layout.fillWidth: true
+                model: sequenceMessageOperationDialog.editorData.choices || []
+                textRole: "label"
+                valueRole: "id"
+            }
+        }
+    }
+
+    CatalogDialog {
+        id: sequenceActivationDialog
+        property bool editing: false
+        property var editorData: ({})
+        property var messageChoices: []
+        property var endChoices: []
+        property var placementChoices: []
+        property var contextChoices: []
+
+        function indexOfChoice(choices, id) {
+            for (let index = 0; index < choices.length; ++index) {
+                if (choices[index].id === id)
+                    return index
+            }
+            return 0
+        }
+
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(460, parent.width - 40)
+        modal: true
+        focus: true
+        title: editing ? qsTr("Edit sequence activation")
+                       : qsTr("Create sequence activation")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            placementChoices = messageChoices.length > 0
+                    ? [
+                          { id: "free", label: qsTr("Free position on lifeline") },
+                          { id: "messages", label: qsTr("Bound to messages") }
+                      ]
+                    : [
+                          { id: "free", label: qsTr("Free position on lifeline") }
+                      ]
+            activationPlacement.currentIndex = editorData.startMessageId ? 1 : 0
+            activationLabel.text = editorData.label || ""
+            activationContext.currentIndex = indexOfChoice(
+                        contextChoices, editorData.executionContextId || "")
+            activationStart.currentIndex = indexOfChoice(
+                        messageChoices, editorData.startMessageId || "")
+            activationEnd.currentIndex = indexOfChoice(
+                        endChoices, editorData.endMessageId || "")
+            const start = editorData.startY !== undefined
+                    ? editorData.startY : editorData.defaultStartY
+            const end = editorData.endY !== undefined
+                    ? editorData.endY : editorData.defaultEndY
+            activationFreeStart.value = Math.max(0, Math.round(start || 0))
+            activationFreeHeight.value = Math.max(
+                        24, Math.round((end || 120) - (start || 0)))
+        }
+        onAccepted: {
+            const messageBound = activationPlacement.currentValue === "messages"
+            const startMessageId = messageBound
+                    ? activationStart.currentValue : ""
+            const endMessageId = messageBound
+                    ? activationEnd.currentValue : ""
+            const startY = activationFreeStart.value
+            const endY = startY + activationFreeHeight.value
+            if (editing)
+                canvas.updateSelectedSequenceActivation(
+                            startMessageId, endMessageId,
+                            activationLabel.text, startY, endY,
+                            activationContext.currentValue)
+            else
+                canvas.createSequenceActivation(
+                            startMessageId, endMessageId,
+                            activationLabel.text, startY, endY,
+                            activationContext.currentValue)
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: uiTheme.mutedText
+                text: qsTr("Participant: %1").arg(
+                          sequenceActivationDialog.editorData.participantName || "")
+            }
+            Label { text: qsTr("Placement") }
+            ComboBox {
+                id: activationPlacement
+                Layout.fillWidth: true
+                model: sequenceActivationDialog.placementChoices
+                textRole: "label"
+                valueRole: "id"
+            }
+            Label {
+                text: qsTr("Vertical start")
+                visible: activationPlacement.currentValue === "free"
+            }
+            SpinBox {
+                id: activationFreeStart
+                Layout.fillWidth: true
+                from: 0
+                to: 100000
+                editable: true
+                visible: activationPlacement.currentValue === "free"
+            }
+            Label {
+                text: qsTr("Height")
+                visible: activationPlacement.currentValue === "free"
+            }
+            SpinBox {
+                id: activationFreeHeight
+                Layout.fillWidth: true
+                from: 24
+                to: 100000
+                editable: true
+                visible: activationPlacement.currentValue === "free"
+            }
+            Label {
+                text: qsTr("Start message")
+                visible: activationPlacement.currentValue === "messages"
+            }
+            ComboBox {
+                id: activationStart
+                Layout.fillWidth: true
+                model: sequenceActivationDialog.messageChoices
+                textRole: "label"
+                valueRole: "id"
+                visible: activationPlacement.currentValue === "messages"
+            }
+            Label {
+                text: qsTr("End message")
+                visible: activationPlacement.currentValue === "messages"
+            }
+            ComboBox {
+                id: activationEnd
+                Layout.fillWidth: true
+                model: sequenceActivationDialog.endChoices
+                textRole: "label"
+                valueRole: "id"
+                visible: activationPlacement.currentValue === "messages"
+            }
+            Label { text: qsTr("Label (optional)") }
+            TextField {
+                id: activationLabel
+                Layout.fillWidth: true
+                placeholderText: qsTr("e.g. handle request")
+                Keys.onReturnPressed: sequenceActivationDialog.accept()
+            }
+            Label { text: qsTr("Execution context") }
+            ComboBox {
+                id: activationContext
+                Layout.fillWidth: true
+                model: sequenceActivationDialog.contextChoices
+                textRole: "label"
+                valueRole: "id"
+            }
+        }
+    }
+
+    CatalogDialog {
+        id: sequenceCombinedFragmentDialog
+        property bool editing: false
+        property var editorData: ({})
+        property var messageChoices: []
+
+        function indexOfChoice(id) {
+            for (let index = 0; index < messageChoices.length; ++index) {
+                if (messageChoices[index].id === id)
+                    return index
+            }
+            return 0
+        }
+
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(500, parent.width - 40)
+        modal: true
+        focus: true
+        title: editing ? qsTr("Edit combined fragment")
+                       : qsTr("Create combined fragment")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+        onOpened: {
+            fragmentType.currentIndex = fragmentType.indexOfValue(
+                        editorData.type || "opt")
+            fragmentStart.currentIndex = indexOfChoice(
+                        editorData.startMessageId || "")
+            fragmentEnd.currentIndex = editorData.endMessageId
+                    ? indexOfChoice(editorData.endMessageId)
+                    : Math.max(0, messageChoices.length - 1)
+            fragmentGuard.text = editorData.guard || ""
+            fragmentAlternativeStart.currentIndex = editorData.alternativeStartMessageId
+                    ? indexOfChoice(editorData.alternativeStartMessageId)
+                    : Math.min(Math.max(0, messageChoices.length - 1),
+                               fragmentStart.currentIndex + 1)
+            fragmentAlternativeGuard.text = editorData.alternativeGuard || ""
+        }
+        onAccepted: {
+            const hasSecondOperand = fragmentType.currentValue === "alt"
+                    || fragmentType.currentValue === "par"
+            const alternativeStart = hasSecondOperand
+                    ? fragmentAlternativeStart.currentValue : ""
+            const alternativeGuard = hasSecondOperand
+                    ? fragmentAlternativeGuard.text : ""
+            if (editing)
+                canvas.updateSelectedSequenceCombinedFragment(
+                            fragmentType.currentValue,
+                            fragmentStart.currentValue,
+                            fragmentEnd.currentValue,
+                            fragmentGuard.text,
+                            alternativeStart,
+                            alternativeGuard)
+            else
+                canvas.createSequenceCombinedFragment(
+                            fragmentType.currentValue,
+                            fragmentStart.currentValue,
+                            fragmentEnd.currentValue,
+                            fragmentGuard.text,
+                            alternativeStart,
+                            alternativeGuard)
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: uiTheme.mutedText
+                text: qsTr("Scope: %1 lifeline(s)").arg(
+                          sequenceCombinedFragmentDialog.editorData.participantIds
+                          ? sequenceCombinedFragmentDialog.editorData.participantIds.length : 0)
+            }
+            Label { text: qsTr("Operator") }
+            ComboBox {
+                id: fragmentType
+                Layout.fillWidth: true
+                textRole: "label"
+                valueRole: "value"
+                model: [
+                    { label: qsTr("Optional (opt)"), value: "opt" },
+                    { label: qsTr("Loop"), value: "loop" },
+                    { label: qsTr("Alternative (alt)"), value: "alt" },
+                    { label: qsTr("Parallel (par)"), value: "par" },
+                    { label: qsTr("Critical region"), value: "critical" }
+                ]
+            }
+            Label { text: qsTr("First message") }
+            ComboBox {
+                id: fragmentStart
+                Layout.fillWidth: true
+                model: sequenceCombinedFragmentDialog.messageChoices
+                textRole: "label"
+                valueRole: "id"
+            }
+            Label { text: qsTr("Last message") }
+            ComboBox {
+                id: fragmentEnd
+                Layout.fillWidth: true
+                model: sequenceCombinedFragmentDialog.messageChoices
+                textRole: "label"
+                valueRole: "id"
+            }
+            Label { text: qsTr("Guard (optional)") }
+            TextField {
+                id: fragmentGuard
+                Layout.fillWidth: true
+                placeholderText: qsTr("e.g. request is valid")
+            }
+            Label {
+                visible: fragmentType.currentValue === "alt"
+                         || fragmentType.currentValue === "par"
+                height: visible ? implicitHeight : 0
+                text: qsTr("Second operand starts at")
+            }
+            ComboBox {
+                id: fragmentAlternativeStart
+                Layout.fillWidth: true
+                visible: fragmentType.currentValue === "alt"
+                         || fragmentType.currentValue === "par"
+                height: visible ? implicitHeight : 0
+                model: sequenceCombinedFragmentDialog.messageChoices
+                textRole: "label"
+                valueRole: "id"
+            }
+            Label {
+                visible: fragmentType.currentValue === "alt"
+                         || fragmentType.currentValue === "par"
+                height: visible ? implicitHeight : 0
+                text: qsTr("Second guard (optional)")
+            }
+            TextField {
+                id: fragmentAlternativeGuard
+                Layout.fillWidth: true
+                visible: fragmentType.currentValue === "alt"
+                         || fragmentType.currentValue === "par"
+                height: visible ? implicitHeight : 0
+                placeholderText: qsTr("e.g. otherwise")
+            }
         }
     }
 
@@ -1700,10 +2481,10 @@ Item {
         onTriggered: canvas.arrangeSelection("distributeVertically")
     }
 
-    Shortcut { sequences: ["Ctrl+Shift+P"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible; onActivated: canvas.createElementAtViewportCenter("package") }
-    Shortcut { sequences: ["Ctrl+Shift+C"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible; onActivated: canvas.createElementAtViewportCenter("class") }
-    Shortcut { sequences: ["Ctrl+Shift+S"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible; onActivated: canvas.createElementAtViewportCenter("struct") }
-    Shortcut { sequences: ["Ctrl+Shift+E"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible; onActivated: canvas.createElementAtViewportCenter("enumeration") }
+    Shortcut { sequences: ["Ctrl+Shift+P"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible && canvas.diagramType === "class"; onActivated: canvas.createElementAtViewportCenter("package") }
+    Shortcut { sequences: ["Ctrl+Shift+C"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible && canvas.diagramType === "class"; onActivated: canvas.createElementAtViewportCenter("class") }
+    Shortcut { sequences: ["Ctrl+Shift+S"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible && canvas.diagramType === "class"; onActivated: canvas.createElementAtViewportCenter("struct") }
+    Shortcut { sequences: ["Ctrl+Shift+E"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible && canvas.diagramType === "class"; onActivated: canvas.createElementAtViewportCenter("enumeration") }
     Shortcut { sequences: ["Ctrl+Alt+D"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("dependency") }
     Shortcut { sequences: ["Ctrl+Alt+I"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("realization") }
     Shortcut { sequences: ["Ctrl+Alt+G"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("generalization") }

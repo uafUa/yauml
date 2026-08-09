@@ -654,6 +654,56 @@ history memory grow with total project size rather than the size of each edit.
 - Add SVG export only when there is concrete product demand; it remains outside
   the critical productization path.
 
+## Phase 7: sequence diagrams — baseline complete
+
+- The first domain and interchange slice is implemented. Schema 7 distinguishes
+  class and sequence diagrams and persists sequence participants, messages,
+  execution contexts, source evidence, activation spans, and combined fragments
+  with stable IDs.
+- A compact versioned `.sequence.json5` format uses readable aliases and model
+  references by FQDN or stable ID. `yauml-cli sequence-validate` resolves and
+  validates proposals without mutation; `sequence-import` appends a validated
+  diagram through the shared persistence safety boundary.
+- A project-scoped Codex skill documents a source-evidenced workflow for
+  generating, validating, and importing scenarios without direct edits to
+  canonical project JSON5. Confirmed and inferred runtime behavior remain
+  explicit.
+- The first Qt Quick scene-graph rendering slice is implemented: participant
+  headers and lifelines, sync/async/return/create/destroy/self messages,
+  activation bars, execution-context labels, evidence styling, hit testing,
+  fit-to-content, and PNG export all share one deterministic layout.
+- Participant horizontal movement, message vertical movement with strict order,
+  participant/message selection, Ctrl+A, and in-place text editing use focused
+  polymorphic commands with undo/redo coverage. Bound participant headers use a
+  compact `alias : Type` title plus a separate namespace line instead of
+  widening to the full FQDN.
+- Manual participants and free or message-bound activations are available from
+  the canvas. Messages can be created either from two selected participants or
+  by dragging from a lifeline/activation to a target. Pointer-created messages
+  are inserted at the chosen row; any required downstream shift is one undo
+  unit.
+- Message authoring optionally maintains activation spans: call/async
+  messages start a target activation, while return and destroy messages close
+  the latest applicable open activation. This behavior is enabled by default
+  in the message dialog and remains part of the same undo unit.
+- Create messages position the target participant header at the creation row
+  and begin its lifeline below the header instead of opening an unbounded
+  activation bar.
+- Selected activation bars expose top and bottom resize handles. Bounds snap
+  to nearby participant message rows and retain stable message IDs; free drops
+  become explicit geometry, with Alt available to suppress snapping.
+- A diagram-level execution-context catalogue makes threads, event loops,
+  executors, and tasks manually authorable. Participants select a default
+  context and activations may inherit it or select an override. Context edits,
+  assignments, and reference-clearing deletion are focused undoable commands.
+- Combined fragments support UML `alt`, `opt`, `loop`, `par`, and `critical` in
+  both interchange and interactive editing. Scope follows selected lifelines,
+  bounds remain attached to message IDs, and two-operand kinds render their
+  divider and guards.
+- Target-operation links provide stable method identity and source navigation
+  for behavioral messages. Next slices should focus on richer multi-operand
+  fragment editing and keyboard authoring.
+
 ## Release gates for every tranche
 
 - Human-maintainable implementation with cohesive responsibilities and comments

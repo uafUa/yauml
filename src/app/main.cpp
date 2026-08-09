@@ -229,8 +229,14 @@ int main(int argc, char *argv[]) {
           QTimer::singleShot(150, projectTree, [projectTree] {
             QMetaObject::invokeMethod(projectTree, "expandAllBranches");
           });
+          // Settings pages and their delegates finish construction
+          // asynchronously. Expand once more after that work settles so the
+          // smoke check exercises icon-bearing element rows, not only roots.
+          QTimer::singleShot(450, projectTree, [projectTree] {
+            QMetaObject::invokeMethod(projectTree, "expandAllBranches");
+          });
         });
-    QTimer::singleShot(500, &application, [&engine] {
+    QTimer::singleShot(700, &application, [&engine, &iconRegistry] {
       const auto roots = engine.rootObjects();
       QObject *rootObject = roots.isEmpty() ? nullptr : roots.first();
       QList<QObject *> treeIcons;
@@ -257,16 +263,23 @@ int main(int argc, char *argv[]) {
           ++readyIcons;
       }
       if (assignedIcons == 0 || readyIcons != assignedIcons) {
-        std::fprintf(stderr,
-                     "UI smoke project-tree icons failed: assigned=%d "
-                     "ready=%d delegates=%lld\n",
-                     assignedIcons, readyIcons,
-                     static_cast<long long>(treeIcons.size()));
+        const QByteArray registryClassIcon =
+            iconRegistry
+                .projectTreeIcon(QStringLiteral("element"),
+                                 QStringLiteral("class"), {}, false, false)
+                .toString()
+                .toUtf8();
+        std::fprintf(
+            stderr,
+            "UI smoke project-tree icons failed: assigned=%d "
+            "ready=%d delegates=%lld registry-class=%s\n",
+            assignedIcons, readyIcons, static_cast<long long>(treeIcons.size()),
+            registryClassIcon.constData());
         std::fflush(stderr);
         QCoreApplication::exit(1);
       }
     });
-    QTimer::singleShot(750, &application, [&engine] {
+    QTimer::singleShot(950, &application, [&engine] {
       const auto roots = engine.rootObjects();
       auto *window =
           roots.isEmpty() ? nullptr : qobject_cast<QWindow *>(roots.first());

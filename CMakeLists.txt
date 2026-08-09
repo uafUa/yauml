@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(yauml VERSION 0.8.0 LANGUAGES CXX)
+project(yauml VERSION 0.9.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -79,6 +79,8 @@ add_library(yauml_core STATIC
     src/core/project_schema.cpp
     src/core/project_schema.h
     src/core/project_schema_version.h
+    src/core/sequence_diagram_import.cpp
+    src/core/sequence_diagram_import.h
     src/core/project_serializer.cpp
     src/core/project_serializer.h
     src/core/project_serializer_test_support.cpp
@@ -147,6 +149,8 @@ add_library(yauml_canvas STATIC
     src/ui/diagram_canvas.h
     src/ui/diagram_image_exporter.cpp
     src/ui/diagram_image_exporter.h
+    src/ui/sequence_diagram_layout.cpp
+    src/ui/sequence_diagram_layout.h
 )
 target_include_directories(yauml_canvas PUBLIC src)
 target_link_libraries(yauml_canvas PUBLIC
@@ -402,6 +406,14 @@ if(BUILD_TESTING)
     add_test(NAME yauml_performance_example_validate
         COMMAND yauml_cli validate
             ${CMAKE_CURRENT_SOURCE_DIR}/examples/performance.yauml)
+    add_test(NAME yauml_sequence_import_validate
+        COMMAND yauml_cli sequence-validate
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/sample.yauml
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/sequence-import/service-request.sequence.json5)
+    add_test(NAME yauml_sequence_demo_validate
+        COMMAND yauml_cli sequence-validate
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/sample.yauml
+            ${CMAKE_CURRENT_SOURCE_DIR}/examples/sequence-import/standalone-demo.sequence.json5)
     if(YAUML_LIBCLANG_INCLUDE_DIR AND YAUML_LIBCLANG_LIBRARY)
         add_test(NAME yauml_cpp_preview
             COMMAND yauml_cli cpp-preview
@@ -420,6 +432,8 @@ if(BUILD_TESTING)
             yauml_render_regression
             yauml_cli_validate
             yauml_performance_example_validate
+            yauml_sequence_import_validate
+            yauml_sequence_demo_validate
             yauml_ui_smoke)
         if(YAUML_LIBCLANG_INCLUDE_DIR AND YAUML_LIBCLANG_LIBRARY)
             list(APPEND YAUML_RUNTIME_TESTS yauml_cpp_preview)

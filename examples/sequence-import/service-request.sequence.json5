@@ -1,0 +1,58 @@
+{
+  format: "yauml-sequence",
+  version: 1,
+
+  diagram: {
+    key: "sample-service-request",
+    name: "Service request",
+
+    contexts: [
+      { key: "caller", name: "Caller thread", kind: "thread" },
+      { key: "repository", name: "Repository executor", kind: "executor" },
+    ],
+
+    participants: [
+      {
+        key: "api",
+        element: "ApiService",
+        context: "caller",
+      },
+      {
+        key: "repository",
+        element: "Repository",
+        context: "repository",
+      },
+    ],
+
+    messages: [
+      {
+        key: "load",
+        from: "api",
+        to: "repository",
+        kind: "async",
+        text: "load()",
+        source: {
+          confidence: "inferred",
+          note: "Example hand-off; confirm against the real implementation",
+        },
+      },
+      {
+        key: "entity",
+        from: "repository",
+        to: "api",
+        kind: "return",
+        text: "Entity",
+      },
+    ],
+
+    activations: [
+      {
+        key: "repository-load",
+        participant: "repository",
+        context: "repository",
+        start: "load",
+        end: "entity",
+      },
+    ],
+  },
+}

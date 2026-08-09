@@ -1,0 +1,4 @@
+interface:
+  display_name: "Create yauml Sequence Diagram"
+  short_description: "Generate validated yauml sequence imports"
+  default_prompt: "Use $create-yauml-sequence-diagram to analyze this code path and import a sequence diagram into the current yauml project."

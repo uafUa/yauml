@@ -50,6 +50,14 @@ same-named custom entries or restoring unrelated defaults a user deleted.
 Schema 4 promotes operation signature strings to structured semantic records
 and migrates both live elements and their C++ synchronization baselines with
 matching deterministic operation IDs.
+Schema 5 introduces explicit class and sequence diagram types. Existing
+diagrams migrate to `type: "class"`; sequence-specific records are additive and
+remain isolated from the structural model.
+Schema 6 adds optional sequence combined-fragment records (`alt`, `opt`, and
+`loop`), so migration only advances the manifest marker.
+Schema 7 adds optional links from sequence messages to target operations. The
+link stores both a model-element ID and an operation ID, so it remains stable
+without putting methods into the project browser tree.
 
 Opening an unversioned project produces an informational log entry and marks the
 loaded representation as migrated, but does not itself make an external write.

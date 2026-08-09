@@ -1,6 +1,7 @@
 #include "core/application_settings.h"
 #include "core/cpp_import.h"
 #include "core/project_serializer.h"
+#include "core/sequence_diagram_import.h"
 
 #include <QCoreApplication>
 #include <QTextStream>
@@ -237,12 +238,72 @@ int runCppImportCommand(const QStringList &arguments, bool apply,
              : 0;
 }
 
+int runSequenceCommand(const QStringList &arguments, bool apply,
+                       QTextStream &out, QTextStream &err) {
+  if (arguments.size() < 4) {
+    err << "Usage: yauml-cli "
+        << (apply ? "sequence-import" : "sequence-validate")
+        << " <project-directory> <sequence-file>"
+        << (apply ? " [--overwrite-external-changes]" : "") << '\n';
+    return 64;
+  }
+
+  bool overwriteExternalChanges = false;
+  for (qsizetype index = 4; index < arguments.size(); ++index) {
+    const QString argument = arguments.at(index);
+    if (apply && argument == QStringLiteral("--overwrite-external-changes")) {
+      overwriteExternalChanges = true;
+    } else {
+      err << "Unknown option: " << argument << '\n';
+      return 64;
+    }
+  }
+
+  const QString projectPath = arguments.at(2);
+  const auto loaded = yauml::ProjectSerializer::load(projectPath);
+  writeDiagnostics(loaded.diagnostics, out, err);
+  if (!loaded.ok)
+    return 2;
+
+  const auto sequence = yauml::SequenceDiagramImportService::load(
+      arguments.at(3), loaded.project);
+  writeDiagnostics(sequence.diagnostics, out, err);
+  if (!sequence.ok)
+    return 2;
+
+  if (!apply) {
+    out << "Valid sequence diagram import: " << sequence.diagram.name << " ("
+        << sequence.diagram.sequenceParticipants.size() << " participants, "
+        << sequence.diagram.sequenceMessages.size() << " messages, "
+        << sequence.diagram.sequenceExecutionContexts.size()
+        << " execution contexts)\n";
+    return 0;
+  }
+
+  yauml::ProjectData imported = loaded.project;
+  QList<yauml::Diagnostic> applyDiagnostics;
+  if (!yauml::SequenceDiagramImportService::append(imported, sequence,
+                                                   &applyDiagnostics)) {
+    writeDiagnostics(applyDiagnostics, out, err);
+    return 2;
+  }
+  const auto saved = yauml::ProjectSerializer::save(
+      projectPath, imported, loaded.revision, overwriteExternalChanges);
+  writeDiagnostics(saved.diagnostics, out, err);
+  if (!saved.ok)
+    return saved.externalChangesDetected ? 4 : 2;
+  out << "Imported sequence diagram: " << sequence.diagram.name << '\n';
+  return 0;
+}
+
 void writeUsage(QTextStream &err) {
   err << "Usage: yauml-cli <command> [arguments]\n"
          "Commands:\n"
          "  validate     Validate a yauml project\n"
          "  cpp-preview  Preview C++ source synchronization\n"
-         "  cpp-import   Apply C++ source synchronization\n";
+         "  cpp-import   Apply C++ source synchronization\n"
+         "  sequence-validate  Validate a sequence import file\n"
+         "  sequence-import    Import a sequence diagram into a project\n";
 }
 
 } // namespace
@@ -270,6 +331,10 @@ int main(int argc, char *argv[]) {
     return runCppImportCommand(arguments, false, out, err);
   if (command == QStringLiteral("cpp-import"))
     return runCppImportCommand(arguments, true, out, err);
+  if (command == QStringLiteral("sequence-validate"))
+    return runSequenceCommand(arguments, false, out, err);
+  if (command == QStringLiteral("sequence-import"))
+    return runSequenceCommand(arguments, true, out, err);
 
   err << "Unknown command: " << command << '\n';
   writeUsage(err);

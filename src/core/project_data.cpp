@@ -36,6 +36,28 @@ ElementType elementTypeFromString(const QString &value, bool *ok) {
   return ElementType::Class;
 }
 
+QString toString(DiagramType type) {
+  switch (type) {
+  case DiagramType::Class:
+    return QStringLiteral("class");
+  case DiagramType::Sequence:
+    return QStringLiteral("sequence");
+  }
+  return QStringLiteral("class");
+}
+
+DiagramType diagramTypeFromString(const QString &value, bool *ok) {
+  if (ok)
+    *ok = true;
+  if (value == QStringLiteral("class"))
+    return DiagramType::Class;
+  if (value == QStringLiteral("sequence"))
+    return DiagramType::Sequence;
+  if (ok)
+    *ok = false;
+  return DiagramType::Class;
+}
+
 QString toString(RelationshipType type) {
   switch (type) {
   case RelationshipType::Dependency:
@@ -217,6 +239,136 @@ OperationSignatureMode operationSignatureModeFromString(const QString &value,
   return OperationSignatureMode::Full;
 }
 
+QString toString(SequenceExecutionContextType type) {
+  switch (type) {
+  case SequenceExecutionContextType::Thread:
+    return QStringLiteral("thread");
+  case SequenceExecutionContextType::EventLoop:
+    return QStringLiteral("event-loop");
+  case SequenceExecutionContextType::Executor:
+    return QStringLiteral("executor");
+  case SequenceExecutionContextType::Task:
+    return QStringLiteral("task");
+  }
+  return QStringLiteral("thread");
+}
+
+SequenceExecutionContextType
+sequenceExecutionContextTypeFromString(const QString &value, bool *ok) {
+  if (ok)
+    *ok = true;
+  if (value == QStringLiteral("thread"))
+    return SequenceExecutionContextType::Thread;
+  if (value == QStringLiteral("event-loop"))
+    return SequenceExecutionContextType::EventLoop;
+  if (value == QStringLiteral("executor"))
+    return SequenceExecutionContextType::Executor;
+  if (value == QStringLiteral("task"))
+    return SequenceExecutionContextType::Task;
+  if (ok)
+    *ok = false;
+  return SequenceExecutionContextType::Thread;
+}
+
+QString toString(SequenceMessageType type) {
+  switch (type) {
+  case SequenceMessageType::Synchronous:
+    return QStringLiteral("sync");
+  case SequenceMessageType::Asynchronous:
+    return QStringLiteral("async");
+  case SequenceMessageType::Return:
+    return QStringLiteral("return");
+  case SequenceMessageType::Create:
+    return QStringLiteral("create");
+  case SequenceMessageType::Destroy:
+    return QStringLiteral("destroy");
+  }
+  return QStringLiteral("sync");
+}
+
+SequenceMessageType sequenceMessageTypeFromString(const QString &value,
+                                                  bool *ok) {
+  if (ok)
+    *ok = true;
+  if (value == QStringLiteral("sync"))
+    return SequenceMessageType::Synchronous;
+  if (value == QStringLiteral("async"))
+    return SequenceMessageType::Asynchronous;
+  if (value == QStringLiteral("return"))
+    return SequenceMessageType::Return;
+  if (value == QStringLiteral("create"))
+    return SequenceMessageType::Create;
+  if (value == QStringLiteral("destroy"))
+    return SequenceMessageType::Destroy;
+  if (ok)
+    *ok = false;
+  return SequenceMessageType::Synchronous;
+}
+
+QString toString(SequenceCombinedFragmentType type) {
+  switch (type) {
+  case SequenceCombinedFragmentType::Alternative:
+    return QStringLiteral("alt");
+  case SequenceCombinedFragmentType::Optional:
+    return QStringLiteral("opt");
+  case SequenceCombinedFragmentType::Loop:
+    return QStringLiteral("loop");
+  case SequenceCombinedFragmentType::Parallel:
+    return QStringLiteral("par");
+  case SequenceCombinedFragmentType::Critical:
+    return QStringLiteral("critical");
+  }
+  return QStringLiteral("opt");
+}
+
+SequenceCombinedFragmentType
+sequenceCombinedFragmentTypeFromString(const QString &value, bool *ok) {
+  if (ok)
+    *ok = true;
+  if (value == QStringLiteral("alt"))
+    return SequenceCombinedFragmentType::Alternative;
+  if (value == QStringLiteral("opt"))
+    return SequenceCombinedFragmentType::Optional;
+  if (value == QStringLiteral("loop"))
+    return SequenceCombinedFragmentType::Loop;
+  if (value == QStringLiteral("par"))
+    return SequenceCombinedFragmentType::Parallel;
+  if (value == QStringLiteral("critical"))
+    return SequenceCombinedFragmentType::Critical;
+  if (ok)
+    *ok = false;
+  return SequenceCombinedFragmentType::Optional;
+}
+
+bool sequenceCombinedFragmentHasSecondOperand(
+    SequenceCombinedFragmentType type) {
+  return type == SequenceCombinedFragmentType::Alternative ||
+         type == SequenceCombinedFragmentType::Parallel;
+}
+
+QString toString(SequenceEvidenceConfidence confidence) {
+  switch (confidence) {
+  case SequenceEvidenceConfidence::Confirmed:
+    return QStringLiteral("confirmed");
+  case SequenceEvidenceConfidence::Inferred:
+    return QStringLiteral("inferred");
+  }
+  return QStringLiteral("confirmed");
+}
+
+SequenceEvidenceConfidence
+sequenceEvidenceConfidenceFromString(const QString &value, bool *ok) {
+  if (ok)
+    *ok = true;
+  if (value == QStringLiteral("confirmed"))
+    return SequenceEvidenceConfidence::Confirmed;
+  if (value == QStringLiteral("inferred"))
+    return SequenceEvidenceConfidence::Inferred;
+  if (ok)
+    *ok = false;
+  return SequenceEvidenceConfidence::Confirmed;
+}
+
 QString newId() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 
 ProjectData createStarterProject(const QString &name) {
@@ -343,6 +495,55 @@ NoteAttachment *findNoteAttachment(Diagram &diagram, const QString &id) {
 const NoteAttachment *findNoteAttachment(const Diagram &diagram,
                                          const QString &id) {
   return findById(diagram.noteAttachments, id);
+}
+
+SequenceParticipant *findSequenceParticipant(Diagram &diagram,
+                                             const QString &id) {
+  return findById(diagram.sequenceParticipants, id);
+}
+
+const SequenceParticipant *findSequenceParticipant(const Diagram &diagram,
+                                                   const QString &id) {
+  return findById(diagram.sequenceParticipants, id);
+}
+
+SequenceMessage *findSequenceMessage(Diagram &diagram, const QString &id) {
+  return findById(diagram.sequenceMessages, id);
+}
+
+const SequenceMessage *findSequenceMessage(const Diagram &diagram,
+                                           const QString &id) {
+  return findById(diagram.sequenceMessages, id);
+}
+
+SequenceActivation *findSequenceActivation(Diagram &diagram,
+                                           const QString &id) {
+  return findById(diagram.sequenceActivations, id);
+}
+
+const SequenceActivation *findSequenceActivation(const Diagram &diagram,
+                                                 const QString &id) {
+  return findById(diagram.sequenceActivations, id);
+}
+
+SequenceCombinedFragment *findSequenceCombinedFragment(Diagram &diagram,
+                                                        const QString &id) {
+  return findById(diagram.sequenceCombinedFragments, id);
+}
+
+const SequenceCombinedFragment *
+findSequenceCombinedFragment(const Diagram &diagram, const QString &id) {
+  return findById(diagram.sequenceCombinedFragments, id);
+}
+
+SequenceExecutionContext *findSequenceExecutionContext(Diagram &diagram,
+                                                       const QString &id) {
+  return findById(diagram.sequenceExecutionContexts, id);
+}
+
+const SequenceExecutionContext *
+findSequenceExecutionContext(const Diagram &diagram, const QString &id) {
+  return findById(diagram.sequenceExecutionContexts, id);
 }
 
 } // namespace yauml

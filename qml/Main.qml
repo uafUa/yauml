@@ -303,6 +303,11 @@ ApplicationWindow {
                                  root,
                                  cppImportController.configuredSourceRoots)
             }
+            CatalogAction {
+                catalogId: "project.importSequence"
+                text: qsTr("Import Sequence Diagram…")
+                onTriggered: sequenceImportDialog.open()
+            }
             MenuSeparator {}
             CatalogAction {
                 catalogId: "project.exit"
@@ -459,11 +464,8 @@ ApplicationWindow {
             ToolSeparator {}
             CatalogToolButton {
                 catalogId: "workspace.addDiagram"
-                text: qsTr("+ Diagram")
-                onClicked: {
-                    const id = projectController.addDiagram()
-                    workspaceController.activeDiagramId = id
-                }
+                text: qsTr("+ Diagram…")
+                onClicked: newDiagramDialog.open()
             }
             Item { Layout.fillWidth: true }
             CatalogToolButton {
@@ -729,7 +731,7 @@ ApplicationWindow {
                             projectTree.expand(row)
                     }
                     function expandAllBranches() {
-                        expand(0)
+                        expandRecursively()
                     }
                     function toggleBranchForObject(objectId, kind) {
                         // Delegate rows are flattened view coordinates and may
@@ -844,16 +846,9 @@ ApplicationWindow {
                         required property string objectType
                         required property bool nested
                         required property string name
+                        required property int column
                         property bool browserDropActive: false
                         property int browserInsertionEdge: 0
-                        readonly property url treeIconSource:
-                            column === 0 ? iconRegistry.projectTreeIcon(
-                                model.kind || "",
-                                model.objectType || "",
-                                model.objectId || "",
-                                model.nested || false,
-                                expanded)
-                                         : ""
                         highlighted: kind !== "root" && (
                                          kind === "diagram"
                                          ? objectId === workspaceController.activeDiagramId
@@ -871,7 +866,14 @@ ApplicationWindow {
                                 id: treeIcon
                                 objectName: "projectTreeIcon"
                                 visible: status === Image.Ready
-                                source: treeDelegate.treeIconSource
+                                source: treeDelegate.column === 0
+                                        ? iconRegistry.projectTreeIcon(
+                                              treeDelegate.kind,
+                                              treeDelegate.objectType,
+                                              treeDelegate.objectId,
+                                              treeDelegate.nested,
+                                              treeDelegate.expanded)
+                                        : ""
                                 fillMode: Image.PreserveAspectFit
                                 sourceSize.width: iconRegistry.defaultSize
                                 sourceSize.height: iconRegistry.defaultSize
@@ -1686,6 +1688,18 @@ ApplicationWindow {
                              treeContextMenu.targetKind === "root"
                              ? "" : treeContextMenu.targetId)
         }
+        CatalogMenuItem {
+            catalogId: "workspace.addDiagram"
+            // The Diagrams root is the natural creation point in the project
+            // browser. Keeping it available on a diagram entry avoids a trip
+            // back to the toolbar when working from that section.
+            visible: (treeContextMenu.targetKind === "root"
+                      && treeContextMenu.targetId === "diagrams")
+                     || treeContextMenu.targetKind === "diagram"
+            height: visible ? implicitHeight : 0
+            text: qsTr("New diagram…")
+            onTriggered: newDiagramDialog.open()
+        }
         MenuSeparator {
             visible: treeContextMenu.targetKind === "folder"
                      || treeContextMenu.targetKind === "element"
@@ -1860,6 +1874,54 @@ ApplicationWindow {
                 const okButton = folderNameDialog.standardButton(Dialog.Ok)
                 if (okButton)
                     okButton.enabled = text.trim().length > 0
+            }
+        }
+    }
+
+    // Diagram creation belongs to the workspace, not to file management.
+    // Keep the choice in a single dialog so later diagram types and creation
+    // options can be added without multiplying entry points.
+    CatalogDialog {
+        id: newDiagramDialog
+        objectName: "newDiagramDialog"
+        parent: Overlay.overlay
+        anchors.centerIn: parent
+        width: Math.min(400, parent.width - 40)
+        modal: true
+        focus: true
+        title: qsTr("New diagram")
+        standardButtons: Dialog.Ok | Dialog.Cancel
+
+        onOpened: newDiagramType.currentIndex = 0
+        onAccepted: {
+            const id = newDiagramType.currentValue === "sequence"
+                    ? projectController.addSequenceDiagram()
+                    : projectController.addDiagram()
+            if (id.length > 0)
+                workspaceController.activeDiagramId = id
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 10
+
+            Label { text: qsTr("Diagram type") }
+            ComboBox {
+                id: newDiagramType
+                Layout.fillWidth: true
+                textRole: "label"
+                valueRole: "value"
+                model: [
+                    { label: qsTr("Class diagram"), value: "class" },
+                    { label: qsTr("Sequence diagram"), value: "sequence" }
+                ]
+            }
+            Label {
+                Layout.fillWidth: true
+                wrapMode: Text.Wrap
+                color: uiTheme.mutedText
+                text: newDiagramType.currentValue === "sequence"
+                      ? qsTr("Creates a lifeline-based interaction diagram with one editable participant.")
+                      : qsTr("Creates a UML class diagram for types and relationships.")
             }
         }
     }
@@ -3985,6 +4047,22 @@ ApplicationWindow {
         onAccepted: {
             cppImportDialog.open()
             cppImportController.previewSources([selectedFolder])
+        }
+    }
+
+    FileDialog {
+        id: sequenceImportDialog
+        title: qsTr("Import yauml sequence diagram")
+        fileMode: FileDialog.OpenFile
+        nameFilters: [
+            qsTr("yauml sequence diagrams (*.sequence.json5)"),
+            qsTr("JSON5 files (*.json5)"),
+            qsTr("All files (*)")
+        ]
+        onAccepted: {
+            const id = projectController.importSequenceDiagram(selectedFile)
+            if (id.length > 0)
+                workspaceController.activeDiagramId = id
         }
     }
 
