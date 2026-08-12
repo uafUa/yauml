@@ -14,9 +14,10 @@ class DiagramCanvas;
 class ProjectController;
 
 // Renders a complete diagram through the production Qt Quick canvas and writes
-// the resulting raster image. The temporary render surface keeps export state
-// out of the interactive canvas and provides the same geometry, text, clipping,
-// filtering, styling, and connector rendering as the editor.
+// the captured result as PNG or a single-page PDF. The temporary render surface
+// keeps export state out of the interactive canvas and provides the same
+// geometry, text, clipping, filtering, styling, and connector rendering as the
+// editor for every output format.
 class DiagramImageExporter : public QObject {
   Q_OBJECT
   Q_PROPERTY(ProjectController *project READ project WRITE setProject NOTIFY
@@ -44,6 +45,7 @@ public:
   bool busy() const;
 
   Q_INVOKABLE void exportPng(const QUrl &fileUrl, qreal requestedScale = 1.0);
+  Q_INVOKABLE void exportPdf(const QUrl &fileUrl, qreal requestedScale = 1.0);
 
 signals:
   void projectChanged();
@@ -55,6 +57,10 @@ signals:
   void exportFailed(const QString &message);
 
 private:
+  enum class OutputFormat { Png, Pdf };
+
+  void exportDiagram(const QUrl &fileUrl, qreal requestedScale,
+                     OutputFormat format);
   void capture(quint64 serial);
   void fail(const QString &message, quint64 serial);
   void resetSurface();
@@ -68,6 +74,7 @@ private:
   QPointer<QQuickWindow> m_window;
   QPointer<DiagramCanvas> m_canvas;
   QString m_outputPath;
+  OutputFormat m_outputFormat = OutputFormat::Png;
   QSize m_targetPixelSize;
   int m_renderedFrames = 0;
   bool m_captureScheduled = false;

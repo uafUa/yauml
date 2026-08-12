@@ -297,6 +297,7 @@ public:
                                          bool automaticActivation = false);
   Q_INVOKABLE void cancelPendingSequenceMessage();
   Q_INVOKABLE QString sequenceMessageEndpointSummary() const;
+  Q_INVOKABLE bool sequenceReturnCreationAllowed() const;
   Q_INVOKABLE QVariantList sequenceMessageTargetOperationChoices() const;
   Q_INVOKABLE QVariantMap sequenceMessageTargetOperationEditorData() const;
   Q_INVOKABLE bool
@@ -312,16 +313,13 @@ public:
       const QString &label, qreal startY, qreal endY,
       const QString &executionContextId = {});
   Q_INVOKABLE QVariantMap sequenceCombinedFragmentEditorData() const;
-  Q_INVOKABLE bool createSequenceCombinedFragment(
-      const QString &type, const QString &startMessageId,
-      const QString &endMessageId, const QString &guard,
-      const QString &alternativeStartMessageId,
-      const QString &alternativeGuard);
+  Q_INVOKABLE bool createSequenceCombinedFragment(const QString &type,
+                                                  const QString &startMessageId,
+                                                  const QString &endMessageId,
+                                                  const QVariantList &operands);
   Q_INVOKABLE bool updateSelectedSequenceCombinedFragment(
       const QString &type, const QString &startMessageId,
-      const QString &endMessageId, const QString &guard,
-      const QString &alternativeStartMessageId,
-      const QString &alternativeGuard);
+      const QString &endMessageId, const QVariantList &operands);
   Q_INVOKABLE void editSelectedNote();
   Q_INVOKABLE bool startSelectedNoteAttachment();
   Q_INVOKABLE void removeSelectedNoteAttachments();
@@ -691,12 +689,17 @@ private:
   qreal m_sequenceActivationPreviewEndY = 0.0;
   QString m_sequenceGestureSourceParticipant;
   QString m_sequenceGestureTargetParticipant;
+  QString m_sequenceGestureSourceActivation;
+  // A message-kind key pressed during the drag selects quick creation. Empty
+  // retains the full details dialog on release.
+  QString m_sequenceGestureMessageType;
   QPointF m_sequenceGesturePointer;
   qreal m_sequenceGestureY = 0.0;
   // These survive after mouse release while the modal message editor is open.
   // A negative Y means the older two-selected-participants command path.
   QString m_pendingSequenceMessageSource;
   QString m_pendingSequenceMessageTarget;
+  QString m_pendingSequenceMessageSourceActivation;
   qreal m_pendingSequenceMessageY = -1.0;
   ResizeHandle m_resizeHandle = ResizeHandle::None;
   QHash<QString, QRectF> m_originalGeometry;

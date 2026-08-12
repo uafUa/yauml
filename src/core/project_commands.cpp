@@ -1609,17 +1609,35 @@ DeleteSequenceItemsCommand::DeleteSequenceItemsCommand(
     removedMessageIds.insert(message.id);
   }
 
+  QSet<QString> removedActivationIds;
   for (qsizetype index = 0; index < diagram->sequenceActivations.size();
        ++index) {
     const SequenceActivation &activation =
         diagram->sequenceActivations.at(index);
-    if (!requestedActivations.contains(activation.id) &&
-        !removedParticipantIds.contains(activation.participantId) &&
-        !removedMessageIds.contains(activation.startMessageId) &&
-        !removedMessageIds.contains(activation.endMessageId)) {
-      continue;
+    const bool removeActivation =
+        requestedActivations.contains(activation.id) ||
+        removedParticipantIds.contains(activation.participantId) ||
+        removedMessageIds.contains(activation.startMessageId);
+    if (removeActivation) {
+      m_activations.append({index, activation});
+      removedActivationIds.insert(activation.id);
+    } else if (!activation.endMessageId.isEmpty() &&
+               removedMessageIds.contains(activation.endMessageId)) {
+      // The activation remains meaningful without its optional end boundary.
+      // It becomes open-ended until another return closes it.
+      m_activationEndChanges.append({activation.id, activation.endMessageId});
     }
-    m_activations.append({index, activation});
+  }
+
+  // A message remains valid after its optional source bar is deleted; it
+  // falls back to the innermost active bar at render time. Record the cleared
+  // references so undo restores the exact pointer-authored level.
+  for (const SequenceMessage &message : diagram->sequenceMessages) {
+    if (!removedMessageIds.contains(message.id) &&
+        removedActivationIds.contains(message.sourceActivationId)) {
+      m_messageSourceActivationChanges.append(
+          {message.id, message.sourceActivationId});
+    }
   }
 
   for (qsizetype index = 0; index < diagram->sequenceCombinedFragments.size();
@@ -1631,10 +1649,15 @@ DeleteSequenceItemsCommand::DeleteSequenceItemsCommand(
         [&removedParticipantIds](const QString &participantId) {
           return removedParticipantIds.contains(participantId);
         });
+    const bool operandBoundaryRemoved = std::any_of(
+        fragment.operands.cbegin(), fragment.operands.cend(),
+        [&removedMessageIds](const SequenceCombinedFragmentOperand &operand) {
+          return removedMessageIds.contains(operand.startMessageId);
+        });
     if (!requestedFragments.contains(fragment.id) && !participantRemoved &&
         !removedMessageIds.contains(fragment.startMessageId) &&
         !removedMessageIds.contains(fragment.endMessageId) &&
-        !removedMessageIds.contains(fragment.alternativeStartMessageId)) {
+        !operandBoundaryRemoved) {
       continue;
     }
     m_fragments.append({index, fragment});
@@ -1643,13 +1666,25 @@ DeleteSequenceItemsCommand::DeleteSequenceItemsCommand(
 
 bool DeleteSequenceItemsCommand::hasChanges() const {
   return !m_participants.isEmpty() || !m_messages.isEmpty() ||
-         !m_activations.isEmpty() || !m_fragments.isEmpty();
+         !m_activations.isEmpty() || !m_activationEndChanges.isEmpty() ||
+         !m_messageSourceActivationChanges.isEmpty() || !m_fragments.isEmpty();
 }
 
 void DeleteSequenceItemsCommand::execute(ProjectData &project) {
   auto *diagram = findDiagram(project, m_diagramId);
   if (!diagram)
     return;
+  for (const ActivationEndChange &change :
+       std::as_const(m_activationEndChanges)) {
+    if (auto *activation =
+            findSequenceActivation(*diagram, change.activationId))
+      activation->endMessageId.clear();
+  }
+  for (const MessageSourceActivationChange &change :
+       std::as_const(m_messageSourceActivationChanges)) {
+    if (auto *message = findSequenceMessage(*diagram, change.messageId))
+      message->sourceActivationId.clear();
+  }
   for (auto record = m_fragments.crbegin(); record != m_fragments.crend();
        ++record) {
     removeRecordedValue(diagram->sequenceCombinedFragments, record->index,
@@ -1685,6 +1720,17 @@ void DeleteSequenceItemsCommand::revert(ProjectData &project) {
   for (const auto &record : m_activations)
     insertAtRecordedPosition(diagram->sequenceActivations, record.index,
                              record.value);
+  for (const ActivationEndChange &change :
+       std::as_const(m_activationEndChanges)) {
+    if (auto *activation =
+            findSequenceActivation(*diagram, change.activationId))
+      activation->endMessageId = change.endMessageId;
+  }
+  for (const MessageSourceActivationChange &change :
+       std::as_const(m_messageSourceActivationChanges)) {
+    if (auto *message = findSequenceMessage(*diagram, change.messageId))
+      message->sourceActivationId = change.sourceActivationId;
+  }
   for (const auto &record : m_fragments)
     insertAtRecordedPosition(diagram->sequenceCombinedFragments, record.index,
                              record.value);

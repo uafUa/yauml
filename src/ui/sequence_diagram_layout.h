@@ -45,14 +45,17 @@ struct SequenceActivationLayout {
   QRectF rect;
 };
 
+struct SequenceCombinedFragmentOperandLayout {
+  QString guard;
+  // The first operand starts at the frame top and therefore has no divider.
+  qreal dividerY = -1.0;
+};
+
 struct SequenceCombinedFragmentLayout {
   QString id;
   SequenceCombinedFragmentType type = SequenceCombinedFragmentType::Optional;
-  QString guard;
-  QString alternativeGuard;
   QRectF rect;
-  // A negative value means this fragment has a single operand.
-  qreal alternativeDividerY = -1.0;
+  QVector<SequenceCombinedFragmentOperandLayout> operands;
 };
 
 struct SequenceDiagramLayout {

@@ -63,6 +63,126 @@ latestOpenMessageBoundActivation(const Diagram &diagram,
   return result;
 }
 
+bool activationContainsRow(const Diagram &diagram,
+                           const SequenceActivation &activation, qreal y) {
+  const auto *startMessage =
+      activation.startMessageId.isEmpty()
+          ? nullptr
+          : findSequenceMessage(diagram, activation.startMessageId);
+  const auto *endMessage =
+      activation.endMessageId.isEmpty()
+          ? nullptr
+          : findSequenceMessage(diagram, activation.endMessageId);
+  const qreal startY =
+      startMessage
+          ? startMessage->y
+          : activation.startY.value_or(std::numeric_limits<qreal>::infinity());
+  const qreal endY =
+      endMessage
+          ? endMessage->y
+          : activation.endY.value_or(std::numeric_limits<qreal>::infinity());
+  return std::isfinite(startY) && y >= startY && y <= endY;
+}
+
+const SequenceActivation *
+returnActivationFor(const Diagram &diagram, const QString &sourceParticipantId,
+                    const QString &targetParticipantId, qreal beforeY,
+                    const QString &requestedActivationId) {
+  const auto matchesReturn = [&](const SequenceActivation &activation) {
+    if (activation.participantId != sourceParticipantId ||
+        activation.startMessageId.isEmpty() ||
+        !activation.endMessageId.isEmpty())
+      return false;
+    const auto *startMessage =
+        findSequenceMessage(diagram, activation.startMessageId);
+    return startMessage && startMessage->y < beforeY &&
+           startMessage->targetParticipantId == sourceParticipantId &&
+           startMessage->sourceParticipantId == targetParticipantId;
+  };
+
+  if (!requestedActivationId.isEmpty()) {
+    const auto *requested =
+        findSequenceActivation(diagram, requestedActivationId);
+    return requested && matchesReturn(*requested) ? requested : nullptr;
+  }
+
+  // Commands created from two selected lifelines have no precise bar under
+  // the pointer. Choose the most recent open activation belonging to that
+  // caller, while deliberately ignoring unrelated nested self-activations.
+  const SequenceActivation *result = nullptr;
+  qreal latestStartY = -std::numeric_limits<qreal>::infinity();
+  for (const SequenceActivation &activation : diagram.sequenceActivations) {
+    if (!matchesReturn(activation))
+      continue;
+    const qreal startY =
+        findSequenceMessage(diagram, activation.startMessageId)->y;
+    if (startY >= latestStartY) {
+      result = &activation;
+      latestStartY = startY;
+    }
+  }
+  return result;
+}
+
+QStringList openNestedActivationIds(const Diagram &diagram,
+                                    const SequenceActivation &root,
+                                    qreal beforeY) {
+  const auto *rootStart = findSequenceMessage(diagram, root.startMessageId);
+  if (!rootStart)
+    return {};
+  QStringList ids;
+  for (const SequenceActivation &activation : diagram.sequenceActivations) {
+    if (activation.participantId != root.participantId ||
+        activation.startMessageId.isEmpty() ||
+        !activation.endMessageId.isEmpty())
+      continue;
+    const auto *startMessage =
+        findSequenceMessage(diagram, activation.startMessageId);
+    if (startMessage && startMessage->y >= rootStart->y &&
+        startMessage->y < beforeY)
+      ids.append(activation.id);
+  }
+  return ids;
+}
+
+bool activationDescendsFrom(const Diagram &diagram,
+                            const SequenceActivation &candidate,
+                            const QString &ancestorId) {
+  const SequenceActivation *current = &candidate;
+  QSet<QString> visited;
+  while (current && !visited.contains(current->id)) {
+    visited.insert(current->id);
+    const auto *startMessage =
+        findSequenceMessage(diagram, current->startMessageId);
+    if (!startMessage || startMessage->sourceActivationId.isEmpty())
+      return false;
+    if (startMessage->sourceActivationId == ancestorId)
+      return true;
+    current = findSequenceActivation(diagram, startMessage->sourceActivationId);
+  }
+  return false;
+}
+
+QStringList openDescendantActivationIds(const Diagram &diagram,
+                                        const SequenceActivation &root,
+                                        qreal beforeY) {
+  QStringList ids;
+  for (const SequenceActivation &activation : diagram.sequenceActivations) {
+    if (activation.id == root.id ||
+        activation.participantId != root.participantId ||
+        activation.startMessageId.isEmpty() ||
+        !activation.endMessageId.isEmpty() ||
+        !activationDescendsFrom(diagram, activation, root.id)) {
+      continue;
+    }
+    const auto *startMessage =
+        findSequenceMessage(diagram, activation.startMessageId);
+    if (startMessage && startMessage->y < beforeY)
+      ids.append(activation.id);
+  }
+  return ids;
+}
+
 const ModelOperation *findOperation(const ModelElement &element,
                                     const QString &operationId) {
   const auto found =
@@ -102,7 +222,8 @@ bool validSequenceActivationBounds(const Diagram &diagram,
 bool validSequenceCombinedFragmentBounds(
     const Diagram &diagram, const QStringList &participantIds,
     SequenceCombinedFragmentType type, const QString &startMessageId,
-    const QString &endMessageId, const QString &alternativeStartMessageId) {
+    const QString &endMessageId,
+    const QList<SequenceCombinedFragmentOperand> &operands) {
   if (participantIds.isEmpty())
     return false;
   QSet<QString> uniqueParticipantIds;
@@ -118,15 +239,26 @@ bool validSequenceCombinedFragmentBounds(
       diagram.sequenceMessages.indexOf(*end) <
           diagram.sequenceMessages.indexOf(*start))
     return false;
-  if (!sequenceCombinedFragmentHasSecondOperand(type))
-    return alternativeStartMessageId.isEmpty();
-  const auto *alternativeStart =
-      findSequenceMessage(diagram, alternativeStartMessageId);
-  return alternativeStart &&
-         diagram.sequenceMessages.indexOf(*alternativeStart) >
-             diagram.sequenceMessages.indexOf(*start) &&
-         diagram.sequenceMessages.indexOf(*alternativeStart) <=
-             diagram.sequenceMessages.indexOf(*end);
+  const bool multipleOperands = sequenceCombinedFragmentHasSecondOperand(type);
+  if ((!multipleOperands && operands.size() != 1) ||
+      (multipleOperands && operands.size() < 2) ||
+      operands.constFirst().startMessageId != startMessageId)
+    return false;
+
+  int previousOrder = -1;
+  const int startOrder = diagram.sequenceMessages.indexOf(*start);
+  const int endOrder = diagram.sequenceMessages.indexOf(*end);
+  for (const SequenceCombinedFragmentOperand &operand : operands) {
+    const auto *operandStart =
+        findSequenceMessage(diagram, operand.startMessageId);
+    if (!operandStart)
+      return false;
+    const int order = diagram.sequenceMessages.indexOf(*operandStart);
+    if (order < startOrder || order > endOrder || order <= previousOrder)
+      return false;
+    previousOrder = order;
+  }
+  return true;
 }
 
 QVariantMap diagramStyleMap(const DiagramStyle &style) {
@@ -4248,11 +4380,25 @@ bool ProjectController::setSequenceParticipantExecutionContext(
   return true;
 }
 
+bool ProjectController::canCreateSequenceReturn(
+    const QString &diagramId, const QString &sourceParticipantId,
+    const QString &targetParticipantId, qreal beforeY,
+    const QString &sourceActivationId) const {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || diagram->type != DiagramType::Sequence)
+    return false;
+  const qreal boundary = std::isfinite(beforeY) && beforeY >= 0.0
+                             ? beforeY
+                             : std::numeric_limits<qreal>::infinity();
+  return returnActivationFor(*diagram, sourceParticipantId, targetParticipantId,
+                             boundary, sourceActivationId) != nullptr;
+}
+
 QString ProjectController::createSequenceMessage(
     const QString &diagramId, const QString &sourceParticipantId,
     const QString &targetParticipantId, const QString &type,
     const QString &text, const QString &targetOperationId, qreal requestedY,
-    bool automaticActivation) {
+    bool automaticActivation, const QString &sourceActivationId) {
   const auto *diagram = findDiagram(m_data, diagramId);
   bool typeOk = false;
   const SequenceMessageType messageType =
@@ -4331,6 +4477,34 @@ QString ProjectController::createSequenceMessage(
                             diagram->sequenceMessages.at(insertionIndex).y);
     }
   }
+  const auto *sourceActivation =
+      sourceActivationId.isEmpty()
+          ? nullptr
+          : findSequenceActivation(*diagram, sourceActivationId);
+  if (!sourceActivationId.isEmpty() &&
+      (!sourceActivation ||
+       sourceActivation->participantId != sourceParticipantId ||
+       !activationContainsRow(*diagram, *sourceActivation, message.y))) {
+    m_diagnostics.addWarning(
+        QStringLiteral("sequence"),
+        QStringLiteral("The selected source activation is not active at the "
+                       "message row"));
+    return {};
+  }
+  message.sourceActivationId = sourceActivationId;
+  const auto *returnActivation =
+      messageType == SequenceMessageType::Return
+          ? returnActivationFor(*diagram, sourceParticipantId,
+                                targetParticipantId, message.y,
+                                sourceActivationId)
+          : nullptr;
+  if (messageType == SequenceMessageType::Return && !returnActivation) {
+    m_diagnostics.addWarning(
+        QStringLiteral("sequence"),
+        QStringLiteral("A return must leave an open activation and target the "
+                       "participant that called that activation"));
+    return {};
+  }
   if (!targetOperationId.isEmpty()) {
     message.targetOperationElementId = targetElement->id;
     message.targetOperationId = targetOperationId;
@@ -4339,20 +4513,31 @@ QString ProjectController::createSequenceMessage(
   const bool startsTargetActivation =
       automaticActivation && (messageType == SequenceMessageType::Synchronous ||
                               messageType == SequenceMessageType::Asynchronous);
-  const QString activationToCloseParticipant =
-      !automaticActivation                          ? QString{}
-      : messageType == SequenceMessageType::Return  ? sourceParticipantId
-      : messageType == SequenceMessageType::Destroy ? targetParticipantId
-                                                    : QString{};
-  const auto *activationToClose =
-      activationToCloseParticipant.isEmpty()
-          ? nullptr
-          : latestOpenMessageBoundActivation(
-                *diagram, activationToCloseParticipant, message.y);
-  const QString activationToCloseId =
-      activationToClose ? activationToClose->id : QString{};
+  QStringList activationToCloseIds;
+  if (automaticActivation && returnActivation) {
+    // Closing an explicitly chosen outer activation implicitly closes every
+    // still-open nested activation at the same row. Nested return arrows are
+    // optional, but their execution bars cannot outlive their parent.
+    activationToCloseIds =
+        openNestedActivationIds(*diagram, *returnActivation, message.y);
+  } else if (automaticActivation) {
+    if (sourceActivation) {
+      // Starting another message from an outer bar means control has already
+      // returned from any still-open descendants. Close them at this message
+      // row before opening the next sibling activation.
+      activationToCloseIds =
+          openDescendantActivationIds(*diagram, *sourceActivation, message.y);
+    }
+    if (messageType == SequenceMessageType::Destroy) {
+      if (const auto *activation = latestOpenMessageBoundActivation(
+              *diagram, targetParticipantId, message.y);
+          activation && !activationToCloseIds.contains(activation->id)) {
+        activationToCloseIds.append(activation->id);
+      }
+    }
+  }
   const bool useMacro = downstreamShift > 0.0 || startsTargetActivation ||
-                        !activationToCloseId.isEmpty();
+                        !activationToCloseIds.isEmpty();
   if (useMacro)
     m_undoStack.beginMacro(QStringLiteral("Create sequence message"));
   if (downstreamShift > 0.0) {
@@ -4369,22 +4554,21 @@ QString ProjectController::createSequenceMessage(
   }
   pushCommand(std::make_unique<CreateSequenceMessageCommand>(
       this, m_data, diagramId, std::move(message)));
-  if (startsTargetActivation) {
-    createSequenceActivation(diagramId, targetParticipantId, messageId, {}, {},
-                             -1.0, -1.0, {});
-  } else if (!activationToCloseId.isEmpty()) {
+  for (const QString &activationId : std::as_const(activationToCloseIds)) {
     const auto *updatedDiagram = findDiagram(m_data, diagramId);
     const auto *activation =
-        updatedDiagram
-            ? findSequenceActivation(*updatedDiagram, activationToCloseId)
-            : nullptr;
-    if (activation) {
-      updateSequenceActivation(
-          diagramId, activation->id, activation->startMessageId, messageId,
-          activation->label, activation->startY.value_or(-1.0),
-          activation->endY.value_or(-1.0), activation->executionContextId);
-    }
+        updatedDiagram ? findSequenceActivation(*updatedDiagram, activationId)
+                       : nullptr;
+    if (!activation)
+      continue;
+    updateSequenceActivation(
+        diagramId, activation->id, activation->startMessageId, messageId,
+        activation->label, activation->startY.value_or(-1.0),
+        activation->endY.value_or(-1.0), activation->executionContextId);
   }
+  if (startsTargetActivation)
+    createSequenceActivation(diagramId, targetParticipantId, messageId, {}, {},
+                             -1.0, -1.0, {});
   if (useMacro)
     m_undoStack.endMacro();
   return messageId;
@@ -4591,18 +4775,37 @@ QString ProjectController::createSequenceCombinedFragment(
     const QString &type, const QString &startMessageId,
     const QString &endMessageId, const QString &guard,
     const QString &alternativeStartMessageId, const QString &alternativeGuard) {
+  bool typeOk = false;
+  const SequenceCombinedFragmentType fragmentType =
+      sequenceCombinedFragmentTypeFromString(type, &typeOk);
+  if (!typeOk)
+    return {};
+  QList<SequenceCombinedFragmentOperand> operands = {
+      {startMessageId, guard.trimmed(), {}}};
+  if (sequenceCombinedFragmentHasSecondOperand(fragmentType))
+    operands.append(
+        {alternativeStartMessageId, alternativeGuard.trimmed(), {}});
+  return createSequenceCombinedFragmentWithOperands(
+      diagramId, participantIds, type, startMessageId, endMessageId, operands);
+}
+
+QString ProjectController::createSequenceCombinedFragmentWithOperands(
+    const QString &diagramId, const QStringList &participantIds,
+    const QString &type, const QString &startMessageId,
+    const QString &endMessageId,
+    const QList<SequenceCombinedFragmentOperand> &operands) {
   const auto *diagram = findDiagram(m_data, diagramId);
   bool typeOk = false;
   const SequenceCombinedFragmentType fragmentType =
       sequenceCombinedFragmentTypeFromString(type, &typeOk);
   if (!diagram || diagram->type != DiagramType::Sequence || !typeOk ||
-      !validSequenceCombinedFragmentBounds(
-          *diagram, participantIds, fragmentType, startMessageId, endMessageId,
-          alternativeStartMessageId)) {
+      !validSequenceCombinedFragmentBounds(*diagram, participantIds,
+                                           fragmentType, startMessageId,
+                                           endMessageId, operands)) {
     m_diagnostics.addError(
         QStringLiteral("sequence"),
-        QStringLiteral("A combined fragment needs valid scoped participants "
-                       "and message boundaries"));
+        QStringLiteral("A combined fragment needs valid scoped participants, "
+                       "message boundaries, and ordered operands"));
     return {};
   }
 
@@ -4623,9 +4826,9 @@ QString ProjectController::createSequenceCombinedFragment(
   fragment.participantIds = participantIds;
   fragment.startMessageId = startMessageId;
   fragment.endMessageId = endMessageId;
-  fragment.guard = guard.trimmed();
-  fragment.alternativeStartMessageId = alternativeStartMessageId;
-  fragment.alternativeGuard = alternativeGuard.trimmed();
+  fragment.operands = operands;
+  for (auto &operand : fragment.operands)
+    operand.guard = operand.guard.trimmed();
   const QString fragmentId = fragment.id;
   pushCommand(std::make_unique<CreateSequenceCombinedFragmentCommand>(
       this, m_data, diagramId, std::move(fragment)));
@@ -4637,6 +4840,24 @@ bool ProjectController::updateSequenceCombinedFragment(
     const QString &startMessageId, const QString &endMessageId,
     const QString &guard, const QString &alternativeStartMessageId,
     const QString &alternativeGuard) {
+  bool typeOk = false;
+  const SequenceCombinedFragmentType fragmentType =
+      sequenceCombinedFragmentTypeFromString(type, &typeOk);
+  if (!typeOk)
+    return false;
+  QList<SequenceCombinedFragmentOperand> operands = {
+      {startMessageId, guard.trimmed(), {}}};
+  if (sequenceCombinedFragmentHasSecondOperand(fragmentType))
+    operands.append(
+        {alternativeStartMessageId, alternativeGuard.trimmed(), {}});
+  return updateSequenceCombinedFragmentWithOperands(
+      diagramId, fragmentId, type, startMessageId, endMessageId, operands);
+}
+
+bool ProjectController::updateSequenceCombinedFragmentWithOperands(
+    const QString &diagramId, const QString &fragmentId, const QString &type,
+    const QString &startMessageId, const QString &endMessageId,
+    const QList<SequenceCombinedFragmentOperand> &operands) {
   const auto *diagram = findDiagram(m_data, diagramId);
   const auto *fragment =
       diagram ? findSequenceCombinedFragment(*diagram, fragmentId) : nullptr;
@@ -4645,13 +4866,13 @@ bool ProjectController::updateSequenceCombinedFragment(
       sequenceCombinedFragmentTypeFromString(type, &typeOk);
   if (!diagram || diagram->type != DiagramType::Sequence || !fragment ||
       !typeOk ||
-      !validSequenceCombinedFragmentBounds(
-          *diagram, fragment->participantIds, fragmentType, startMessageId,
-          endMessageId, alternativeStartMessageId)) {
+      !validSequenceCombinedFragmentBounds(*diagram, fragment->participantIds,
+                                           fragmentType, startMessageId,
+                                           endMessageId, operands)) {
     m_diagnostics.addError(
         QStringLiteral("sequence"),
-        QStringLiteral("A combined fragment needs valid scoped participants "
-                       "and message boundaries"));
+        QStringLiteral("A combined fragment needs valid scoped participants, "
+                       "message boundaries, and ordered operands"));
     return false;
   }
 
@@ -4659,9 +4880,9 @@ bool ProjectController::updateSequenceCombinedFragment(
   updated.type = fragmentType;
   updated.startMessageId = startMessageId;
   updated.endMessageId = endMessageId;
-  updated.guard = guard.trimmed();
-  updated.alternativeStartMessageId = alternativeStartMessageId;
-  updated.alternativeGuard = alternativeGuard.trimmed();
+  updated.operands = operands;
+  for (auto &operand : updated.operands)
+    operand.guard = operand.guard.trimmed();
   if (updated == *fragment)
     return true;
   pushCommand(std::make_unique<UpdateSequenceCombinedFragmentCommand>(

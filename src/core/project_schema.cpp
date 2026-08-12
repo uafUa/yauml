@@ -203,6 +203,70 @@ void migrateVersionSixToSeven(ProjectJsonDocuments &documents) {
   documents.manifest.insert(QStringLiteral("schemaVersion"), 7);
 }
 
+void migrateVersionSevenToEight(ProjectJsonDocuments &documents) {
+  // Schema 8 generalizes the fixed first/second representation into an
+  // ordered operand list. Materialize the old fields before deserialization;
+  // this keeps the runtime model and serializer free of compatibility paths.
+  QJsonArray diagrams =
+      documents.diagrams.value(QStringLiteral("diagrams")).toArray();
+  for (int diagramIndex = 0; diagramIndex < diagrams.size(); ++diagramIndex) {
+    if (!diagrams.at(diagramIndex).isObject())
+      continue;
+    QJsonObject diagram = diagrams.at(diagramIndex).toObject();
+    QJsonObject sequence = diagram.value(QStringLiteral("sequence")).toObject();
+    QJsonArray fragments =
+        sequence.value(QStringLiteral("fragments")).toArray();
+    for (int fragmentIndex = 0; fragmentIndex < fragments.size();
+         ++fragmentIndex) {
+      if (!fragments.at(fragmentIndex).isObject())
+        continue;
+      QJsonObject fragment = fragments.at(fragmentIndex).toObject();
+      if (!fragment.value(QStringLiteral("operands")).isArray()) {
+        QJsonArray operands;
+        QJsonObject first;
+        first.insert(QStringLiteral("startMessageId"),
+                     fragment.value(QStringLiteral("startMessageId")));
+        if (fragment.contains(QStringLiteral("guard")))
+          first.insert(QStringLiteral("guard"),
+                       fragment.value(QStringLiteral("guard")));
+        operands.append(first);
+
+        const QString alternativeStart =
+            fragment.value(QStringLiteral("alternativeStartMessageId"))
+                .toString();
+        if (!alternativeStart.isEmpty()) {
+          QJsonObject alternative;
+          alternative.insert(QStringLiteral("startMessageId"),
+                             alternativeStart);
+          if (fragment.contains(QStringLiteral("alternativeGuard")))
+            alternative.insert(
+                QStringLiteral("guard"),
+                fragment.value(QStringLiteral("alternativeGuard")));
+          operands.append(alternative);
+        }
+        fragment.insert(QStringLiteral("operands"), operands);
+      }
+      fragment.remove(QStringLiteral("guard"));
+      fragment.remove(QStringLiteral("alternativeStartMessageId"));
+      fragment.remove(QStringLiteral("alternativeGuard"));
+      fragments.replace(fragmentIndex, fragment);
+    }
+    if (!fragments.isEmpty())
+      sequence.insert(QStringLiteral("fragments"), fragments);
+    diagram.insert(QStringLiteral("sequence"), sequence);
+    diagrams.replace(diagramIndex, diagram);
+  }
+  documents.diagrams.insert(QStringLiteral("diagrams"), diagrams);
+  documents.manifest.insert(QStringLiteral("schemaVersion"), 8);
+}
+
+// A message's source activation is optional. Schema 9 records the exact bar
+// selected by pointer-authored messages; legacy messages retain the historical
+// innermost-active-bar fallback without requiring synthesized references.
+void migrateVersionEightToNine(ProjectJsonDocuments &documents) {
+  documents.manifest.insert(QStringLiteral("schemaVersion"), 9);
+}
+
 } // namespace
 
 SchemaMigrationOutcome
@@ -253,6 +317,14 @@ ProjectSchemaMigrator::migrate(ProjectJsonDocuments documents) {
     case 6:
       migrateVersionSixToSeven(outcome.documents);
       version = 7;
+      break;
+    case 7:
+      migrateVersionSevenToEight(outcome.documents);
+      version = 8;
+      break;
+    case 8:
+      migrateVersionEightToNine(outcome.documents);
+      version = 9;
       break;
     default:
       outcome.diagnostics.append(schemaError(

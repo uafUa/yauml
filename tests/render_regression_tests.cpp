@@ -6,6 +6,7 @@
 
 #include <QCoreApplication>
 #include <QDir>
+#include <QFile>
 #include <QFileInfo>
 #include <QFont>
 #include <QGuiApplication>
@@ -253,6 +254,7 @@ private slots:
   void initTestCase();
   void canonicalDiagramMatchesBaseline();
   void pngExporterCapturesCompleteDiagram();
+  void pdfExporterCapturesCompleteDiagram();
 };
 
 void RenderRegressionTests::initTestCase() {
@@ -397,6 +399,44 @@ void RenderRegressionTests::pngExporterCapturesCompleteDiagram() {
   QVERIFY(exported.width() > 1200);
   QVERIFY(exported.height() > 700);
   QCOMPARE(exported.pixelColor(2, 2), ui::uiPalette().surface);
+}
+
+void RenderRegressionTests::pdfExporterCapturesCompleteDiagram() {
+  ProjectController controller;
+  QVERIFY(populateCanonicalDiagram(controller));
+  const QString diagramId = controller.data().diagrams.first().id;
+
+  const NodePresentation &distantNode =
+      controller.data().diagrams.first().nodes.last();
+  controller.updateNodeGeometry(diagramId, distantNode.id, 1100, 640, 180, 98);
+
+  QTemporaryDir outputDirectory;
+  QVERIFY(outputDirectory.isValid());
+  const QString outputPath =
+      outputDirectory.filePath(QStringLiteral("complete-diagram.pdf"));
+
+  DiagramImageExporter exporter;
+  exporter.setProject(&controller);
+  exporter.setDiagramId(diagramId);
+  QSignalSpy succeeded(&exporter, &DiagramImageExporter::exportSucceeded);
+  QSignalSpy failed(&exporter, &DiagramImageExporter::exportFailed);
+  exporter.exportPdf(QUrl::fromLocalFile(outputPath));
+
+  QTRY_VERIFY_WITH_TIMEOUT(!succeeded.isEmpty() || !failed.isEmpty(), 20000);
+  QVERIFY2(failed.isEmpty(),
+           qPrintable(failed.isEmpty() ? QString{}
+                                       : failed.first().first().toString()));
+  QCOMPARE(succeeded.size(), 1);
+  const QSize renderSize = succeeded.first().at(1).toSize();
+  QVERIFY(renderSize.width() > 1200);
+  QVERIFY(renderSize.height() > 700);
+
+  QFile exported(outputPath);
+  QVERIFY(exported.open(QIODevice::ReadOnly));
+  const QByteArray bytes = exported.readAll();
+  QVERIFY(bytes.startsWith("%PDF-"));
+  QVERIFY(bytes.trimmed().endsWith("%%EOF"));
+  QVERIFY(bytes.size() > 1024);
 }
 
 QTEST_MAIN(RenderRegressionTests)

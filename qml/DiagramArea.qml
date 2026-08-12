@@ -235,6 +235,10 @@ Rectangle {
                                     if (targetView)
                                         targetView.openPngExportDialog()
                                 }
+                                onExportPdfRequested: {
+                                    if (targetView)
+                                        targetView.openPdfExportDialog()
+                                }
                                 onAutomaticLayoutRequested: {
                                     if (targetView)
                                         targetView.openAutomaticLayoutDialog(
@@ -243,6 +247,14 @@ Rectangle {
                                 onSequenceExecutionContextsRequested: {
                                     if (targetView)
                                         targetView.openSequenceExecutionContextsDialog()
+                                }
+                                onSequenceMessageRequested: {
+                                    if (targetView)
+                                        targetView.openSequenceMessageDialog()
+                                }
+                                onSequenceCombinedFragmentRequested: {
+                                    if (targetView)
+                                        targetView.openSequenceCombinedFragmentDialog(false)
                                 }
 
                                 MenuSeparator {}

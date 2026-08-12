@@ -633,7 +633,8 @@ deferred because it is less important than a reliable source-to-model workflow.
 ### Phase 6: diagram export
 
 - Full-diagram PNG export through the shared Qt Quick renderer is implemented.
-- PDF export should reuse the same diagram-bounds and export orchestration.
+- Single-page PDF export reuses the same diagram-bounds, bounded capture, and
+  export orchestration.
 - SVG export only if later product demand justifies it.
 
 ## 19. Early architectural decisions to record as ADRs

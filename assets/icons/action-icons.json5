@@ -322,6 +322,11 @@
         contexts: ["diagram context menu", "diagram tab menu"],
         svg: "",
       },
+      exportPdf: {
+        label: "Export diagram as PDF",
+        contexts: ["diagram context menu", "diagram tab menu"],
+        svg: "",
+      },
       optimizeVisibleConnectorEndsAndRoute: {
         label: "Optimize connectors",
         contexts: ["diagram context menu", "diagram tab menu"],

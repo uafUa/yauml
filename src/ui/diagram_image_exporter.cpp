@@ -9,6 +9,10 @@
 #include <QFileInfo>
 #include <QGuiApplication>
 #include <QImage>
+#include <QPageLayout>
+#include <QPageSize>
+#include <QPainter>
+#include <QPdfWriter>
 #include <QQuickWindow>
 #include <QScreen>
 #include <QTimer>
@@ -45,14 +49,34 @@ qreal boundedExportScale(const QSizeF &contentSize, qreal requestedScale) {
   return scale;
 }
 
-QString pngOutputPath(const QUrl &fileUrl) {
+QString exportOutputPath(const QUrl &fileUrl, const QString &suffix) {
   if (!fileUrl.isLocalFile())
     return {};
   QString path = QDir::cleanPath(fileUrl.toLocalFile());
-  if (QFileInfo(path).suffix().compare(QStringLiteral("png"),
-                                       Qt::CaseInsensitive) != 0)
-    path += QStringLiteral(".png");
+  if (QFileInfo(path).suffix().compare(suffix, Qt::CaseInsensitive) != 0)
+    path += QStringLiteral(".") + suffix;
   return path;
+}
+
+bool writePdf(const QImage &image, const QString &path) {
+  constexpr int kPdfResolution = 96;
+  constexpr qreal kPointsPerInch = 72.0;
+  QPdfWriter writer(path);
+  writer.setResolution(kPdfResolution);
+  writer.setTitle(QStringLiteral("yauml diagram export"));
+  const QSizeF pageSizePoints(image.width() * kPointsPerInch / kPdfResolution,
+                              image.height() * kPointsPerInch / kPdfResolution);
+  writer.setPageSize(QPageSize(pageSizePoints, QPageSize::Point,
+                               QStringLiteral("yauml diagram"),
+                               QPageSize::ExactMatch));
+  writer.setPageMargins(QMarginsF{}, QPageLayout::Point);
+
+  QPainter painter(&writer);
+  if (!painter.isActive())
+    return false;
+  painter.drawImage(QRect(QPoint(), QSize(writer.width(), writer.height())),
+                    image);
+  return painter.end();
 }
 
 } // namespace
@@ -108,6 +132,17 @@ bool DiagramImageExporter::busy() const { return m_busy; }
 
 void DiagramImageExporter::exportPng(const QUrl &fileUrl,
                                      qreal requestedScale) {
+  exportDiagram(fileUrl, requestedScale, OutputFormat::Png);
+}
+
+void DiagramImageExporter::exportPdf(const QUrl &fileUrl,
+                                     qreal requestedScale) {
+  exportDiagram(fileUrl, requestedScale, OutputFormat::Pdf);
+}
+
+void DiagramImageExporter::exportDiagram(const QUrl &fileUrl,
+                                         qreal requestedScale,
+                                         OutputFormat format) {
   if (m_busy)
     return;
 
@@ -117,17 +152,24 @@ void DiagramImageExporter::exportPng(const QUrl &fileUrl,
          serial);
     return;
   }
-  m_outputPath = pngOutputPath(fileUrl);
+  m_outputFormat = format;
+  const QString formatName = format == OutputFormat::Png
+                                 ? QStringLiteral("PNG")
+                                 : QStringLiteral("PDF");
+  const QString suffix = format == OutputFormat::Png ? QStringLiteral("png")
+                                                     : QStringLiteral("pdf");
+  m_outputPath = exportOutputPath(fileUrl, suffix);
   if (m_outputPath.isEmpty()) {
-    fail(QStringLiteral("PNG export requires a local file destination."),
+    fail(QStringLiteral("%1 export requires a local file destination.")
+             .arg(formatName),
          serial);
     return;
   }
   const QFileInfo outputInfo(m_outputPath);
   if (!outputInfo.absoluteDir().exists()) {
-    fail(QStringLiteral("Cannot export PNG because the destination folder does "
-                        "not exist: %1")
-             .arg(outputInfo.absolutePath()),
+    fail(QStringLiteral("Cannot export %1 because the destination folder does "
+                        "not exist: %2")
+             .arg(formatName, outputInfo.absolutePath()),
          serial);
     return;
   }
@@ -158,7 +200,9 @@ void DiagramImageExporter::exportPng(const QUrl &fileUrl,
   const qreal outputScale =
       boundedExportScale(contentBounds.size(), requestedScale);
   if (outputScale <= 0.0) {
-    fail(QStringLiteral("Cannot determine a valid PNG export size."), serial);
+    fail(QStringLiteral("Cannot determine a valid %1 export size.")
+             .arg(formatName),
+         serial);
     return;
   }
 
@@ -207,9 +251,14 @@ void DiagramImageExporter::exportPng(const QUrl &fileUrl,
       Qt::QueuedConnection);
 
   QTimer::singleShot(kExportTimeoutMilliseconds, this, [this, serial] {
-    if (m_busy && serial == m_exportSerial)
-      fail(QStringLiteral("PNG export timed out while rendering the diagram."),
+    if (m_busy && serial == m_exportSerial) {
+      const QString timedOutFormat = m_outputFormat == OutputFormat::Png
+                                         ? QStringLiteral("PNG")
+                                         : QStringLiteral("PDF");
+      fail(QStringLiteral("%1 export timed out while rendering the diagram.")
+               .arg(timedOutFormat),
            serial);
+    }
   });
   m_window->show();
   m_window->requestUpdate();
@@ -234,8 +283,15 @@ void DiagramImageExporter::capture(quint64 serial) {
   if (image.size() != m_targetPixelSize)
     image = image.copy(QRect(QPoint(), m_targetPixelSize));
   image.setDevicePixelRatio(1.0);
-  if (!image.save(m_outputPath, "PNG")) {
-    fail(QStringLiteral("Could not write PNG export: %1").arg(m_outputPath),
+  const bool written = m_outputFormat == OutputFormat::Png
+                           ? image.save(m_outputPath, "PNG")
+                           : writePdf(image, m_outputPath);
+  if (!written) {
+    const QString formatName = m_outputFormat == OutputFormat::Png
+                                   ? QStringLiteral("PNG")
+                                   : QStringLiteral("PDF");
+    fail(QStringLiteral("Could not write %1 export: %2")
+             .arg(formatName, m_outputPath),
          serial);
     return;
   }
@@ -246,8 +302,12 @@ void DiagramImageExporter::capture(quint64 serial) {
     const auto *diagram = findDiagram(m_project->data(), m_diagramId);
     m_project->diagnostics()->addInfo(
         QStringLiteral("export"),
-        QStringLiteral("Exported diagram \"%1\" to %2 (%3 × %4 pixels).")
-            .arg(diagram ? diagram->name : m_diagramId, m_outputPath)
+        QStringLiteral("Exported diagram \"%1\" as %2 to %3 (%4 × %5 render "
+                       "pixels).")
+            .arg(diagram ? diagram->name : m_diagramId,
+                 m_outputFormat == OutputFormat::Png ? QStringLiteral("PNG")
+                                                     : QStringLiteral("PDF"),
+                 m_outputPath)
             .arg(pixelSize.width())
             .arg(pixelSize.height()),
         m_diagramId);

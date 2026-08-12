@@ -107,9 +107,10 @@ C++ headless importer.
         participants: ["controller", "worker"],
         start: "submit",
         end: "complete",
-        guard: "accepted",
-        alternativeStart: "complete",
-        alternativeGuard: "rejected",
+        operands: [
+          { start: "submit", guard: "accepted" },
+          { start: "complete", guard: "rejected" },
+        ],
       },
     ],
   },
@@ -203,15 +204,20 @@ fragments: `opt`, `loop`, `alt`, `par`, and `critical`.
 - `participants`: required ordered array of one or more participant keys. It
   defines the horizontal scope of the frame.
 - `start`, `end`: required message keys defining an inclusive vertical span.
-- `guard`: optional guard label for the first (or only) operand.
-- `alternativeStart`: required for `alt` and `par`; message key where the
-  second operand begins. It must fall after `start` and no later than `end`.
-- `alternativeGuard`: optional guard label for the second `alt` or `par`
-  operand.
+- `operands`: ordered operand array. Each operand has a required `start`
+  message key and an optional `guard`. The first operand must start at the
+  fragment's `start`; later operands must begin in strict message order no
+  later than `end`. `alt` and `par` require at least two operands and may have
+  any larger number; the other operators require exactly one.
+
+For compatibility, version-one interchange files using `guard`,
+`alternativeStart`, and `alternativeGuard` are still accepted and normalized
+to `operands` during import. New generators should emit `operands`.
 
 Supported fragment kinds are `opt`, `loop`, `alt`, `par`, and `critical`.
-`par` is rendered with a second operand divider, making parallel branches
-explicit without requiring the importer to infer concurrency from source.
+Every later `alt`/`par` operand is rendered with its own divider, making all
+branches explicit without requiring the importer to infer concurrency from
+source.
 
 ## Canonical project representation
 
@@ -220,26 +226,42 @@ object containing stable IDs, participant geometry, messages, execution
 contexts, source evidence, and activations. Existing schema-4 diagrams migrate
 to schema 5 as explicit `type: "class"` diagrams. Schema 6 adds optional
 combined-fragment records; schema 7 adds optional target-operation links on
-messages.
+messages; schema 8 generalizes combined fragments to ordered operand lists;
+schema 9 lets pointer-authored messages retain their exact source activation.
 
 ## Current editor behavior
 
 The scene-graph canvas renders participant headers and lifelines, execution
 context labels, activation bars, and sync, async, return, create, destroy, and
 self messages. Confirmed and inferred evidence have distinct presentation.
-Fit-to-content and PNG export use the same deterministic sequence layout.
+Fit-to-content, PNG export, and PDF export use the same deterministic sequence
+layout.
 
 Participant headers can be moved horizontally and messages vertically without
 changing their order. Drag from a lifeline or activation to another lifeline,
 activation, or participant header to create a message at that interaction row.
 If the chosen row has insufficient space, later messages move down as part of
-the same undo operation. Self-messages use the same gesture.
+the same undo operation. Self-messages use the same gesture. While holding the
+mouse button during the drag, press `S` for a synchronous call, `A` for an
+asynchronous signal, `R` for a return, `C` for create, or `D` for destroy. The
+chosen kind is committed immediately on release with empty optional details
+and automatic activation handling; omitting the key opens the full editor.
 
 The message editor updates activations automatically by default: synchronous
-and asynchronous messages start a target activation; return messages
-end the latest open message-bound activation on their source; destroy messages
-end one on their target. The checkbox can disable this behavior for a message.
-Message creation and its activation change form one undo unit.
+and asynchronous messages start a target activation. A return dragged from an
+activation closes that chosen activation and must go back to the participant
+that opened it. Returning from an outer activation implicitly ends its open
+nested activations at the same row, so decorative nested return arrows are not
+required. Destroy messages end an open activation on their target. The checkbox
+can disable automatic span changes for a message. Message creation and its
+activation changes form one undo unit. A self-message dragged from a specific
+activation leaves that exact bar. Repeated calls from the same outer activation
+create sibling bars at the same visual depth, even while an earlier sibling is
+still open. Starting the next sibling implicitly ends those open descendants
+at the new message row, and a small visual gap keeps adjacent sibling bars
+distinct. Deleting a closing return keeps every span it closed and makes
+those activations open-ended again; deleting an
+activation's start message still removes the invalid span.
 
 A create message instead places the target participant header at the message
 row and starts its lifeline below the header. This expresses object lifetime
@@ -272,5 +294,16 @@ choose an explicit override. Creating, editing, assigning, and deleting
 contexts all use focused undoable commands; deleting a context clears its
 assignments and Undo restores them.
 
-Messages linked to target operations support source navigation. Richer
-multi-operand fragment editing remains a later sequence-diagram slice.
+Messages linked to target operations support source navigation. The combined-
+fragment editor can add and remove ordered `alt`/`par` operands and edit each
+guard independently.
+
+Sequence authoring shortcuts use the same commands and undo history as the
+context menus:
+
+- `Ctrl+Shift+P`: add a participant at the viewport center.
+- `Ctrl+Shift+M`: create a message between the two selected participants.
+- `Ctrl+Shift+A`: create an activation on the selected participant.
+- `Ctrl+Shift+G`: create a combined fragment for the selected participants.
+- `F2`: edit the selected participant, message, activation, or fragment.
+- `Delete`: remove the selected sequence items.

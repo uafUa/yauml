@@ -298,7 +298,12 @@ public:
       const QString &diagramId, const QString &sourceParticipantId,
       const QString &targetParticipantId, const QString &type,
       const QString &text = {}, const QString &targetOperationId = {},
-      qreal requestedY = -1.0, bool automaticActivation = false);
+      qreal requestedY = -1.0, bool automaticActivation = false,
+      const QString &sourceActivationId = {});
+  [[nodiscard]] bool canCreateSequenceReturn(
+      const QString &diagramId, const QString &sourceParticipantId,
+      const QString &targetParticipantId, qreal beforeY = -1.0,
+      const QString &sourceActivationId = {}) const;
   Q_INVOKABLE QVariantList sequenceMessageTargetOperationChoices(
       const QString &diagramId, const QString &targetParticipantId) const;
   Q_INVOKABLE bool
@@ -330,6 +335,15 @@ public:
       const QString &startMessageId, const QString &endMessageId,
       const QString &guard = {}, const QString &alternativeStartMessageId = {},
       const QString &alternativeGuard = {});
+  QString createSequenceCombinedFragmentWithOperands(
+      const QString &diagramId, const QStringList &participantIds,
+      const QString &type, const QString &startMessageId,
+      const QString &endMessageId,
+      const QList<SequenceCombinedFragmentOperand> &operands);
+  bool updateSequenceCombinedFragmentWithOperands(
+      const QString &diagramId, const QString &fragmentId, const QString &type,
+      const QString &startMessageId, const QString &endMessageId,
+      const QList<SequenceCombinedFragmentOperand> &operands);
   Q_INVOKABLE bool deleteSequenceItems(const QString &diagramId,
                                        const QStringList &participantIds,
                                        const QStringList &messageIds,

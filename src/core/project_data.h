@@ -80,7 +80,8 @@ QString toString(SequenceCombinedFragmentType type);
 SequenceCombinedFragmentType
 sequenceCombinedFragmentTypeFromString(const QString &value,
                                        bool *ok = nullptr);
-bool sequenceCombinedFragmentHasSecondOperand(SequenceCombinedFragmentType type);
+bool sequenceCombinedFragmentHasSecondOperand(
+    SequenceCombinedFragmentType type);
 QString toString(SequenceEvidenceConfidence confidence);
 SequenceEvidenceConfidence
 sequenceEvidenceConfidenceFromString(const QString &value, bool *ok = nullptr);
@@ -388,6 +389,10 @@ struct SequenceMessage {
   // from different C++ importers.
   QString targetOperationElementId;
   QString targetOperationId;
+  // Pointer-authored messages remember the exact execution bar they leave.
+  // This is essential for self-calls when several activation levels overlap:
+  // participant identity alone cannot recover the user's chosen level.
+  QString sourceActivationId;
 
   bool operator==(const SequenceMessage &) const = default;
 };
@@ -412,11 +417,21 @@ struct SequenceActivation {
   bool operator==(const SequenceActivation &) const = default;
 };
 
+// An operand begins at a stable message boundary. The first operand always
+// begins at the fragment's startMessageId; subsequent starts are strictly
+// ordered inside the fragment. Keeping operands explicit supports arbitrary
+// alt/par branches without encoding UI-specific rows in the domain model.
+struct SequenceCombinedFragmentOperand {
+  QString startMessageId;
+  QString guard;
+  QJsonObject extra;
+
+  bool operator==(const SequenceCombinedFragmentOperand &) const = default;
+};
+
 // Bounds use message IDs rather than rows, which keeps the frame semantically
-// attached when messages are repositioned. Alternative and parallel fragments
-// have two operands: the first begins at startMessageId and the second at
-// alternativeStartMessageId. The field retains its established serialized
-// name so existing sequence projects remain compatible.
+// attached when messages are repositioned. Single-operand operators retain
+// exactly one operand; alternative and parallel fragments retain two or more.
 struct SequenceCombinedFragment {
   QString id;
   QString key;
@@ -424,9 +439,7 @@ struct SequenceCombinedFragment {
   QStringList participantIds;
   QString startMessageId;
   QString endMessageId;
-  QString guard;
-  QString alternativeStartMessageId;
-  QString alternativeGuard;
+  QList<SequenceCombinedFragmentOperand> operands;
   QJsonObject extra;
 
   bool operator==(const SequenceCombinedFragment &) const = default;
@@ -536,7 +549,7 @@ SequenceActivation *findSequenceActivation(Diagram &diagram, const QString &id);
 const SequenceActivation *findSequenceActivation(const Diagram &diagram,
                                                  const QString &id);
 SequenceCombinedFragment *findSequenceCombinedFragment(Diagram &diagram,
-                                                        const QString &id);
+                                                       const QString &id);
 const SequenceCombinedFragment *
 findSequenceCombinedFragment(const Diagram &diagram, const QString &id);
 SequenceExecutionContext *findSequenceExecutionContext(Diagram &diagram,

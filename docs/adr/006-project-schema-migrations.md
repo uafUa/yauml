@@ -58,6 +58,13 @@ Schema 6 adds optional sequence combined-fragment records (`alt`, `opt`, and
 Schema 7 adds optional links from sequence messages to target operations. The
 link stores both a model-element ID and an operation ID, so it remains stable
 without putting methods into the project browser tree.
+Schema 8 replaces the fixed first/second combined-fragment branch fields with
+an ordered operand list. Migration materializes the legacy guards and message
+boundaries as the first two operands; subsequent saves use only the generalized
+representation.
+Schema 9 adds an optional source-activation reference to sequence messages.
+Pointer-authored messages can therefore preserve the exact execution level
+chosen by the user; legacy messages continue to use the innermost active bar.
 
 Opening an unversioned project produces an informational log entry and marks the
 loaded representation as migrated, but does not itself make an external write.

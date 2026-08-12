@@ -837,9 +837,15 @@ QJsonObject sequenceDataToJson(const Diagram &diagram) {
     else
       item.remove(QStringLiteral("targetOperationElementId"));
     if (!message.targetOperationId.isEmpty())
-      item.insert(QStringLiteral("targetOperationId"), message.targetOperationId);
+      item.insert(QStringLiteral("targetOperationId"),
+                  message.targetOperationId);
     else
       item.remove(QStringLiteral("targetOperationId"));
+    if (!message.sourceActivationId.isEmpty())
+      item.insert(QStringLiteral("sourceActivationId"),
+                  message.sourceActivationId);
+    else
+      item.remove(QStringLiteral("sourceActivationId"));
     const QJsonObject evidence = sequenceEvidenceToJson(message.evidence);
     if (!evidence.isEmpty())
       item.insert(QStringLiteral("source"), evidence);
@@ -890,20 +896,18 @@ QJsonObject sequenceDataToJson(const Diagram &diagram) {
                 QJsonArray::fromStringList(fragment.participantIds));
     item.insert(QStringLiteral("startMessageId"), fragment.startMessageId);
     item.insert(QStringLiteral("endMessageId"), fragment.endMessageId);
-    if (!fragment.guard.isEmpty())
-      item.insert(QStringLiteral("guard"), fragment.guard);
-    else
-      item.remove(QStringLiteral("guard"));
-    if (!fragment.alternativeStartMessageId.isEmpty())
-      item.insert(QStringLiteral("alternativeStartMessageId"),
-                  fragment.alternativeStartMessageId);
-    else
-      item.remove(QStringLiteral("alternativeStartMessageId"));
-    if (!fragment.alternativeGuard.isEmpty())
-      item.insert(QStringLiteral("alternativeGuard"),
-                  fragment.alternativeGuard);
-    else
-      item.remove(QStringLiteral("alternativeGuard"));
+    QJsonArray operands;
+    for (const auto &operand : fragment.operands) {
+      QJsonObject operandObject = operand.extra;
+      operandObject.insert(QStringLiteral("startMessageId"),
+                           operand.startMessageId);
+      if (!operand.guard.isEmpty())
+        operandObject.insert(QStringLiteral("guard"), operand.guard);
+      else
+        operandObject.remove(QStringLiteral("guard"));
+      operands.append(operandObject);
+    }
+    item.insert(QStringLiteral("operands"), operands);
     fragments.append(item);
   }
   object.insert(QStringLiteral("executionContexts"), contexts);
@@ -1003,6 +1007,8 @@ void readSequenceData(const QJsonValue &value, Diagram &diagram,
         item.value(QStringLiteral("targetOperationElementId")).toString();
     message.targetOperationId =
         item.value(QStringLiteral("targetOperationId")).toString();
+    message.sourceActivationId =
+        item.value(QStringLiteral("sourceActivationId")).toString();
     const QJsonObject source = item.value(QStringLiteral("source")).toObject();
     message.evidence.file = source.value(QStringLiteral("file")).toString();
     message.evidence.line = source.value(QStringLiteral("line")).toInt();
@@ -1030,7 +1036,8 @@ void readSequenceData(const QJsonValue &value, Diagram &diagram,
                            QStringLiteral("type"), QStringLiteral("text"),
                            QStringLiteral("y"), QStringLiteral("source"),
                            QStringLiteral("targetOperationElementId"),
-                           QStringLiteral("targetOperationId")});
+                           QStringLiteral("targetOperationId"),
+                           QStringLiteral("sourceActivationId")});
     diagram.sequenceMessages.append(std::move(message));
   }
 
@@ -1062,7 +1069,8 @@ void readSequenceData(const QJsonValue &value, Diagram &diagram,
          QStringLiteral("label")});
     diagram.sequenceActivations.append(std::move(activation));
   }
-  for (const QJsonValue &fragmentValue : requireArray(QStringLiteral("fragments"))) {
+  for (const QJsonValue &fragmentValue :
+       requireArray(QStringLiteral("fragments"))) {
     const QJsonObject item = fragmentValue.toObject();
     SequenceCombinedFragment fragment;
     fragment.id = item.value(QStringLiteral("id")).toString();
@@ -1082,25 +1090,29 @@ void readSequenceData(const QJsonValue &value, Diagram &diagram,
         item.value(QStringLiteral("startMessageId")).toString();
     fragment.endMessageId =
         item.value(QStringLiteral("endMessageId")).toString();
-    fragment.guard = item.value(QStringLiteral("guard")).toString();
-    fragment.alternativeStartMessageId =
-        item.value(QStringLiteral("alternativeStartMessageId")).toString();
-    fragment.alternativeGuard =
-        item.value(QStringLiteral("alternativeGuard")).toString();
+    for (const QJsonValue &operandValue :
+         item.value(QStringLiteral("operands")).toArray()) {
+      const QJsonObject operandObject = operandValue.toObject();
+      SequenceCombinedFragmentOperand operand;
+      operand.startMessageId =
+          operandObject.value(QStringLiteral("startMessageId")).toString();
+      operand.guard = operandObject.value(QStringLiteral("guard")).toString();
+      operand.extra =
+          withoutKeys(operandObject, {QStringLiteral("startMessageId"),
+                                      QStringLiteral("guard")});
+      fragment.operands.append(std::move(operand));
+    }
     fragment.extra = withoutKeys(
         item,
         {QStringLiteral("id"), QStringLiteral("key"), QStringLiteral("type"),
          QStringLiteral("participantIds"), QStringLiteral("startMessageId"),
-         QStringLiteral("endMessageId"), QStringLiteral("guard"),
-         QStringLiteral("alternativeStartMessageId"),
-         QStringLiteral("alternativeGuard")});
+         QStringLiteral("endMessageId"), QStringLiteral("operands")});
     diagram.sequenceCombinedFragments.append(std::move(fragment));
   }
   diagram.sequenceExtra = withoutKeys(
-      object,
-      {QStringLiteral("executionContexts"), QStringLiteral("participants"),
-       QStringLiteral("messages"), QStringLiteral("activations"),
-       QStringLiteral("fragments")});
+      object, {QStringLiteral("executionContexts"),
+               QStringLiteral("participants"), QStringLiteral("messages"),
+               QStringLiteral("activations"), QStringLiteral("fragments")});
 }
 
 QByteArray manifestBytes(const ProjectData &project) {
@@ -2574,11 +2586,12 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
                   QStringLiteral("Sequence participant keys must be unique"),
                   participant.id));
       sequenceParticipantKeys.insert(key);
-      if (participant.name.trimmed().isEmpty() && participant.elementId.isEmpty())
-        diagnostics.append(
-            error(QStringLiteral("validation"),
-                  QStringLiteral("A free sequence participant has no display name"),
-                  participant.id));
+      if (participant.name.trimmed().isEmpty() &&
+          participant.elementId.isEmpty())
+        diagnostics.append(error(
+            QStringLiteral("validation"),
+            QStringLiteral("A free sequence participant has no display name"),
+            participant.id));
       if (!participant.elementId.isEmpty() &&
           !elementIds.contains(participant.elementId))
         diagnostics.append(error(
@@ -2616,6 +2629,9 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
     QSet<QString> sequenceMessageKeys;
     QHash<QString, int> sequenceMessageOrder;
     qreal previousMessageY = -std::numeric_limits<qreal>::infinity();
+    QHash<QString, const SequenceActivation *> sequenceActivationById;
+    for (const SequenceActivation &activation : diagram.sequenceActivations)
+      sequenceActivationById.insert(activation.id, &activation);
     for (int index = 0; index < diagram.sequenceMessages.size(); ++index) {
       const auto &message = diagram.sequenceMessages.at(index);
       checkId(message.id, QStringLiteral("sequence message"));
@@ -2646,6 +2662,25 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
                 "Sequence message references missing target participant %1")
                 .arg(message.targetParticipantId),
             message.id));
+      if (!message.sourceActivationId.isEmpty()) {
+        const auto sourceActivation =
+            sequenceActivationById.constFind(message.sourceActivationId);
+        if (sourceActivation == sequenceActivationById.cend()) {
+          diagnostics.append(error(
+              QStringLiteral("validation"),
+              QStringLiteral(
+                  "Sequence message references missing source activation %1")
+                  .arg(message.sourceActivationId),
+              message.id));
+        } else if ((*sourceActivation)->participantId !=
+                   message.sourceParticipantId) {
+          diagnostics.append(error(
+              QStringLiteral("validation"),
+              QStringLiteral("Sequence message source activation belongs to "
+                             "another participant"),
+              message.id));
+        }
+      }
       if (!std::isfinite(message.y) || message.y < 0.0 ||
           message.y <= previousMessageY)
         diagnostics.append(
@@ -2670,23 +2705,24 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
       } else if (hasOperation) {
         const ModelElement *operationOwner =
             findElement(project, message.targetOperationElementId);
-        const SequenceParticipant *targetParticipant = findSequenceParticipant(
-            diagram, message.targetParticipantId);
+        const SequenceParticipant *targetParticipant =
+            findSequenceParticipant(diagram, message.targetParticipantId);
         bool operationExists = false;
         if (operationOwner) {
-          operationExists = std::any_of(
-              operationOwner->operations.cbegin(),
-              operationOwner->operations.cend(),
-              [&message](const ModelOperation &operation) {
-                return operation.id == message.targetOperationId;
-              });
+          operationExists =
+              std::any_of(operationOwner->operations.cbegin(),
+                          operationOwner->operations.cend(),
+                          [&message](const ModelOperation &operation) {
+                            return operation.id == message.targetOperationId;
+                          });
         }
         if (!operationOwner || !targetParticipant ||
             targetParticipant->elementId != operationOwner->id ||
             !operationExists) {
           diagnostics.append(error(
               QStringLiteral("validation"),
-              QStringLiteral("Sequence message references an invalid target operation"),
+              QStringLiteral(
+                  "Sequence message references an invalid target operation"),
               message.id));
         }
       }
@@ -2728,11 +2764,11 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
             std::isfinite(*activation.endY) && *activation.startY >= 0.0 &&
             *activation.endY > *activation.startY;
         if (!validFreeRange)
-          diagnostics.append(error(
-              QStringLiteral("validation"),
-              QStringLiteral(
-                  "A free-positioned sequence activation needs a valid startY/endY range"),
-              activation.id));
+          diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral("A free-positioned sequence activation "
+                                   "needs a valid startY/endY range"),
+                    activation.id));
       } else {
         if (!sequenceMessageIds.contains(activation.startMessageId))
           diagnostics.append(error(
@@ -2743,20 +2779,20 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
               activation.id));
         if (!activation.endMessageId.isEmpty() &&
             !sequenceMessageIds.contains(activation.endMessageId))
-          diagnostics.append(error(
-              QStringLiteral("validation"),
-              QStringLiteral(
-                  "Sequence activation references missing end message %1")
-                  .arg(activation.endMessageId),
-              activation.id));
+          diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral(
+                        "Sequence activation references missing end message %1")
+                        .arg(activation.endMessageId),
+                    activation.id));
         if (sequenceMessageOrder.contains(activation.startMessageId) &&
             sequenceMessageOrder.contains(activation.endMessageId) &&
             sequenceMessageOrder.value(activation.endMessageId) <
                 sequenceMessageOrder.value(activation.startMessageId))
-          diagnostics.append(error(
-              QStringLiteral("validation"),
-              QStringLiteral("Sequence activation ends before it starts"),
-              activation.id));
+          diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral("Sequence activation ends before it starts"),
+                    activation.id));
       }
     }
     QSet<QString> sequenceFragmentKeys;
@@ -2764,10 +2800,10 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
       checkId(fragment.id, QStringLiteral("sequence combined fragment"));
       const QString key = fragment.key.trimmed();
       if (key.isEmpty())
-        diagnostics.append(error(
-            QStringLiteral("validation"),
-            QStringLiteral("A sequence combined fragment has no key"),
-            fragment.id));
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("A sequence combined fragment has no key"),
+                  fragment.id));
       else if (sequenceFragmentKeys.contains(key))
         diagnostics.append(error(
             QStringLiteral("validation"),
@@ -2790,11 +2826,11 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
                   .arg(participantId),
               fragment.id));
         if (scopedParticipants.contains(participantId))
-          diagnostics.append(error(
-              QStringLiteral("validation"),
-              QStringLiteral("A sequence combined fragment repeats a "
-                             "participant"),
-              fragment.id));
+          diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral("A sequence combined fragment repeats a "
+                                   "participant"),
+                    fragment.id));
         scopedParticipants.insert(participantId);
       }
       if (!sequenceMessageIds.contains(fragment.startMessageId) ||
@@ -2811,29 +2847,54 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
             QStringLiteral("Sequence combined fragment ends before it starts"),
             fragment.id));
 
-      const bool hasSecondOperand =
+      const bool multipleOperands =
           sequenceCombinedFragmentHasSecondOperand(fragment.type);
-      if (hasSecondOperand &&
-          !sequenceMessageIds.contains(fragment.alternativeStartMessageId))
+      const qsizetype requiredMinimum = multipleOperands ? 2 : 1;
+      if (fragment.operands.size() < requiredMinimum ||
+          (!multipleOperands && fragment.operands.size() != 1)) {
         diagnostics.append(error(
             QStringLiteral("validation"),
-            QStringLiteral("A %1 fragment needs a second-operand message")
-                .arg(toString(fragment.type)),
+            QStringLiteral("A %1 fragment needs %2")
+                .arg(toString(fragment.type),
+                     multipleOperands ? QStringLiteral("at least two operands")
+                                      : QStringLiteral("exactly one operand")),
             fragment.id));
-      else if (hasSecondOperand &&
-               sequenceMessageOrder.contains(fragment.startMessageId) &&
-               sequenceMessageOrder.contains(fragment.endMessageId) &&
-               sequenceMessageOrder.contains(fragment.alternativeStartMessageId) &&
-               (sequenceMessageOrder.value(fragment.alternativeStartMessageId) <=
-                    sequenceMessageOrder.value(fragment.startMessageId) ||
-                sequenceMessageOrder.value(fragment.alternativeStartMessageId) >
-                    sequenceMessageOrder.value(fragment.endMessageId)))
+      } else if (fragment.operands.constFirst().startMessageId !=
+                 fragment.startMessageId) {
         diagnostics.append(error(
             QStringLiteral("validation"),
-            QStringLiteral("A %1 fragment's second operand must begin inside "
-                           "its message span")
-                .arg(toString(fragment.type)),
+            QStringLiteral("A combined fragment's first operand must begin at "
+                           "the fragment start"),
             fragment.id));
+      }
+
+      int previousOperandOrder = -1;
+      for (const auto &operand : fragment.operands) {
+        if (!sequenceMessageIds.contains(operand.startMessageId)) {
+          diagnostics.append(error(
+              QStringLiteral("validation"),
+              QStringLiteral("A combined fragment operand references missing "
+                             "message %1")
+                  .arg(operand.startMessageId),
+              fragment.id));
+          continue;
+        }
+        const int operandOrder =
+            sequenceMessageOrder.value(operand.startMessageId);
+        if (sequenceMessageOrder.contains(fragment.startMessageId) &&
+            sequenceMessageOrder.contains(fragment.endMessageId) &&
+            (operandOrder <
+                 sequenceMessageOrder.value(fragment.startMessageId) ||
+             operandOrder > sequenceMessageOrder.value(fragment.endMessageId) ||
+             operandOrder <= previousOperandOrder)) {
+          diagnostics.append(error(
+              QStringLiteral("validation"),
+              QStringLiteral("Combined fragment operands must begin in strict "
+                             "message order inside the fragment span"),
+              fragment.id));
+        }
+        previousOperandOrder = operandOrder;
+      }
     }
     QSet<QString> presentationIds;
     QSet<QString> presentedContainerSubjects;

@@ -73,6 +73,40 @@ bool sequenceMessageTouchesParticipant(const SequenceMessage &message,
          message.targetParticipantId == participantId;
 }
 
+QString sequenceMessageTypeForGestureKey(const QKeyEvent &event) {
+  if (event.modifiers().testFlag(Qt::ControlModifier) ||
+      event.modifiers().testFlag(Qt::AltModifier) ||
+      event.modifiers().testFlag(Qt::MetaModifier))
+    return {};
+  switch (event.key()) {
+  case Qt::Key_S:
+    return QStringLiteral("sync");
+  case Qt::Key_A:
+    return QStringLiteral("async");
+  case Qt::Key_R:
+    return QStringLiteral("return");
+  case Qt::Key_C:
+    return QStringLiteral("create");
+  case Qt::Key_D:
+    return QStringLiteral("destroy");
+  default:
+    return {};
+  }
+}
+
+QList<SequenceCombinedFragmentOperand>
+sequenceFragmentOperandsFromVariantList(const QVariantList &values) {
+  QList<SequenceCombinedFragmentOperand> operands;
+  operands.reserve(values.size());
+  for (const QVariant &value : values) {
+    const QVariantMap map = value.toMap();
+    operands.append({map.value(QStringLiteral("startMessageId")).toString(),
+                     map.value(QStringLiteral("guard")).toString(),
+                     {}});
+  }
+  return operands;
+}
+
 bool isManuallyPositioned(const ConnectorAnchor &anchor) {
   return anchor.extra.value(QLatin1String(kAnchorPositioningKey)).toString() ==
          QLatin1String(kManualAnchorPositioning);
@@ -211,6 +245,8 @@ struct SceneSnapshot {
   QVector<RenderSequenceActivation> sequenceActivations;
   QVector<RenderSequenceCombinedFragment> sequenceCombinedFragments;
   QVector<QPointF> sequenceMessagePreview;
+  SequenceMessageType sequenceMessagePreviewType =
+      SequenceMessageType::Synchronous;
   bool sequenceMessagePreviewTargetValid = false;
   QVector<QLineF> alignmentGuides;
   QRectF lassoRect;
@@ -1529,11 +1565,13 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
     const QColor color = fragment.selected ? palette.accent : palette.connector;
     appendBorder(vertices, item.rect, (fragment.selected ? 2.5 : 1.2) / zoom,
                  color);
-    if (item.alternativeDividerY >= 0.0)
-      appendAntialiasedLine(vertices,
-                            {item.rect.left(), item.alternativeDividerY},
-                            {item.rect.right(), item.alternativeDividerY},
-                            1.2 / zoom, 1.0 / zoom, color);
+    for (const auto &operand : item.operands) {
+      if (operand.dividerY < 0.0)
+        continue;
+      appendAntialiasedLine(vertices, {item.rect.left(), operand.dividerY},
+                            {item.rect.right(), operand.dividerY}, 1.2 / zoom,
+                            1.0 / zoom, color);
+    }
   }
   for (const auto &participant : snapshot.sequenceParticipants) {
     const auto &item = participant.layout;
@@ -1562,9 +1600,11 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
   }
   if (snapshot.sequenceMessagePreview.size() >= 2) {
     const qreal width = 2.2 / zoom;
+    const bool dashed =
+        snapshot.sequenceMessagePreviewType == SequenceMessageType::Return;
     for (qsizetype index = 1; index < snapshot.sequenceMessagePreview.size();
          ++index) {
-      if (snapshot.sequenceMessagePreviewTargetValid)
+      if (snapshot.sequenceMessagePreviewTargetValid && !dashed)
         appendAntialiasedLine(vertices,
                               snapshot.sequenceMessagePreview.at(index - 1),
                               snapshot.sequenceMessagePreview.at(index), width,
@@ -1579,7 +1619,19 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
       appendSequenceArrow(vertices, snapshot.sequenceMessagePreview.constLast(),
                           snapshot.sequenceMessagePreview.at(
                               snapshot.sequenceMessagePreview.size() - 2),
-                          true, zoom, palette.accent);
+                          snapshot.sequenceMessagePreviewType ==
+                              SequenceMessageType::Synchronous,
+                          zoom, palette.accent);
+      if (snapshot.sequenceMessagePreviewType == SequenceMessageType::Destroy) {
+        const QPointF tip = snapshot.sequenceMessagePreview.constLast();
+        const qreal arm = 7.0 / zoom;
+        appendAntialiasedLine(vertices, tip + QPointF(-arm, -arm),
+                              tip + QPointF(arm, arm), 1.8 / zoom, 1.0 / zoom,
+                              palette.accent);
+        appendAntialiasedLine(vertices, tip + QPointF(-arm, arm),
+                              tip + QPointF(arm, -arm), 1.8 / zoom, 1.0 / zoom,
+                              palette.accent);
+      }
     }
   }
   for (const auto &message : snapshot.sequenceMessages) {
@@ -1975,9 +2027,11 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
   for (const auto &fragment : snapshot.sequenceCombinedFragments) {
     const auto &item = fragment.layout;
     const QString kind = toString(item.type);
+    const QString firstGuard =
+        item.operands.isEmpty() ? QString{} : item.operands.constFirst().guard;
     const QString firstOperand =
-        item.guard.isEmpty() ? kind
-                             : QStringLiteral("%1 [%2]").arg(kind, item.guard);
+        firstGuard.isEmpty() ? kind
+                             : QStringLiteral("%1 [%2]").arg(kind, firstGuard);
     const QRectF topTarget(item.rect.left() + 8.0, item.rect.top() + 1.0,
                            item.rect.width() - 16.0, kLineHeight);
     if (!coverage.isValid() || coverage.intersects(topTarget))
@@ -1987,19 +2041,21 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
                       palette.bodyText,
                       Qt::AlignLeft | Qt::AlignVCenter,
                       {topTarget}});
-    if (item.alternativeDividerY >= 0.0 && !item.alternativeGuard.isEmpty()) {
-      const QRectF operandTarget(item.rect.left() + 8.0,
-                                 item.alternativeDividerY + 1.0,
+    for (qsizetype operandIndex = 1; operandIndex < item.operands.size();
+         ++operandIndex) {
+      const auto &operand = item.operands.at(operandIndex);
+      if (operand.dividerY < 0.0 || operand.guard.isEmpty())
+        continue;
+      const QRectF operandTarget(item.rect.left() + 8.0, operand.dividerY + 1.0,
                                  item.rect.width() - 16.0, kLineHeight);
       if (!coverage.isValid() || coverage.intersects(operandTarget))
-        entries.append(
-            {operandTarget,
-             elided(QStringLiteral("[%1]").arg(item.alternativeGuard), base,
-                    operandTarget.width()),
-             base,
-             palette.bodyText,
-             Qt::AlignLeft | Qt::AlignVCenter,
-             {operandTarget}});
+        entries.append({operandTarget,
+                        elided(QStringLiteral("[%1]").arg(operand.guard), base,
+                               operandTarget.width()),
+                        base,
+                        palette.bodyText,
+                        Qt::AlignLeft | Qt::AlignVCenter,
+                        {operandTarget}});
     }
   }
 
@@ -3981,6 +4037,11 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
               {fragment,
                m_selectedSequenceCombinedFragments.contains(fragment.id)});
         if (m_interaction == Interaction::CreateSequenceMessage) {
+          bool previewTypeOk = false;
+          const SequenceMessageType previewType = sequenceMessageTypeFromString(
+              m_sequenceGestureMessageType, &previewTypeOk);
+          if (previewTypeOk)
+            snapshot.sequenceMessagePreviewType = previewType;
           const auto source = std::find_if(
               sequenceLayout.participants.cbegin(),
               sequenceLayout.participants.cend(),
@@ -3994,14 +4055,30 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
                 return candidate.id == m_sequenceGestureTargetParticipant;
               });
           if (source != sequenceLayout.participants.cend()) {
-            const QPointF start(source->lifelineX, m_sequenceGestureY);
+            constexpr qreal kPreviewSelfWidth = 64.0;
+            qreal remoteX = m_sequenceGesturePointer.x();
+            if (target != sequenceLayout.participants.cend())
+              remoteX = target->id == source->id
+                            ? source->lifelineX + kPreviewSelfWidth
+                            : target->lifelineX;
+            qreal sourceX = source->lifelineX;
+            const auto sourceActivation = std::find_if(
+                sequenceLayout.activations.cbegin(),
+                sequenceLayout.activations.cend(),
+                [this](const auto &candidate) {
+                  return candidate.id == m_sequenceGestureSourceActivation;
+                });
+            if (sourceActivation != sequenceLayout.activations.cend())
+              sourceX = remoteX < sourceActivation->rect.center().x()
+                            ? sourceActivation->rect.left()
+                            : sourceActivation->rect.right();
+            const QPointF start(sourceX, m_sequenceGestureY);
             if (target == sequenceLayout.participants.cend()) {
               snapshot.sequenceMessagePreview = {start,
                                                  m_sequenceGesturePointer};
             } else if (target->id == source->id) {
               // A compact loop makes a self-message gesture unambiguous before
               // the details dialog is accepted.
-              constexpr qreal kPreviewSelfWidth = 64.0;
               constexpr qreal kPreviewSelfHeight = 32.0;
               snapshot.sequenceMessagePreview = {
                   start, start + QPointF(kPreviewSelfWidth, 0.0),
@@ -4794,6 +4871,8 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
         m_interaction = Interaction::PendingSequenceMessage;
         m_sequenceGestureSourceParticipant = activation->participantId;
         m_sequenceGestureTargetParticipant.clear();
+        m_sequenceGestureSourceActivation = activation->id;
+        m_sequenceGestureMessageType.clear();
         m_sequenceGesturePointer = m_pressScene;
         m_sequenceGestureY = m_pressScene.y();
       }
@@ -4817,6 +4896,8 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
         m_interaction = Interaction::PendingSequenceMessage;
         m_sequenceGestureSourceParticipant = lifeline->id;
         m_sequenceGestureTargetParticipant.clear();
+        m_sequenceGestureSourceActivation.clear();
+        m_sequenceGestureMessageType.clear();
         m_sequenceGesturePointer = m_pressScene;
         m_sequenceGestureY = m_pressScene.y();
       }
@@ -5321,17 +5402,27 @@ void DiagramCanvas::mouseReleaseEvent(QMouseEvent *event) {
     if (requestCreation) {
       m_pendingSequenceMessageSource = m_sequenceGestureSourceParticipant;
       m_pendingSequenceMessageTarget = m_sequenceGestureTargetParticipant;
+      m_pendingSequenceMessageSourceActivation =
+          m_sequenceGestureSourceActivation;
       m_pendingSequenceMessageY = m_sequenceGestureY;
     }
+    const QString quickMessageType =
+        requestCreation ? m_sequenceGestureMessageType : QString{};
     m_interaction = Interaction::None;
     m_sequenceGestureSourceParticipant.clear();
     m_sequenceGestureTargetParticipant.clear();
+    m_sequenceGestureSourceActivation.clear();
+    m_sequenceGestureMessageType.clear();
     m_sequenceGesturePointer = {};
     m_sequenceGestureY = 0.0;
     m_sceneDirty = true;
     update();
-    if (requestCreation)
-      emit sequenceMessageCreationRequested();
+    if (requestCreation) {
+      if (quickMessageType.isEmpty())
+        emit sequenceMessageCreationRequested();
+      else
+        createSequenceMessage(quickMessageType, {}, {}, true);
+    }
     event->accept();
     return;
   }
@@ -6132,7 +6223,9 @@ bool DiagramCanvas::createSequenceMessage(const QString &type,
       hasGestureEndpoints ? m_pendingSequenceMessageY : -1.0;
   const QString id = m_project->createSequenceMessage(
       m_diagramId, sourceParticipantId, targetParticipantId, type, text,
-      targetOperationId, requestedY, automaticActivation);
+      targetOperationId, requestedY, automaticActivation,
+      hasGestureEndpoints ? m_pendingSequenceMessageSourceActivation
+                          : QString{});
   cancelPendingSequenceMessage();
   if (id.isEmpty())
     return false;
@@ -6143,12 +6236,15 @@ bool DiagramCanvas::createSequenceMessage(const QString &type,
 void DiagramCanvas::cancelPendingSequenceMessage() {
   m_pendingSequenceMessageSource.clear();
   m_pendingSequenceMessageTarget.clear();
+  m_pendingSequenceMessageSourceActivation.clear();
   m_pendingSequenceMessageY = -1.0;
   if (m_interaction == Interaction::PendingSequenceMessage ||
       m_interaction == Interaction::CreateSequenceMessage) {
     m_interaction = Interaction::None;
     m_sequenceGestureSourceParticipant.clear();
     m_sequenceGestureTargetParticipant.clear();
+    m_sequenceGestureSourceActivation.clear();
+    m_sequenceGestureMessageType.clear();
     m_sequenceGesturePointer = {};
     m_sequenceGestureY = 0.0;
   }
@@ -6181,6 +6277,28 @@ QString DiagramCanvas::sequenceMessageEndpointSummary() const {
       target == layout.participants.cend())
     return {};
   return QStringLiteral("%1 \u2192 %2").arg(source->name, target->name);
+}
+
+bool DiagramCanvas::sequenceReturnCreationAllowed() const {
+  const auto *currentDiagram = diagram();
+  const bool hasGestureEndpoints = !m_pendingSequenceMessageSource.isEmpty() &&
+                                   !m_pendingSequenceMessageTarget.isEmpty();
+  if (!m_project || !currentDiagram ||
+      currentDiagram->type != DiagramType::Sequence ||
+      (!hasGestureEndpoints && m_selectedSequenceParticipantOrder.size() != 2))
+    return false;
+
+  const QString sourceParticipantId =
+      hasGestureEndpoints ? m_pendingSequenceMessageSource
+                          : m_selectedSequenceParticipantOrder.constFirst();
+  const QString targetParticipantId =
+      hasGestureEndpoints ? m_pendingSequenceMessageTarget
+                          : m_selectedSequenceParticipantOrder.constLast();
+  return m_project->canCreateSequenceReturn(
+      m_diagramId, sourceParticipantId, targetParticipantId,
+      hasGestureEndpoints ? m_pendingSequenceMessageY : -1.0,
+      hasGestureEndpoints ? m_pendingSequenceMessageSourceActivation
+                          : QString{});
 }
 
 QVariantList DiagramCanvas::sequenceMessageTargetOperationChoices() const {
@@ -6361,11 +6479,12 @@ QVariantMap DiagramCanvas::sequenceCombinedFragmentEditorData() const {
     result.insert(QStringLiteral("participantIds"), fragment->participantIds);
     result.insert(QStringLiteral("startMessageId"), fragment->startMessageId);
     result.insert(QStringLiteral("endMessageId"), fragment->endMessageId);
-    result.insert(QStringLiteral("guard"), fragment->guard);
-    result.insert(QStringLiteral("alternativeStartMessageId"),
-                  fragment->alternativeStartMessageId);
-    result.insert(QStringLiteral("alternativeGuard"),
-                  fragment->alternativeGuard);
+    QVariantList operands;
+    for (const auto &operand : fragment->operands)
+      operands.append(QVariantMap{
+          {QStringLiteral("startMessageId"), operand.startMessageId},
+          {QStringLiteral("guard"), operand.guard}});
+    result.insert(QStringLiteral("operands"), operands);
   } else if (!m_selectedSequenceParticipants.isEmpty()) {
     QStringList participantIds;
     // Diagram order makes the displayed frame stable irrespective of click
@@ -6384,8 +6503,7 @@ QVariantMap DiagramCanvas::sequenceCombinedFragmentEditorData() const {
 
 bool DiagramCanvas::createSequenceCombinedFragment(
     const QString &type, const QString &startMessageId,
-    const QString &endMessageId, const QString &guard,
-    const QString &alternativeStartMessageId, const QString &alternativeGuard) {
+    const QString &endMessageId, const QVariantList &operands) {
   if (!m_project || m_selectedSequenceParticipants.isEmpty())
     return false;
   QStringList participantIds;
@@ -6394,9 +6512,10 @@ bool DiagramCanvas::createSequenceCombinedFragment(
       if (m_selectedSequenceParticipants.contains(participant.id))
         participantIds.append(participant.id);
   }
-  const QString fragmentId = m_project->createSequenceCombinedFragment(
-      m_diagramId, participantIds, type, startMessageId, endMessageId, guard,
-      alternativeStartMessageId, alternativeGuard);
+  const QString fragmentId =
+      m_project->createSequenceCombinedFragmentWithOperands(
+          m_diagramId, participantIds, type, startMessageId, endMessageId,
+          sequenceFragmentOperandsFromVariantList(operands));
   if (fragmentId.isEmpty())
     return false;
   selectSequenceCombinedFragment(fragmentId, false);
@@ -6405,13 +6524,12 @@ bool DiagramCanvas::createSequenceCombinedFragment(
 
 bool DiagramCanvas::updateSelectedSequenceCombinedFragment(
     const QString &type, const QString &startMessageId,
-    const QString &endMessageId, const QString &guard,
-    const QString &alternativeStartMessageId, const QString &alternativeGuard) {
+    const QString &endMessageId, const QVariantList &operands) {
   if (!m_project || m_selectedSequenceCombinedFragments.size() != 1)
     return false;
-  const bool updated = m_project->updateSequenceCombinedFragment(
+  const bool updated = m_project->updateSequenceCombinedFragmentWithOperands(
       m_diagramId, m_selectedSequenceCombinedFragment, type, startMessageId,
-      endMessageId, guard, alternativeStartMessageId, alternativeGuard);
+      endMessageId, sequenceFragmentOperandsFromVariantList(operands));
   if (updated) {
     m_sceneDirty = true;
     m_textDirty = true;
@@ -9003,6 +9121,18 @@ void DiagramCanvas::editSelectedSequenceItem() {
 void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
   if (const auto *currentDiagram = diagram();
       currentDiagram && currentDiagram->type == DiagramType::Sequence) {
+    if (m_leftButtonPressed &&
+        (m_interaction == Interaction::PendingSequenceMessage ||
+         m_interaction == Interaction::CreateSequenceMessage)) {
+      const QString quickMessageType = sequenceMessageTypeForGestureKey(*event);
+      if (!quickMessageType.isEmpty()) {
+        m_sequenceGestureMessageType = quickMessageType;
+        m_sceneDirty = true;
+        update();
+        event->accept();
+        return;
+      }
+    }
     if (event->key() == Qt::Key_Escape &&
         (m_interaction == Interaction::MoveSequenceParticipant ||
          m_interaction == Interaction::MoveSequenceMessage ||

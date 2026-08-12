@@ -838,9 +838,10 @@ private:
 };
 
 // Deleting a sequence item has a small but important dependency graph:
-// participant -> messages -> activations / combined fragments.  Recording
-// only the affected records and their original positions keeps the command
-// cheap for large projects while still making a cascade one undo operation.
+// participant -> messages -> activations / combined fragments. An activation
+// loses only its end boundary when that message is removed; its start boundary
+// remains essential. Recording only affected records and references keeps the
+// command cheap for large projects while still making a cascade one undo unit.
 class DeleteSequenceItemsCommand final : public ProjectCommand {
 public:
   DeleteSequenceItemsCommand(ProjectController *controller,
@@ -865,6 +866,14 @@ private:
     qsizetype index = -1;
     SequenceActivation value;
   };
+  struct ActivationEndChange {
+    QString activationId;
+    QString endMessageId;
+  };
+  struct MessageSourceActivationChange {
+    QString messageId;
+    QString sourceActivationId;
+  };
   struct FragmentRecord {
     qsizetype index = -1;
     SequenceCombinedFragment value;
@@ -878,6 +887,8 @@ private:
   QList<ParticipantRecord> m_participants;
   QList<MessageRecord> m_messages;
   QList<ActivationRecord> m_activations;
+  QList<ActivationEndChange> m_activationEndChanges;
+  QList<MessageSourceActivationChange> m_messageSourceActivationChanges;
   QList<FragmentRecord> m_fragments;
 };
 

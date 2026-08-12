@@ -352,9 +352,9 @@ void DiagramCanvasTests::sequenceLayoutInteractionAndUndoAreDeterministic() {
         QStringLiteral("participant-service")},
        QStringLiteral("message-call"),
        QStringLiteral("message-return"),
-       QStringLiteral("accepted"),
-       QStringLiteral("message-self"),
-       QStringLiteral("otherwise"),
+       {{QStringLiteral("message-call"), QStringLiteral("accepted"), {}},
+        {QStringLiteral("message-self"), QStringLiteral("otherwise"), {}},
+        {QStringLiteral("message-return"), QStringLiteral("cleanup"), {}}},
        {}});
 
   const ui::SequenceDiagramLayout initialLayout =
@@ -363,7 +363,9 @@ void DiagramCanvasTests::sequenceLayoutInteractionAndUndoAreDeterministic() {
   QCOMPARE(initialLayout.messages.size(), 3);
   QCOMPARE(initialLayout.activations.size(), 1);
   QCOMPARE(initialLayout.fragments.size(), 1);
-  QCOMPARE(initialLayout.fragments.first().alternativeDividerY, 208.0);
+  QCOMPARE(initialLayout.fragments.first().operands.size(), 3);
+  QCOMPARE(initialLayout.fragments.first().operands.at(1).dividerY, 208.0);
+  QCOMPARE(initialLayout.fragments.first().operands.at(2).dividerY, 288.0);
   QCOMPARE(initialLayout.participants.first().executionContextLabel,
            QStringLiteral("«thread» main"));
   QCOMPARE(initialLayout.participants.at(1).name, QStringLiteral("Service"));
@@ -389,6 +391,85 @@ void DiagramCanvasTests::sequenceLayoutInteractionAndUndoAreDeterministic() {
           ->id,
       QStringLiteral("fragment-request"));
   QVERIFY(initialLayout.contentBounds.contains(QPointF(460.0, 300.0)));
+
+  // Nested bars overlap most of their parent. Exact painted containment must
+  // win before hit slop so the parent's narrow visible strip remains usable
+  // as the source of an explicit outer return.
+  Diagram nestedActivationDiagram = diagram;
+  findSequenceMessage(nestedActivationDiagram, QStringLiteral("message-self"))
+      ->sourceActivationId = QStringLiteral("activation-service");
+  nestedActivationDiagram.sequenceActivations.append(
+      {QStringLiteral("activation-nested"),
+       QStringLiteral("nested"),
+       QStringLiteral("participant-service"),
+       {},
+       QStringLiteral("message-self"),
+       QStringLiteral("message-sibling-self"),
+       {},
+       {},
+       {},
+       {}});
+  SequenceMessage siblingSelfMessage;
+  siblingSelfMessage.id = QStringLiteral("message-sibling-self");
+  siblingSelfMessage.key = QStringLiteral("sibling-self");
+  siblingSelfMessage.sourceParticipantId =
+      QStringLiteral("participant-service");
+  siblingSelfMessage.targetParticipantId =
+      QStringLiteral("participant-service");
+  siblingSelfMessage.type = SequenceMessageType::Synchronous;
+  siblingSelfMessage.text = QStringLiteral("queueAgain()");
+  siblingSelfMessage.y = 260.0;
+  siblingSelfMessage.sourceActivationId = QStringLiteral("activation-service");
+  nestedActivationDiagram.sequenceMessages.insert(2, siblingSelfMessage);
+  nestedActivationDiagram.sequenceActivations.append(
+      {QStringLiteral("activation-sibling"),
+       QStringLiteral("sibling"),
+       QStringLiteral("participant-service"),
+       {},
+       QStringLiteral("message-sibling-self"),
+       QStringLiteral("message-return"),
+       {},
+       {},
+       {},
+       {}});
+  const ui::SequenceDiagramLayout nestedActivationLayout =
+      ui::buildSequenceDiagramLayout(project, nestedActivationDiagram);
+  const auto outerActivation = std::find_if(
+      nestedActivationLayout.activations.cbegin(),
+      nestedActivationLayout.activations.cend(), [](const auto &candidate) {
+        return candidate.id == QStringLiteral("activation-service");
+      });
+  const auto innerActivation = std::find_if(
+      nestedActivationLayout.activations.cbegin(),
+      nestedActivationLayout.activations.cend(), [](const auto &candidate) {
+        return candidate.id == QStringLiteral("activation-nested");
+      });
+  const auto siblingActivation = std::find_if(
+      nestedActivationLayout.activations.cbegin(),
+      nestedActivationLayout.activations.cend(), [](const auto &candidate) {
+        return candidate.id == QStringLiteral("activation-sibling");
+      });
+  QVERIFY(outerActivation != nestedActivationLayout.activations.cend());
+  QVERIFY(innerActivation != nestedActivationLayout.activations.cend());
+  QVERIFY(siblingActivation != nestedActivationLayout.activations.cend());
+  QCOMPARE(innerActivation->rect.left(), siblingActivation->rect.left());
+  QCOMPARE(siblingActivation->rect.top() - innerActivation->rect.bottom(), 4.0);
+  QCOMPARE(nestedActivationLayout.messages.at(1).points.constFirst().x(),
+           outerActivation->rect.right());
+  QCOMPARE(nestedActivationLayout.messages.at(2).points.constFirst().x(),
+           outerActivation->rect.right());
+  QCOMPARE(ui::hitSequenceActivation(
+               nestedActivationLayout,
+               QPointF(outerActivation->rect.left() + 1.0, 260.0), 6.0)
+               ->id,
+           QStringLiteral("activation-service"));
+  QCOMPARE(ui::hitSequenceActivation(
+               nestedActivationLayout,
+               QPointF(innerActivation->rect.center().x(), 240.0), 6.0)
+               ->id,
+           QStringLiteral("activation-nested"));
+  QCOMPARE(nestedActivationLayout.messages.constLast().points.constFirst().x(),
+           outerActivation->rect.left());
 
   // A create message lowers the target participant header to the creation
   // row. Its arrow meets the header edge, and no pre-creation lifeline is
@@ -419,6 +500,60 @@ void DiagramCanvasTests::sequenceLayoutInteractionAndUndoAreDeterministic() {
   TestDiagramCanvas canvas;
   configureCanvas(canvas, controller);
   QCOMPARE(canvas.diagramType(), QStringLiteral("sequence"));
+
+  // Starting two self-messages from the visible strip of the same outer bar
+  // must retain that exact source level. The second gesture happens while the
+  // first child activation is still open; both resulting bars are siblings.
+  const auto createOuterSelfMessage = [&](qreal viewY) {
+    canvas.press(QPointF(484.0, viewY));
+    canvas.move(QPointF(570.0, viewY));
+    canvas.key(Qt::Key_A);
+    canvas.move(QPointF(484.0, viewY));
+    canvas.release(QPointF(484.0, viewY));
+  };
+  createOuterSelfMessage(280.0);
+  createOuterSelfMessage(304.0);
+  const Diagram &gestureDiagram = controller.data().diagrams.first();
+  QList<const SequenceMessage *> outerSelfMessages;
+  for (const SequenceMessage &message : gestureDiagram.sequenceMessages) {
+    if (message.sourceActivationId == QStringLiteral("activation-service"))
+      outerSelfMessages.append(&message);
+  }
+  QCOMPARE(outerSelfMessages.size(), 2);
+  const ui::SequenceDiagramLayout gestureLayout =
+      ui::buildSequenceDiagramLayout(controller.data(), gestureDiagram);
+  QList<qreal> childLeftEdges;
+  for (const SequenceActivation &activation :
+       gestureDiagram.sequenceActivations) {
+    if (std::any_of(outerSelfMessages.cbegin(), outerSelfMessages.cend(),
+                    [&activation](const SequenceMessage *message) {
+                      return activation.startMessageId == message->id;
+                    })) {
+      const auto visual = std::find_if(
+          gestureLayout.activations.cbegin(), gestureLayout.activations.cend(),
+          [&activation](const auto &item) { return item.id == activation.id; });
+      QVERIFY(visual != gestureLayout.activations.cend());
+      childLeftEdges.append(visual->rect.left());
+    }
+  }
+  QCOMPARE(childLeftEdges.size(), 2);
+  QCOMPARE(childLeftEdges.at(0), childLeftEdges.at(1));
+  QList<QRectF> childRects;
+  for (const auto &activation : gestureLayout.activations) {
+    if (childLeftEdges.contains(activation.rect.left()) &&
+        activation.id != QStringLiteral("activation-service"))
+      childRects.append(activation.rect);
+  }
+  std::sort(childRects.begin(), childRects.end(),
+            [](const QRectF &left, const QRectF &right) {
+              return left.top() < right.top();
+            });
+  QCOMPARE(childRects.size(), 2);
+  QCOMPARE(childRects.at(1).top() - childRects.at(0).bottom(), 4.0);
+  controller.undo();
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first().sequenceMessages.size(), 3);
+  QCOMPARE(controller.data().diagrams.first().sequenceActivations.size(), 1);
 
   // The canvas starts with a 30-pixel pan at 100% zoom.
   canvas.drag(QPointF(190.0, 100.0), QPointF(240.0, 100.0));
@@ -493,6 +628,26 @@ void DiagramCanvasTests::sequenceLayoutInteractionAndUndoAreDeterministic() {
            QStringLiteral("earlyCall()"));
   QCOMPARE(controller.data().diagrams.first().sequenceMessages.first().y,
            132.0);
+  QCOMPARE(controller.data().diagrams.first().sequenceActivations.size(), 2);
+  controller.undo();
+  QCOMPARE(controller.data().diagrams.first().sequenceMessages.size(), 3);
+  QCOMPARE(controller.data().diagrams.first().sequenceActivations.size(), 1);
+
+  // A message-kind key held during the pointer gesture takes the quick path:
+  // the message is committed on release with automatic activation handling,
+  // and the details dialog is not requested. With no key, the dialog path
+  // above remains unchanged.
+  const int dialogRequestsBeforeQuickMessage = messageCreationRequests.count();
+  canvas.press(QPointF(190.0, 150.0));
+  canvas.move(QPointF(490.0, 150.0));
+  canvas.key(Qt::Key_A);
+  canvas.release(QPointF(490.0, 150.0));
+  QCOMPARE(messageCreationRequests.count(), dialogRequestsBeforeQuickMessage);
+  QCOMPARE(controller.data().diagrams.first().sequenceMessages.size(), 4);
+  const SequenceMessage &quickMessage =
+      controller.data().diagrams.first().sequenceMessages.first();
+  QVERIFY(quickMessage.type == SequenceMessageType::Asynchronous);
+  QVERIFY(quickMessage.text.isEmpty());
   QCOMPARE(controller.data().diagrams.first().sequenceActivations.size(), 2);
   controller.undo();
   QCOMPARE(controller.data().diagrams.first().sequenceMessages.size(), 3);

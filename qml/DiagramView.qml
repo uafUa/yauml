@@ -357,6 +357,10 @@ Item {
         pngExportDialog.open()
     }
 
+    function openPdfExportDialog() {
+        pdfExportDialog.open()
+    }
+
     function openAutomaticLayoutDialog(scope) {
         automaticLayoutDialog.openFor(scope)
     }
@@ -1114,6 +1118,15 @@ Item {
         onAccepted: diagramImageExporter.exportPng(selectedFile)
     }
 
+    FileDialog {
+        id: pdfExportDialog
+        title: qsTr("Export diagram as PDF")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("PDF documents (*.pdf)")]
+        defaultSuffix: "pdf"
+        onAccepted: diagramImageExporter.exportPdf(selectedFile)
+    }
+
     StereotypeDropdown {
         id: diagramStereotypeDropdown
         showField: false
@@ -1162,8 +1175,10 @@ Item {
     DiagramCanvasMenu {
         id: canvasMenu
         canvas: root.diagramCanvas
+        shortcutsEnabled: root.visible && !root.inPlaceEditorVisible
         onFilterRequested: root.openDiagramFilterDialog()
         onExportPngRequested: root.openPngExportDialog()
+        onExportPdfRequested: root.openPdfExportDialog()
         onAutomaticLayoutRequested:
             root.openAutomaticLayoutDialog("diagram")
         onConnectorOptimizationRequested: function(scope) {
@@ -1191,7 +1206,9 @@ Item {
         }
         CatalogMenuItem {
             catalogId: "sequence.addActivation"
-            text: qsTr("New activation…")
+            text: root.visible
+                  ? qsTr("New activation… (Ctrl+Shift+A)")
+                  : qsTr("New activation…")
             enabled: canvas.selectedSequenceParticipantCount === 1
             onTriggered: root.openSequenceActivationDialog(false)
         }
@@ -1455,6 +1472,7 @@ Item {
         id: sequenceMessageDialog
         property string endpointSummary: ""
         property var operationChoices: []
+        property bool returnAllowed: false
 
         function indexOfOperation(id) {
             for (let index = 0; index < operationChoices.length; ++index) {
@@ -1462,6 +1480,13 @@ Item {
                     return index
             }
             return 0
+        }
+
+        function refreshAcceptState() {
+            const okButton = standardButton(Dialog.Ok)
+            if (okButton)
+                okButton.enabled = sequenceMessageType.currentValue !== "return"
+                        || returnAllowed
         }
 
         parent: Overlay.overlay
@@ -1475,6 +1500,8 @@ Item {
             sequenceMessageText.clear()
             sequenceMessageTargetOperation.currentIndex = indexOfOperation("")
             sequenceMessageAutomaticActivation.checked = true
+            returnAllowed = canvas.sequenceReturnCreationAllowed()
+            refreshAcceptState()
             sequenceMessageText.forceActiveFocus()
         }
         onAccepted: canvas.createSequenceMessage(
@@ -1506,6 +1533,15 @@ Item {
                     { label: qsTr("Create"), value: "create" },
                     { label: qsTr("Destroy"), value: "destroy" }
                 ]
+                onCurrentValueChanged: sequenceMessageDialog.refreshAcceptState()
+            }
+            Label {
+                Layout.fillWidth: true
+                visible: sequenceMessageType.currentValue === "return"
+                         && !sequenceMessageDialog.returnAllowed
+                wrapMode: Text.Wrap
+                color: uiTheme.warningBorder
+                text: qsTr("A return must leave an open activation and go back to the participant that called that activation.")
             }
             CheckBox {
                 id: sequenceMessageAutomaticActivation
@@ -1748,6 +1784,11 @@ Item {
         property bool editing: false
         property var editorData: ({})
         property var messageChoices: []
+        readonly property bool supportsMultipleOperands:
+            fragmentType.currentValue === "alt"
+            || fragmentType.currentValue === "par"
+
+        ListModel { id: fragmentOperandsModel }
 
         function indexOfChoice(id) {
             for (let index = 0; index < messageChoices.length; ++index) {
@@ -1755,6 +1796,25 @@ Item {
                     return index
             }
             return 0
+        }
+
+        function appendDefaultOperand() {
+            const choiceIndex = Math.min(
+                        Math.max(0, messageChoices.length - 1),
+                        fragmentStart.currentIndex + fragmentOperandsModel.count)
+            const choice = messageChoices.length > 0
+                    ? messageChoices[choiceIndex].id : ""
+            fragmentOperandsModel.append({
+                startMessageId: choice,
+                guard: ""
+            })
+        }
+
+        function ensureMultipleOperands() {
+            if (!supportsMultipleOperands)
+                return
+            while (fragmentOperandsModel.count < 2)
+                appendDefaultOperand()
         }
 
         parent: Overlay.overlay
@@ -1773,36 +1833,53 @@ Item {
             fragmentEnd.currentIndex = editorData.endMessageId
                     ? indexOfChoice(editorData.endMessageId)
                     : Math.max(0, messageChoices.length - 1)
-            fragmentGuard.text = editorData.guard || ""
-            fragmentAlternativeStart.currentIndex = editorData.alternativeStartMessageId
-                    ? indexOfChoice(editorData.alternativeStartMessageId)
-                    : Math.min(Math.max(0, messageChoices.length - 1),
-                               fragmentStart.currentIndex + 1)
-            fragmentAlternativeGuard.text = editorData.alternativeGuard || ""
+            fragmentOperandsModel.clear()
+            const savedOperands = editorData.operands || []
+            for (let index = 0; index < savedOperands.length; ++index) {
+                fragmentOperandsModel.append({
+                    startMessageId: savedOperands[index].startMessageId || "",
+                    guard: savedOperands[index].guard || ""
+                })
+            }
+            if (fragmentOperandsModel.count === 0)
+                fragmentOperandsModel.append({
+                    startMessageId: fragmentStart.currentValue,
+                    guard: ""
+                })
+            fragmentSingleGuard.text = fragmentOperandsModel.get(0).guard
+            ensureMultipleOperands()
         }
         onAccepted: {
-            const hasSecondOperand = fragmentType.currentValue === "alt"
-                    || fragmentType.currentValue === "par"
-            const alternativeStart = hasSecondOperand
-                    ? fragmentAlternativeStart.currentValue : ""
-            const alternativeGuard = hasSecondOperand
-                    ? fragmentAlternativeGuard.text : ""
+            let operands = []
+            if (supportsMultipleOperands) {
+                for (let index = 0; index < fragmentOperandsModel.count;
+                     ++index) {
+                    const operand = fragmentOperandsModel.get(index)
+                    operands.push({
+                        startMessageId: index === 0
+                                ? fragmentStart.currentValue
+                                : operand.startMessageId,
+                        guard: operand.guard
+                    })
+                }
+            } else {
+                operands.push({
+                    startMessageId: fragmentStart.currentValue,
+                    guard: fragmentSingleGuard.text
+                })
+            }
             if (editing)
                 canvas.updateSelectedSequenceCombinedFragment(
                             fragmentType.currentValue,
                             fragmentStart.currentValue,
                             fragmentEnd.currentValue,
-                            fragmentGuard.text,
-                            alternativeStart,
-                            alternativeGuard)
+                            operands)
             else
                 canvas.createSequenceCombinedFragment(
                             fragmentType.currentValue,
                             fragmentStart.currentValue,
                             fragmentEnd.currentValue,
-                            fragmentGuard.text,
-                            alternativeStart,
-                            alternativeGuard)
+                            operands)
         }
 
         contentItem: ColumnLayout {
@@ -1829,6 +1906,8 @@ Item {
                     { label: qsTr("Parallel (par)"), value: "par" },
                     { label: qsTr("Critical region"), value: "critical" }
                 ]
+                onCurrentValueChanged:
+                    sequenceCombinedFragmentDialog.ensureMultipleOperands()
             }
             Label { text: qsTr("First message") }
             ComboBox {
@@ -1846,41 +1925,95 @@ Item {
                 textRole: "label"
                 valueRole: "id"
             }
-            Label { text: qsTr("Guard (optional)") }
+            Label {
+                visible: !sequenceCombinedFragmentDialog.supportsMultipleOperands
+                height: visible ? implicitHeight : 0
+                text: qsTr("Guard (optional)")
+            }
             TextField {
-                id: fragmentGuard
+                id: fragmentSingleGuard
                 Layout.fillWidth: true
+                visible: !sequenceCombinedFragmentDialog.supportsMultipleOperands
+                height: visible ? implicitHeight : 0
                 placeholderText: qsTr("e.g. request is valid")
+                onTextEdited: {
+                    if (fragmentOperandsModel.count > 0)
+                        fragmentOperandsModel.setProperty(0, "guard", text)
+                }
+                onVisibleChanged: {
+                    if (visible && fragmentOperandsModel.count > 0)
+                        text = fragmentOperandsModel.get(0).guard
+                }
             }
             Label {
-                visible: fragmentType.currentValue === "alt"
-                         || fragmentType.currentValue === "par"
+                visible: sequenceCombinedFragmentDialog.supportsMultipleOperands
                 height: visible ? implicitHeight : 0
-                text: qsTr("Second operand starts at")
+                text: qsTr("Operands")
             }
-            ComboBox {
-                id: fragmentAlternativeStart
+            ScrollView {
                 Layout.fillWidth: true
-                visible: fragmentType.currentValue === "alt"
-                         || fragmentType.currentValue === "par"
-                height: visible ? implicitHeight : 0
-                model: sequenceCombinedFragmentDialog.messageChoices
-                textRole: "label"
-                valueRole: "id"
+                Layout.preferredHeight: visible
+                                        ? Math.min(240, operandRows.implicitHeight)
+                                        : 0
+                visible: sequenceCombinedFragmentDialog.supportsMultipleOperands
+                clip: true
+                contentWidth: availableWidth
+
+                ColumnLayout {
+                    id: operandRows
+                    width: parent.width
+                    spacing: 6
+
+                    Repeater {
+                        model: fragmentOperandsModel
+
+                        delegate: RowLayout {
+                            Layout.fillWidth: true
+                            spacing: 6
+
+                            Label {
+                                text: qsTr("%1.").arg(index + 1)
+                                Layout.preferredWidth: 24
+                            }
+                            ComboBox {
+                                Layout.fillWidth: true
+                                enabled: index > 0
+                                model: sequenceCombinedFragmentDialog.messageChoices
+                                textRole: "label"
+                                valueRole: "id"
+                                currentIndex: index === 0
+                                              ? fragmentStart.currentIndex
+                                              : sequenceCombinedFragmentDialog.indexOfChoice(
+                                                    startMessageId)
+                                onActivated: fragmentOperandsModel.setProperty(
+                                                 index, "startMessageId",
+                                                 currentValue)
+                            }
+                            TextField {
+                                Layout.fillWidth: true
+                                text: guard
+                                placeholderText: qsTr("guard (optional)")
+                                onTextEdited: fragmentOperandsModel.setProperty(
+                                                  index, "guard", text)
+                            }
+                            ToolButton {
+                                text: "×"
+                                visible: index > 0
+                                         && fragmentOperandsModel.count > 2
+                                enabled: visible
+                                onClicked: fragmentOperandsModel.remove(index)
+                            }
+                        }
+                    }
+                }
             }
-            Label {
-                visible: fragmentType.currentValue === "alt"
-                         || fragmentType.currentValue === "par"
+            Button {
+                visible: sequenceCombinedFragmentDialog.supportsMultipleOperands
                 height: visible ? implicitHeight : 0
-                text: qsTr("Second guard (optional)")
-            }
-            TextField {
-                id: fragmentAlternativeGuard
-                Layout.fillWidth: true
-                visible: fragmentType.currentValue === "alt"
-                         || fragmentType.currentValue === "par"
-                height: visible ? implicitHeight : 0
-                placeholderText: qsTr("e.g. otherwise")
+                text: qsTr("Add operand")
+                enabled: fragmentOperandsModel.count
+                         < sequenceCombinedFragmentDialog.messageChoices.length
+                onClicked: sequenceCombinedFragmentDialog.appendDefaultOperand()
             }
         }
     }
@@ -2485,6 +2618,10 @@ Item {
     Shortcut { sequences: ["Ctrl+Shift+C"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible && canvas.diagramType === "class"; onActivated: canvas.createElementAtViewportCenter("class") }
     Shortcut { sequences: ["Ctrl+Shift+S"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible && canvas.diagramType === "class"; onActivated: canvas.createElementAtViewportCenter("struct") }
     Shortcut { sequences: ["Ctrl+Shift+E"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible && canvas.diagramType === "class"; onActivated: canvas.createElementAtViewportCenter("enumeration") }
+    Shortcut { sequences: ["Ctrl+Shift+P"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible && canvas.diagramType === "sequence"; onActivated: canvas.addSequenceParticipantAtViewportCenter() }
+    Shortcut { sequences: ["Ctrl+Shift+M"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible && canvas.diagramType === "sequence" && canvas.selectedSequenceParticipantCount === 2; onActivated: root.openSequenceMessageDialog() }
+    Shortcut { sequences: ["Ctrl+Shift+A"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible && canvas.diagramType === "sequence" && canvas.selectedSequenceParticipantCount === 1; onActivated: root.openSequenceActivationDialog(false) }
+    Shortcut { sequences: ["Ctrl+Shift+G"]; context: Qt.WindowShortcut; enabled: root.visible && !root.inPlaceEditorVisible && canvas.diagramType === "sequence" && canvas.selectedSequenceParticipantCount > 0; onActivated: root.openSequenceCombinedFragmentDialog(false) }
     Shortcut { sequences: ["Ctrl+Alt+D"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("dependency") }
     Shortcut { sequences: ["Ctrl+Alt+I"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("realization") }
     Shortcut { sequences: ["Ctrl+Alt+G"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("generalization") }
@@ -2493,12 +2630,36 @@ Item {
     Shortcut { sequences: ["Ctrl+Alt+C"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("composition") }
     Shortcut { sequences: ["Ctrl+Alt+N"]; context: Qt.WindowShortcut; enabled: root.visible && canvas.selectedNodeCount === 2; onActivated: canvas.createRelationship("containment") }
     Shortcut {
+        sequences: ["F2"]
+        context: Qt.WindowShortcut
+        enabled: root.visible && !root.inPlaceEditorVisible
+                 && canvas.diagramType === "sequence"
+                 && (canvas.selectedSequenceParticipantCount
+                     + canvas.selectedSequenceMessageCount
+                     + canvas.selectedSequenceActivationCount
+                     + canvas.selectedSequenceCombinedFragmentCount) === 1
+        onActivated: {
+            if (canvas.selectedSequenceActivationCount === 1)
+                root.openSequenceActivationDialog(true)
+            else if (canvas.selectedSequenceCombinedFragmentCount === 1)
+                root.openSequenceCombinedFragmentDialog(true)
+            else
+                canvas.editSelectedSequenceItem()
+        }
+    }
+    Shortcut {
         sequences: ["Delete"]
         context: Qt.WindowShortcut
         enabled: root.visible && !root.inPlaceEditorVisible
                  && (canvas.selectedNodeCount > 0 || canvas.containerSelected
-                     || canvas.connectorSelected || canvas.noteSelected)
-        onActivated: canvas.bendPointSelected
+                     || canvas.connectorSelected || canvas.noteSelected
+                     || canvas.selectedSequenceParticipantCount > 0
+                     || canvas.selectedSequenceMessageCount > 0
+                     || canvas.selectedSequenceActivationCount > 0
+                     || canvas.selectedSequenceCombinedFragmentCount > 0)
+        onActivated: canvas.diagramType === "sequence"
+                     ? canvas.deleteSelectedSequenceItems()
+                     : canvas.bendPointSelected
                      ? canvas.removeSelectedBendPoint()
                      : canvas.connectorSelected
                      ? canvas.deleteSelectedConnector()

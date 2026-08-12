@@ -10,6 +10,9 @@ Menu {
 
     required property var canvas
     property bool createAtViewportCenter: false
+    // Only the visible DiagramView owns keyboard accelerators. Tab context
+    // menus reuse this component but must not register duplicate shortcuts.
+    property bool shortcutsEnabled: false
     readonly property bool canvasAvailable:
         canvas !== null && canvas !== undefined
     readonly property bool structuralDiagram:
@@ -19,6 +22,7 @@ Menu {
 
     signal filterRequested()
     signal exportPngRequested()
+    signal exportPdfRequested()
     signal automaticLayoutRequested()
     signal connectorOptimizationRequested(string scope)
     signal sequenceMessageRequested()
@@ -105,7 +109,9 @@ Menu {
     }
     CatalogMenuItem {
         catalogId: "sequence.addParticipant"
-        text: qsTr("New participant")
+        text: root.shortcutsEnabled
+              ? qsTr("New participant (Ctrl+Shift+P)")
+              : qsTr("New participant")
         visible: root.sequenceDiagram
         height: visible ? implicitHeight : 0
         onTriggered: root.createSequenceParticipant()
@@ -118,7 +124,9 @@ Menu {
     }
     CatalogMenuItem {
         catalogId: "sequence.createMessage"
-        text: qsTr("New message…")
+        text: root.shortcutsEnabled
+              ? qsTr("New message… (Ctrl+Shift+M)")
+              : qsTr("New message…")
         visible: root.sequenceDiagram
         height: visible ? implicitHeight : 0
         enabled: root.canvas.selectedSequenceParticipantCount === 2
@@ -126,7 +134,9 @@ Menu {
     }
     CatalogMenuItem {
         catalogId: "sequence.addFragment"
-        text: qsTr("New combined fragment…")
+        text: root.shortcutsEnabled
+              ? qsTr("New combined fragment… (Ctrl+Shift+G)")
+              : qsTr("New combined fragment…")
         visible: root.sequenceDiagram
         height: visible ? implicitHeight : 0
         enabled: root.canvas.selectedSequenceParticipantCount > 0
@@ -197,6 +207,11 @@ Menu {
         catalogId: "diagram.exportPng"
         text: qsTr("Export diagram as PNG…")
         onTriggered: root.exportPngRequested()
+    }
+    CatalogMenuItem {
+        catalogId: "diagram.exportPdf"
+        text: qsTr("Export diagram as PDF…")
+        onTriggered: root.exportPdfRequested()
     }
     MenuSeparator {}
     CatalogMenuItem {

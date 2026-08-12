@@ -99,6 +99,7 @@ private slots:
   void sequenceGuiImportIsUndoable();
   void sequenceDiagramCanBeCreatedFromUiApi();
   void sequenceManualAuthoringIsUndoable();
+  void sequenceFragmentOperandsMigrateFromSchemaSeven();
   void unversionedProjectMigrates();
   void stereotypeCatalogSeedMigrationAndEmptyPersistence();
   void invalidProjectSchemaVersionsAreRejected();
@@ -478,6 +479,13 @@ void CoreTests::sequenceImportValidatesResolvesAndPersists() {
             },
           },
           {
+            key: "retry",
+            from: "controller",
+            to: "worker",
+            kind: "sync",
+            text: "retry()",
+          },
+          {
             key: "complete",
             from: "worker",
             to: "controller",
@@ -498,6 +506,20 @@ void CoreTests::sequenceImportValidatesResolvesAndPersists() {
             end: "complete",
           },
         ],
+        fragments: [
+          {
+            key: "result",
+            kind: "alt",
+            participants: ["controller", "worker"],
+            start: "submit",
+            end: "complete",
+            operands: [
+              { start: "submit", guard: "accepted" },
+              { start: "retry", guard: "retryable" },
+              { start: "complete", guard: "rejected" },
+            ],
+          },
+        ],
       },
     }
   )json5";
@@ -509,11 +531,16 @@ void CoreTests::sequenceImportValidatesResolvesAndPersists() {
   QCOMPARE(toString(parsed.diagram.type), QStringLiteral("sequence"));
   QCOMPARE(parsed.diagram.sequenceExecutionContexts.size(), 2);
   QCOMPARE(parsed.diagram.sequenceParticipants.size(), 2);
-  QCOMPARE(parsed.diagram.sequenceMessages.size(), 2);
+  QCOMPARE(parsed.diagram.sequenceMessages.size(), 3);
   QCOMPARE(parsed.diagram.sequenceActivations.size(), 1);
+  QCOMPARE(parsed.diagram.sequenceCombinedFragments.size(), 1);
+  QCOMPARE(parsed.diagram.sequenceCombinedFragments.first().operands.size(), 3);
+  QCOMPARE(
+      parsed.diagram.sequenceCombinedFragments.first().operands.at(1).guard,
+      QStringLiteral("retryable"));
   QCOMPARE(parsed.diagram.sequenceParticipants.at(0).elementId, controller.id);
   QCOMPARE(parsed.diagram.sequenceParticipants.at(1).elementId, worker.id);
-  QCOMPARE(toString(parsed.diagram.sequenceMessages.at(1).evidence.confidence),
+  QCOMPARE(toString(parsed.diagram.sequenceMessages.at(2).evidence.confidence),
            QStringLiteral("inferred"));
 
   ProjectData imported = project;
@@ -869,21 +896,122 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
   QVERIFY(automaticActivation->endMessageId.isEmpty());
   const QString automaticActivationId = automaticActivation->id;
 
+  // The gesture may explicitly choose an outer activation even while a nested
+  // self-call is still open. Returning from that parent implicitly ends the
+  // nested execution span, so a decorative nested return is not mandatory.
+  const QString automaticSelfCallId = controller.createSequenceMessage(
+      diagramId, targetId, targetId, QStringLiteral("sync"),
+      QStringLiteral("nested()"), {}, -1.0, true, automaticActivationId);
+  QVERIFY(!automaticSelfCallId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  const auto nestedActivation =
+      std::find_if(diagram->sequenceActivations.cbegin(),
+                   diagram->sequenceActivations.cend(),
+                   [&automaticSelfCallId](const SequenceActivation &candidate) {
+                     return candidate.startMessageId == automaticSelfCallId;
+                   });
+  QVERIFY(nestedActivation != diagram->sequenceActivations.cend());
+  const QString nestedActivationId = nestedActivation->id;
+  QCOMPARE(
+      findSequenceMessage(*diagram, automaticSelfCallId)->sourceActivationId,
+      automaticActivationId);
+
+  // A second self-call can deliberately leave the same outer activation even
+  // while the first child remains open. It creates a sibling execution level,
+  // not a child of whichever inner bar happens to be visually on top.
+  const QString siblingSelfCallId = controller.createSequenceMessage(
+      diagramId, targetId, targetId, QStringLiteral("async"),
+      QStringLiteral("sibling()"), {}, -1.0, true, automaticActivationId);
+  QVERIFY(!siblingSelfCallId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QCOMPARE(findSequenceMessage(*diagram, siblingSelfCallId)->sourceActivationId,
+           automaticActivationId);
+  const auto siblingActivation =
+      std::find_if(diagram->sequenceActivations.cbegin(),
+                   diagram->sequenceActivations.cend(),
+                   [&siblingSelfCallId](const SequenceActivation &candidate) {
+                     return candidate.startMessageId == siblingSelfCallId;
+                   });
+  QVERIFY(siblingActivation != diagram->sequenceActivations.cend());
+  const QString siblingActivationId = siblingActivation->id;
+  QCOMPARE(findSequenceActivation(*diagram, nestedActivationId)->endMessageId,
+           siblingSelfCallId);
+
+  const QString roundTripPath =
+      temporary.filePath(QStringLiteral("source-activation-roundtrip"));
+  QVERIFY(ProjectSerializer::save(roundTripPath, controller.data()).ok);
+  const auto roundTrip = ProjectSerializer::load(roundTripPath);
+  QVERIFY(roundTrip.ok);
+  const auto *roundTripDiagram = findDiagram(roundTrip.project, diagramId);
+  QVERIFY(roundTripDiagram);
+  QCOMPARE(findSequenceMessage(*roundTripDiagram, siblingSelfCallId)
+               ->sourceActivationId,
+           automaticActivationId);
+
+  QVERIFY(controller.canCreateSequenceReturn(diagramId, targetId, sourceId,
+                                             -1.0, automaticActivationId));
+
   const QString automaticReturnId = controller.createSequenceMessage(
       diagramId, targetId, sourceId, QStringLiteral("return"),
-      QStringLiteral("done"), {}, -1.0, true);
+      QStringLiteral("done"), {}, -1.0, true, automaticActivationId);
   QVERIFY(!automaticReturnId.isEmpty());
   diagram = findDiagram(controller.data(), diagramId);
   QVERIFY(diagram);
   QCOMPARE(
       findSequenceActivation(*diagram, automaticActivationId)->endMessageId,
       automaticReturnId);
+  QCOMPARE(findSequenceActivation(*diagram, nestedActivationId)->endMessageId,
+           siblingSelfCallId);
+  QCOMPARE(findSequenceActivation(*diagram, siblingActivationId)->endMessageId,
+           automaticReturnId);
+
+  // Removing a closing return reopens the activation instead of deleting the
+  // execution span that the return merely bounded.
+  QVERIFY(controller.deleteSequenceItems(diagramId, {}, {automaticReturnId}, {},
+                                         {}));
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceMessage(*diagram, automaticReturnId));
+  QVERIFY(findSequenceActivation(*diagram, automaticActivationId));
+  QVERIFY(findSequenceActivation(*diagram, automaticActivationId)
+              ->endMessageId.isEmpty());
+  QCOMPARE(findSequenceActivation(*diagram, nestedActivationId)->endMessageId,
+           siblingSelfCallId);
+  QVERIFY(findSequenceActivation(*diagram, siblingActivationId)
+              ->endMessageId.isEmpty());
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(findSequenceMessage(*diagram, automaticReturnId));
+  QCOMPARE(
+      findSequenceActivation(*diagram, automaticActivationId)->endMessageId,
+      automaticReturnId);
+  QCOMPARE(findSequenceActivation(*diagram, nestedActivationId)->endMessageId,
+           siblingSelfCallId);
+  QCOMPARE(findSequenceActivation(*diagram, siblingActivationId)->endMessageId,
+           automaticReturnId);
   controller.undo();
   diagram = findDiagram(controller.data(), diagramId);
   QVERIFY(diagram);
   QVERIFY(!findSequenceMessage(*diagram, automaticReturnId));
   QVERIFY(findSequenceActivation(*diagram, automaticActivationId)
               ->endMessageId.isEmpty());
+  QCOMPARE(findSequenceActivation(*diagram, nestedActivationId)->endMessageId,
+           siblingSelfCallId);
+  QVERIFY(findSequenceActivation(*diagram, siblingActivationId)
+              ->endMessageId.isEmpty());
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceMessage(*diagram, siblingSelfCallId));
+  QVERIFY(!findSequenceActivation(*diagram, siblingActivationId));
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceMessage(*diagram, automaticSelfCallId));
+  QVERIFY(!findSequenceActivation(*diagram, nestedActivationId));
   controller.undo();
   diagram = findDiagram(controller.data(), diagramId);
   QVERIFY(diagram);
@@ -945,6 +1073,11 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
   QVERIFY(activation);
   QCOMPARE(activation->endMessageId, messageId);
 
+  const QString branchMessageId = controller.createSequenceMessage(
+      diagramId, sourceId, targetId, QStringLiteral("sync"),
+      QStringLiteral("branch()"), {}, 210.0);
+  QVERIFY(!branchMessageId.isEmpty());
+
   const QString fragmentId = controller.createSequenceCombinedFragment(
       diagramId, {sourceId, targetId}, QStringLiteral("alt"), initialMessageId,
       messageId, QStringLiteral("accepted"), messageId,
@@ -956,17 +1089,20 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
   QVERIFY(fragment);
   QVERIFY(fragment->type == SequenceCombinedFragmentType::Alternative);
 
-  QVERIFY(controller.updateSequenceCombinedFragment(
+  QVERIFY(controller.updateSequenceCombinedFragmentWithOperands(
       diagramId, fragmentId, QStringLiteral("par"), initialMessageId, messageId,
-      QStringLiteral("main branch"), messageId,
-      QStringLiteral("parallel branch")));
+      {{initialMessageId, QStringLiteral("main branch"), {}},
+       {branchMessageId, QStringLiteral("parallel branch"), {}},
+       {messageId, QStringLiteral("cleanup branch"), {}}}));
   diagram = findDiagram(controller.data(), diagramId);
   QVERIFY(diagram);
   fragment = findSequenceCombinedFragment(*diagram, fragmentId);
   QVERIFY(fragment);
   QVERIFY(fragment->type == SequenceCombinedFragmentType::Parallel);
   QCOMPARE(toString(fragment->type), QStringLiteral("par"));
-  QCOMPARE(fragment->alternativeGuard, QStringLiteral("parallel branch"));
+  QCOMPARE(fragment->operands.size(), 3);
+  QCOMPARE(fragment->operands.at(1).guard, QStringLiteral("parallel branch"));
+  QCOMPARE(fragment->operands.at(2).startMessageId, messageId);
   controller.undo();
   diagram = findDiagram(controller.data(), diagramId);
   QVERIFY(diagram);
@@ -974,7 +1110,8 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
   QVERIFY(fragment);
   QVERIFY(fragment->type == SequenceCombinedFragmentType::Alternative);
   QCOMPARE(fragment->participantIds, QStringList({sourceId, targetId}));
-  QCOMPARE(fragment->alternativeStartMessageId, messageId);
+  QCOMPARE(fragment->operands.size(), 2);
+  QCOMPARE(fragment->operands.at(1).startMessageId, messageId);
   QCOMPARE(controller.undoText(),
            QStringLiteral("Create sequence combined fragment"));
   controller.undo();
@@ -991,7 +1128,7 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
   fragment = findSequenceCombinedFragment(*diagram, fragmentId);
   QVERIFY(fragment);
   QVERIFY(fragment->type == SequenceCombinedFragmentType::Loop);
-  QVERIFY(fragment->alternativeStartMessageId.isEmpty());
+  QCOMPARE(fragment->operands.size(), 1);
   QCOMPARE(controller.undoText(),
            QStringLiteral("Update sequence combined fragment"));
   controller.undo();
@@ -1001,13 +1138,16 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
   QVERIFY(fragment);
   QVERIFY(fragment->type == SequenceCombinedFragmentType::Alternative);
 
-  // Removing a message must also remove the sequence records whose bounds
-  // would otherwise refer to it. The cascade remains a single undo step.
+  // Removing an activation's optional end message reopens it. Records that
+  // require the removed message, such as fragment bounds, still cascade. The
+  // complete reference cleanup remains a single undo step.
   QVERIFY(controller.deleteSequenceItems(diagramId, {}, {messageId}, {}, {}));
   diagram = findDiagram(controller.data(), diagramId);
   QVERIFY(diagram);
   QVERIFY(!findSequenceMessage(*diagram, messageId));
-  QVERIFY(!findSequenceActivation(*diagram, activationId));
+  QVERIFY(findSequenceActivation(*diagram, activationId));
+  QVERIFY(
+      findSequenceActivation(*diagram, activationId)->endMessageId.isEmpty());
   QVERIFY(findSequenceActivation(*diagram, manualActivationId));
   QVERIFY(!findSequenceCombinedFragment(*diagram, fragmentId));
   QCOMPARE(controller.undoText(), QStringLiteral("Delete sequence items"));
@@ -1016,6 +1156,8 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
   QVERIFY(diagram);
   QVERIFY(findSequenceMessage(*diagram, messageId));
   QVERIFY(findSequenceActivation(*diagram, activationId));
+  QCOMPARE(findSequenceActivation(*diagram, activationId)->endMessageId,
+           messageId);
   QVERIFY(findSequenceCombinedFragment(*diagram, fragmentId));
 
   // Participant deletion cascades to every touching message and the records
@@ -1043,6 +1185,138 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
   // invariant; remove the diagram itself instead when it is no longer needed.
   QVERIFY(!controller.deleteSequenceItems(
       diagramId, {sourceId, targetId, participantId}, {}, {}, {}));
+}
+
+void CoreTests::sequenceFragmentOperandsMigrateFromSchemaSeven() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+
+  ProjectData project =
+      createStarterProject(QStringLiteral("Schema 7 fragments"));
+  Diagram &diagram = project.diagrams.first();
+  diagram.type = DiagramType::Sequence;
+  diagram.sequenceParticipants = {{QStringLiteral("participant-a"),
+                                   QStringLiteral("a"),
+                                   QStringLiteral("A"),
+                                   {},
+                                   {},
+                                   QRectF(80.0, 40.0, 160.0, 60.0),
+                                   {}},
+                                  {QStringLiteral("participant-b"),
+                                   QStringLiteral("b"),
+                                   QStringLiteral("B"),
+                                   {},
+                                   {},
+                                   QRectF(380.0, 40.0, 160.0, 60.0),
+                                   {}}};
+  diagram.sequenceMessages = {{QStringLiteral("message-1"),
+                               QStringLiteral("first"),
+                               QStringLiteral("participant-a"),
+                               QStringLiteral("participant-b"),
+                               SequenceMessageType::Synchronous,
+                               QStringLiteral("first()"),
+                               160.0,
+                               {},
+                               {}},
+                              {QStringLiteral("message-2"),
+                               QStringLiteral("second"),
+                               QStringLiteral("participant-b"),
+                               QStringLiteral("participant-a"),
+                               SequenceMessageType::Return,
+                               QStringLiteral("second"),
+                               220.0,
+                               {},
+                               {}}};
+  diagram.sequenceCombinedFragments = {
+      {QStringLiteral("fragment-1"),
+       QStringLiteral("choice"),
+       SequenceCombinedFragmentType::Alternative,
+       {QStringLiteral("participant-a"), QStringLiteral("participant-b")},
+       QStringLiteral("message-1"),
+       QStringLiteral("message-2"),
+       {{QStringLiteral("message-1"), QStringLiteral("accepted"), {}},
+        {QStringLiteral("message-2"), QStringLiteral("otherwise"), {}}},
+       {}}};
+  QVERIFY(ProjectSerializer::save(temporary.path(), project).ok);
+
+  const QString manifestPath =
+      QDir(temporary.path()).filePath(QStringLiteral("manifest.json5"));
+  QFile manifestFile(manifestPath);
+  QVERIFY(manifestFile.open(QIODevice::ReadOnly));
+  const auto parsedManifest = Json5::parse(manifestFile.readAll());
+  manifestFile.close();
+  QVERIFY2(parsedManifest, qPrintable(parsedManifest.error));
+  QJsonObject manifest = parsedManifest.document.object();
+  manifest.insert(QStringLiteral("schemaVersion"), 7);
+  writeTestFile(manifestPath,
+                Json5::serialize(QJsonDocument(std::move(manifest))));
+
+  const QString diagramsPath =
+      QDir(temporary.path())
+          .filePath(QStringLiteral("diagrams/diagrams.json5"));
+  QFile diagramsFile(diagramsPath);
+  QVERIFY(diagramsFile.open(QIODevice::ReadOnly));
+  const auto parsedDiagrams = Json5::parse(diagramsFile.readAll());
+  diagramsFile.close();
+  QVERIFY2(parsedDiagrams, qPrintable(parsedDiagrams.error));
+  QJsonObject diagramsRoot = parsedDiagrams.document.object();
+  QJsonArray diagrams =
+      diagramsRoot.value(QStringLiteral("diagrams")).toArray();
+  QJsonObject savedDiagram = diagrams.first().toObject();
+  QJsonObject sequence =
+      savedDiagram.value(QStringLiteral("sequence")).toObject();
+  QJsonArray fragments = sequence.value(QStringLiteral("fragments")).toArray();
+  QJsonObject fragment = fragments.first().toObject();
+  fragment.remove(QStringLiteral("operands"));
+  fragment.insert(QStringLiteral("guard"), QStringLiteral("accepted"));
+  fragment.insert(QStringLiteral("alternativeStartMessageId"),
+                  QStringLiteral("message-2"));
+  fragment.insert(QStringLiteral("alternativeGuard"),
+                  QStringLiteral("otherwise"));
+  fragments.replace(0, fragment);
+  sequence.insert(QStringLiteral("fragments"), fragments);
+  savedDiagram.insert(QStringLiteral("sequence"), sequence);
+  diagrams.replace(0, savedDiagram);
+  diagramsRoot.insert(QStringLiteral("diagrams"), diagrams);
+  writeTestFile(diagramsPath,
+                Json5::serialize(QJsonDocument(std::move(diagramsRoot))));
+
+  const LoadOutcome migrated = ProjectSerializer::load(temporary.path());
+  QVERIFY2(migrated.ok, qPrintable(migrated.diagnostics.isEmpty()
+                                       ? QString{}
+                                       : migrated.diagnostics.first().message));
+  QVERIFY(migrated.migrated);
+  QCOMPARE(migrated.project.schemaVersion, kCurrentProjectSchemaVersion);
+  const auto *migratedDiagram = findDiagram(migrated.project, diagram.id);
+  QVERIFY(migratedDiagram);
+  const auto *migratedFragment = findSequenceCombinedFragment(
+      *migratedDiagram, QStringLiteral("fragment-1"));
+  QVERIFY(migratedFragment);
+  QCOMPARE(migratedFragment->operands.size(), 2);
+  QCOMPARE(migratedFragment->operands.at(0).guard, QStringLiteral("accepted"));
+  QCOMPARE(migratedFragment->operands.at(1).startMessageId,
+           QStringLiteral("message-2"));
+  QCOMPARE(migratedFragment->operands.at(1).guard, QStringLiteral("otherwise"));
+
+  QVERIFY(ProjectSerializer::save(temporary.path(), migrated.project).ok);
+  QFile canonicalFile(diagramsPath);
+  QVERIFY(canonicalFile.open(QIODevice::ReadOnly));
+  const auto canonical = Json5::parse(canonicalFile.readAll());
+  QVERIFY2(canonical, qPrintable(canonical.error));
+  const QJsonObject canonicalFragment = canonical.document.object()
+                                            .value(QStringLiteral("diagrams"))
+                                            .toArray()
+                                            .first()
+                                            .toObject()
+                                            .value(QStringLiteral("sequence"))
+                                            .toObject()
+                                            .value(QStringLiteral("fragments"))
+                                            .toArray()
+                                            .first()
+                                            .toObject();
+  QCOMPARE(canonicalFragment.value(QStringLiteral("operands")).toArray().size(),
+           2);
+  QVERIFY(!canonicalFragment.contains(QStringLiteral("alternativeGuard")));
 }
 
 void CoreTests::unversionedProjectMigrates() {

@@ -7,6 +7,7 @@
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <utility>
 
 namespace yauml::ui {
 namespace {
@@ -18,6 +19,7 @@ constexpr qreal kSelfMessageHeight = 32.0;
 constexpr qreal kMessageLabelHeight = 24.0;
 constexpr qreal kActivationWidth = 14.0;
 constexpr qreal kMinimumActivationHeight = 24.0;
+constexpr qreal kSiblingActivationGap = 4.0;
 constexpr qreal kFragmentHorizontalMargin = 16.0;
 constexpr qreal kFragmentTopPadding = 20.0;
 constexpr qreal kFragmentBottomPadding = 18.0;
@@ -79,6 +81,42 @@ activeActivationAt(const SequenceDiagramLayout &layout,
       continue;
     if (!result || activation.rect.right() > result->rect.right())
       result = &activation;
+  }
+  return result;
+}
+
+const SequenceActivationLayout *
+activationLayoutById(const SequenceDiagramLayout &layout,
+                     const QString &activationId) {
+  if (activationId.isEmpty())
+    return nullptr;
+  const auto found =
+      std::find_if(layout.activations.cbegin(), layout.activations.cend(),
+                   [&activationId](const SequenceActivationLayout &activation) {
+                     return activation.id == activationId;
+                   });
+  return found == layout.activations.cend() ? nullptr : &*found;
+}
+
+const SequenceActivationLayout *
+activationClosedByMessage(const Diagram &diagram,
+                          const SequenceDiagramLayout &layout,
+                          const SequenceMessage &message) {
+  const SequenceActivationLayout *result = nullptr;
+  for (const SequenceActivation &activation : diagram.sequenceActivations) {
+    if (activation.participantId != message.sourceParticipantId ||
+        activation.endMessageId != message.id)
+      continue;
+    const auto visual =
+        std::find_if(layout.activations.cbegin(), layout.activations.cend(),
+                     [&activation](const SequenceActivationLayout &candidate) {
+                       return candidate.id == activation.id;
+                     });
+    // One return may implicitly close nested activations together with their
+    // selected parent. The outermost (leftmost) closing bar owns the arrow.
+    if (visual != layout.activations.cend() &&
+        (!result || visual->rect.left() < result->rect.left()))
+      result = &*visual;
   }
   return result;
 }
@@ -198,7 +236,8 @@ SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
                        std::max(1.0, lifelineEnd - lifelineStart)));
   }
 
-  QHash<QString, int> activationDepthByParticipant;
+  QHash<QString, int> legacyActivationDepthByParticipant;
+  QHash<QString, int> activationDepthById;
   for (const SequenceActivation &activation : diagram.sequenceActivations) {
     if (!lifelineXByParticipant.contains(activation.participantId))
       continue;
@@ -219,7 +258,27 @@ SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
             : *activation.endY;
     const qreal endY =
         std::max(startY + kMinimumActivationHeight, requestedEnd);
-    const int depth = activationDepthByParticipant[activation.participantId]++;
+    int depth = legacyActivationDepthByParticipant[activation.participantId]++;
+    if (messageBound) {
+      const auto *startMessage =
+          findSequenceMessage(diagram, activation.startMessageId);
+      const auto *parent =
+          startMessage && !startMessage->sourceActivationId.isEmpty()
+              ? findSequenceActivation(diagram,
+                                       startMessage->sourceActivationId)
+              : nullptr;
+      const auto parentDepth = parent
+                                   ? activationDepthById.constFind(parent->id)
+                                   : activationDepthById.cend();
+      if (parent && parent->participantId == activation.participantId &&
+          parentDepth != activationDepthById.cend()) {
+        // Two self-calls explicitly launched from the same outer bar are
+        // siblings. They therefore share a visual depth even if their spans
+        // overlap, rather than drifting progressively farther right.
+        depth = *parentDepth + 1;
+      }
+    }
+    activationDepthById.insert(activation.id, depth);
     const qreal x = lifelineXByParticipant.value(activation.participantId) -
                     kActivationWidth / 2.0 + depth * 4.0;
     const QString activationContext =
@@ -229,6 +288,26 @@ SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
         activationContext, QRectF(x, startY, kActivationWidth, endY - startY)};
     includeRect(layout.contentBounds, hasBounds, visual.rect);
     layout.activations.append(std::move(visual));
+  }
+
+  // Consecutive sibling activations share the same horizontal level. Their
+  // semantic boundary is the message that closes one and starts the next, but
+  // two rectangles touching at that row look like one uninterrupted bar.
+  // Shorten only the preceding bar to preserve the new call's attachment row
+  // while leaving a small, zoom-independent visual break.
+  for (SequenceActivationLayout &earlier : layout.activations) {
+    for (const SequenceActivationLayout &later :
+         std::as_const(layout.activations)) {
+      if (earlier.id == later.id ||
+          earlier.participantId != later.participantId ||
+          std::abs(earlier.rect.left() - later.rect.left()) > 0.01 ||
+          std::abs(earlier.rect.bottom() - later.rect.top()) > 0.01) {
+        continue;
+      }
+      const qreal separatedBottom = later.rect.top() - kSiblingActivationGap;
+      if (separatedBottom > earlier.rect.top())
+        earlier.rect.setBottom(separatedBottom);
+    }
   }
 
   // Combined fragments are computed before messages so the renderer can paint
@@ -261,15 +340,19 @@ SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
     SequenceCombinedFragmentLayout visual;
     visual.id = fragment.id;
     visual.type = fragment.type;
-    visual.guard = fragment.guard;
-    visual.alternativeGuard = fragment.alternativeGuard;
     visual.rect = QRectF(left - kFragmentHorizontalMargin, top,
                          right - left + kFragmentHorizontalMargin * 2.0,
                          std::max(1.0, bottom - top));
-    if (sequenceCombinedFragmentHasSecondOperand(fragment.type) &&
-        messageYById.contains(fragment.alternativeStartMessageId))
-      visual.alternativeDividerY =
-          messageYById.value(fragment.alternativeStartMessageId) - 12.0;
+    for (qsizetype operandIndex = 0; operandIndex < fragment.operands.size();
+         ++operandIndex) {
+      const auto &operand = fragment.operands.at(operandIndex);
+      SequenceCombinedFragmentOperandLayout operandLayout;
+      operandLayout.guard = operand.guard;
+      if (operandIndex > 0 && messageYById.contains(operand.startMessageId))
+        operandLayout.dividerY =
+            messageYById.value(operand.startMessageId) - 12.0;
+      visual.operands.append(std::move(operandLayout));
+    }
     includeRect(layout.contentBounds, hasBounds, visual.rect);
     layout.fragments.append(std::move(visual));
   }
@@ -287,10 +370,21 @@ SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
     visual.text = message.text;
     visual.type = message.type;
     visual.confidence = message.evidence.confidence;
+    const auto *closingActivation =
+        message.type == SequenceMessageType::Return
+            ? activationClosedByMessage(diagram, layout, message)
+            : nullptr;
+    const auto *explicitSourceActivation =
+        activationLayoutById(layout, message.sourceActivationId);
+    const auto *sourceActivation =
+        closingActivation ? closingActivation : explicitSourceActivation;
     if (message.sourceParticipantId == message.targetParticipantId) {
-      const qreal startX = messageEndpointX(
-          layout, message.sourceParticipantId, message.y,
-          sourceLifelineX + kSelfMessageWidth, sourceLifelineX);
+      const qreal startX =
+          sourceActivation
+              ? sourceActivation->rect.right()
+              : messageEndpointX(layout, message.sourceParticipantId, message.y,
+                                 sourceLifelineX + kSelfMessageWidth,
+                                 sourceLifelineX);
       const qreal endX = messageEndpointX(
           layout, message.targetParticipantId, message.y + kSelfMessageHeight,
           sourceLifelineX + kSelfMessageWidth, sourceLifelineX);
@@ -303,8 +397,12 @@ SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
                                 kSelfMessageWidth + 120.0, kMessageLabelHeight);
     } else {
       qreal sourceX =
-          messageEndpointX(layout, message.sourceParticipantId, message.y,
-                           targetLifelineX, sourceLifelineX);
+          sourceActivation
+              ? (targetLifelineX < sourceActivation->rect.center().x()
+                     ? sourceActivation->rect.left()
+                     : sourceActivation->rect.right())
+              : messageEndpointX(layout, message.sourceParticipantId, message.y,
+                                 targetLifelineX, sourceLifelineX);
       qreal targetX = messageEndpointX(layout, message.targetParticipantId,
                                        message.y, sourceX, targetLifelineX);
       if (message.type == SequenceMessageType::Create) {
@@ -319,10 +417,13 @@ SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
                         : targetParticipant->headerRect.right();
         }
       }
-      // The target edge can flip the preferred side of a nested source bar,
-      // so calculate the source once more from the final target coordinate.
-      sourceX = messageEndpointX(layout, message.sourceParticipantId, message.y,
-                                 targetX, sourceLifelineX);
+      // Ordinary messages use the innermost activation at their row, and the
+      // target edge can flip which side of that bar faces the message. A return
+      // is different: it must remain attached to the explicitly closed
+      // activation, even when deeper activations are still open at that row.
+      if (!sourceActivation)
+        sourceX = messageEndpointX(layout, message.sourceParticipantId,
+                                   message.y, targetX, sourceLifelineX);
       visual.points = {{sourceX, message.y}, {targetX, message.y}};
       const qreal left = std::min(sourceX, targetX);
       const qreal width = std::max(80.0, std::abs(targetX - sourceX) - 16.0);
@@ -384,6 +485,13 @@ hitSequenceMessage(const SequenceDiagramLayout &layout,
 const SequenceActivationLayout *
 hitSequenceActivation(const SequenceDiagramLayout &layout,
                       const QPointF &scenePoint, qreal tolerance) {
+  // Prefer the actual painted rectangle before applying a generous hit slop.
+  // Otherwise the expanded area of a nested bar steals the narrow visible
+  // strip of its parent and makes that outer activation impossible to choose.
+  for (auto activation = layout.activations.crbegin();
+       activation != layout.activations.crend(); ++activation)
+    if (activation->rect.contains(scenePoint))
+      return &*activation;
   for (auto activation = layout.activations.crbegin();
        activation != layout.activations.crend(); ++activation)
     if (activation->rect.adjusted(-tolerance, -tolerance, tolerance, tolerance)
@@ -399,11 +507,14 @@ hitSequenceCombinedFragment(const SequenceDiagramLayout &layout,
        fragment != layout.fragments.crend(); ++fragment) {
     const QRectF outer =
         fragment->rect.adjusted(-tolerance, -tolerance, tolerance, tolerance);
-    const bool nearHorizontal =
+    bool nearHorizontal =
         std::abs(scenePoint.y() - fragment->rect.top()) <= tolerance ||
-        std::abs(scenePoint.y() - fragment->rect.bottom()) <= tolerance ||
-        (fragment->alternativeDividerY >= 0.0 &&
-         std::abs(scenePoint.y() - fragment->alternativeDividerY) <= tolerance);
+        std::abs(scenePoint.y() - fragment->rect.bottom()) <= tolerance;
+    for (const auto &operand : fragment->operands)
+      nearHorizontal =
+          nearHorizontal ||
+          (operand.dividerY >= 0.0 &&
+           std::abs(scenePoint.y() - operand.dividerY) <= tolerance);
     const bool nearVertical =
         std::abs(scenePoint.x() - fragment->rect.left()) <= tolerance ||
         std::abs(scenePoint.x() - fragment->rect.right()) <= tolerance;

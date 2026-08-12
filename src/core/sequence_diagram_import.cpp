@@ -521,9 +521,9 @@ SequenceDiagramImportService::parse(const QByteArray &contents,
     const QJsonObject item = fragments.at(index).toObject();
     SequenceCombinedFragment fragment;
     fragment.id = newId();
-    fragment.key = optionalString(item, QStringLiteral("key"),
-                                  QStringLiteral("fragment"),
-                                  outcome.diagnostics);
+    fragment.key =
+        optionalString(item, QStringLiteral("key"), QStringLiteral("fragment"),
+                       outcome.diagnostics);
     if (fragment.key.isEmpty())
       fragment.key = QStringLiteral("fragment-%1").arg(index + 1);
     bool typeOk = false;
@@ -533,8 +533,7 @@ SequenceDiagramImportService::parse(const QByteArray &contents,
         &typeOk);
     if (!typeOk)
       outcome.diagnostics.append(importError(
-          QStringLiteral("Fragment '%1' has an unknown kind")
-              .arg(fragment.key),
+          QStringLiteral("Fragment '%1' has an unknown kind").arg(fragment.key),
           fragment.key));
     const QJsonArray participantKeys =
         arrayField(item, QStringLiteral("participants"), fragment.key,
@@ -548,62 +547,119 @@ SequenceDiagramImportService::parse(const QByteArray &contents,
                 .arg(fragment.key, participantKey),
             fragment.key));
       if (usedParticipants.contains(participantKey))
-        outcome.diagnostics.append(importError(
-            QStringLiteral("Fragment '%1' repeats participant '%2'")
-                .arg(fragment.key, participantKey),
-            fragment.key));
+        outcome.diagnostics.append(
+            importError(QStringLiteral("Fragment '%1' repeats participant '%2'")
+                            .arg(fragment.key, participantKey),
+                        fragment.key));
       usedParticipants.insert(participantKey);
       fragment.participantIds.append(participantIdByKey.value(participantKey));
     }
-    const QString startKey = requiredString(
-        item, QStringLiteral("start"), fragment.key, outcome.diagnostics);
-    const QString endKey = requiredString(
-        item, QStringLiteral("end"), fragment.key, outcome.diagnostics);
+    const QString startKey = requiredString(item, QStringLiteral("start"),
+                                            fragment.key, outcome.diagnostics);
+    const QString endKey = requiredString(item, QStringLiteral("end"),
+                                          fragment.key, outcome.diagnostics);
     if (!messageIdByKey.contains(startKey) || !messageIdByKey.contains(endKey))
       outcome.diagnostics.append(importError(
           QStringLiteral("Fragment '%1' references an unknown boundary message")
               .arg(fragment.key),
           fragment.key));
-    else if (messageOrderByKey.value(endKey) < messageOrderByKey.value(startKey))
-      outcome.diagnostics.append(importError(
-          QStringLiteral("Fragment '%1' ends before it starts")
-              .arg(fragment.key),
-          fragment.key));
+    else if (messageOrderByKey.value(endKey) <
+             messageOrderByKey.value(startKey))
+      outcome.diagnostics.append(
+          importError(QStringLiteral("Fragment '%1' ends before it starts")
+                          .arg(fragment.key),
+                      fragment.key));
     fragment.startMessageId = messageIdByKey.value(startKey);
     fragment.endMessageId = messageIdByKey.value(endKey);
-    fragment.guard = optionalString(item, QStringLiteral("guard"),
-                                    fragment.key, outcome.diagnostics);
-    if (sequenceCombinedFragmentHasSecondOperand(fragment.type)) {
-      const QString alternativeStartKey = requiredString(
-          item, QStringLiteral("alternativeStart"), fragment.key,
-          outcome.diagnostics);
-      if (!messageIdByKey.contains(alternativeStartKey))
-        outcome.diagnostics.append(importError(
-            QStringLiteral("%1 fragment '%2' references an unknown second "
-                           "operand message")
-                .arg(toString(fragment.type), fragment.key),
-            fragment.key));
-      else if (messageOrderByKey.value(alternativeStartKey) <=
-                   messageOrderByKey.value(startKey) ||
-               messageOrderByKey.value(alternativeStartKey) >
-                   messageOrderByKey.value(endKey))
-        outcome.diagnostics.append(importError(
-            QStringLiteral("%1 fragment '%2' second operand is outside its "
-                           "message span")
-                .arg(toString(fragment.type), fragment.key),
-            fragment.key));
-      fragment.alternativeStartMessageId =
-          messageIdByKey.value(alternativeStartKey);
-      fragment.alternativeGuard = optionalString(
-          item, QStringLiteral("alternativeGuard"), fragment.key,
-          outcome.diagnostics);
+    const bool multipleOperands =
+        sequenceCombinedFragmentHasSecondOperand(fragment.type);
+    if (item.contains(QStringLiteral("operands"))) {
+      const QJsonArray operands =
+          arrayField(item, QStringLiteral("operands"), fragment.key,
+                     outcome.diagnostics, true);
+      int previousOrder = -1;
+      for (int operandIndex = 0; operandIndex < operands.size();
+           ++operandIndex) {
+        if (!operands.at(operandIndex).isObject()) {
+          outcome.diagnostics.append(importError(
+              QStringLiteral("Fragment '%1' operand %2 must be an object")
+                  .arg(fragment.key)
+                  .arg(operandIndex + 1),
+              fragment.key));
+          continue;
+        }
+        const QJsonObject operandObject = operands.at(operandIndex).toObject();
+        const QString operandStartKey =
+            requiredString(operandObject, QStringLiteral("start"), fragment.key,
+                           outcome.diagnostics);
+        SequenceCombinedFragmentOperand operand;
+        operand.startMessageId = messageIdByKey.value(operandStartKey);
+        operand.guard = optionalString(operandObject, QStringLiteral("guard"),
+                                       fragment.key, outcome.diagnostics);
+        operand.extra = withoutKeys(
+            operandObject, {QStringLiteral("start"), QStringLiteral("guard")});
+        if (!messageIdByKey.contains(operandStartKey)) {
+          outcome.diagnostics.append(importError(
+              QStringLiteral("Fragment '%1' operand %2 references unknown "
+                             "message '%3'")
+                  .arg(fragment.key)
+                  .arg(operandIndex + 1)
+                  .arg(operandStartKey),
+              fragment.key));
+        } else {
+          const int order = messageOrderByKey.value(operandStartKey);
+          if (order < messageOrderByKey.value(startKey) ||
+              order > messageOrderByKey.value(endKey) || order <= previousOrder)
+            outcome.diagnostics.append(importError(
+                QStringLiteral("Fragment '%1' operands must begin in strict "
+                               "message order inside its span")
+                    .arg(fragment.key),
+                fragment.key));
+          previousOrder = order;
+        }
+        fragment.operands.append(std::move(operand));
+      }
+    } else {
+      // Version-one interchange files used fixed first/second fields. Keep
+      // accepting them so generated proposals remain forward compatible.
+      fragment.operands.append(
+          {fragment.startMessageId,
+           optionalString(item, QStringLiteral("guard"), fragment.key,
+                          outcome.diagnostics),
+           {}});
+      if (multipleOperands) {
+        const QString alternativeStartKey =
+            requiredString(item, QStringLiteral("alternativeStart"),
+                           fragment.key, outcome.diagnostics);
+        fragment.operands.append(
+            {messageIdByKey.value(alternativeStartKey),
+             optionalString(item, QStringLiteral("alternativeGuard"),
+                            fragment.key, outcome.diagnostics),
+             {}});
+      }
     }
+    const qsizetype minimumOperandCount = multipleOperands ? 2 : 1;
+    if (fragment.operands.size() < minimumOperandCount ||
+        (!multipleOperands && fragment.operands.size() != 1))
+      outcome.diagnostics.append(importError(
+          QStringLiteral("%1 fragment '%2' needs %3")
+              .arg(toString(fragment.type), fragment.key,
+                   multipleOperands ? QStringLiteral("at least two operands")
+                                    : QStringLiteral("exactly one operand")),
+          fragment.key));
+    if (!fragment.operands.isEmpty() &&
+        fragment.operands.constFirst().startMessageId !=
+            fragment.startMessageId)
+      outcome.diagnostics.append(importError(
+          QStringLiteral("Fragment '%1' first operand must begin at its start")
+              .arg(fragment.key),
+          fragment.key));
     fragment.extra = withoutKeys(
         item, {QStringLiteral("key"), QStringLiteral("kind"),
                QStringLiteral("participants"), QStringLiteral("start"),
                QStringLiteral("end"), QStringLiteral("guard"),
                QStringLiteral("alternativeStart"),
-               QStringLiteral("alternativeGuard")});
+               QStringLiteral("alternativeGuard"), QStringLiteral("operands")});
     if (rememberUniqueKey(fragment.key, QStringLiteral("fragment"),
                           fragmentIdByKey, outcome.diagnostics))
       fragmentIdByKey.insert(fragment.key, fragment.id);

@@ -1,9 +1,9 @@
 # yauml Productization Plan
 
-Status: command foundation, the Phase 3 core, contextual toolboxes,
-relationship annotations, and stereotypes are implemented. Phase 4 C++ import
-and synchronization are implemented. Phase 5 release, scale, and persistence
-hardening is underway.
+Status: the command foundation and the planned Phase 3–7 product slices are
+implemented for current product demand. Incremental-loading work,
+cross-platform packaging, and SVG export remain explicitly deferred until
+real usage justifies them.
 
 The product owner accepted the MVP on 2026-07-21. This plan turns the broader
 architecture roadmap into bounded, testable delivery tranches. MVP audit notes
@@ -641,7 +641,7 @@ history memory grow with total project size rather than the size of each edit.
   a terminal window while preserving script-friendly validation and C++ import;
   packaging verifies both PE subsystem values to prevent regression.
 
-## Phase 6: diagram export — in progress
+## Phase 6: diagram export — complete for current product demand
 
 - Full-diagram PNG export is implemented through an off-screen instance of the
   production Qt Quick canvas. It exports the complete filtered diagram rather
@@ -650,7 +650,9 @@ history memory grow with total project size rather than the size of each edit.
 - Export dimensions are bounded to avoid accidental excessive allocations;
   failures and successful destinations are reported through the application
   diagnostics. A rendered-output regression covers content beyond the viewport.
-- Add PDF export through the same export orchestration and diagram renderer.
+- Single-page PDF export reuses the same bounded off-screen Qt Quick capture as
+  PNG, so filtered content, sequence diagrams, styles, clipping, and complete
+  diagram bounds remain identical across both formats.
 - Add SVG export only when there is concrete product demand; it remains outside
   the critical productization path.
 
@@ -681,11 +683,17 @@ history memory grow with total project size rather than the size of each edit.
   the canvas. Messages can be created either from two selected participants or
   by dragging from a lifeline/activation to a target. Pointer-created messages
   are inserted at the chosen row; any required downstream shift is one undo
-  unit.
+  unit. During a drag, `S`, `A`, `R`, `C`, and `D` select the message kind and
+  commit it directly on release; a gesture without a kind key retains the
+  details dialog.
 - Message authoring optionally maintains activation spans: call/async
   messages start a target activation, while return and destroy messages close
-  the latest applicable open activation. This behavior is enabled by default
-  in the message dialog and remains part of the same undo unit.
+  applicable open activations. A pointer-created return closes the exact
+  activation from which it was dragged and must target that activation's
+  caller. Closing an outer activation implicitly closes its still-open nested
+  spans, so nested return arrows remain optional. Deleting the return reopens
+  those activations instead of deleting their execution spans. This behavior
+  is enabled by default in the message dialog and remains one undo unit.
 - Create messages position the target participant header at the creation row
   and begin its lifeline below the header instead of opening an unbounded
   activation bar.
@@ -701,8 +709,20 @@ history memory grow with total project size rather than the size of each edit.
   bounds remain attached to message IDs, and two-operand kinds render their
   divider and guards.
 - Target-operation links provide stable method identity and source navigation
-  for behavioral messages. Next slices should focus on richer multi-operand
-  fragment editing and keyboard authoring.
+  for behavioral messages.
+- Combined-fragment operands are generalized in schema 8. The editor can add,
+  remove, and independently guard any number of ordered `alt`/`par` branches;
+  layout, persistence, import, migration, and hit testing consume the same
+  operand list.
+- Schema 9 persists the exact source activation selected for a sequence
+  message. Self-calls from the same outer bar consequently create sibling
+  activations at one depth instead of following whichever inner bar happens to
+  be on top. A later sibling implicitly closes open descendants of its selected
+  source, and adjacent sibling bars render with a small separation.
+- Keyboard authoring is available through discoverable sequence-menu
+  shortcuts for participants, messages, activations, fragments, editing, and
+  deletion. Each shortcut delegates to the same dialog or focused command used
+  by pointer interaction.
 
 ## Release gates for every tranche
 
