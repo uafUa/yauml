@@ -484,9 +484,29 @@ try {
     $resolvedTemporaryRoot = [System.IO.Path]::GetFullPath($temporaryRoot)
     if ($resolvedTemporaryRoot.StartsWith(
             $temporaryBase,
-            [System.StringComparison]::OrdinalIgnoreCase) -and
-        (Test-Path -LiteralPath $resolvedTemporaryRoot)) {
-        Remove-Item -LiteralPath $resolvedTemporaryRoot -Recurse -Force
+            [System.StringComparison]::OrdinalIgnoreCase)) {
+        # IFW's maintenance tool can continue deleting its installation root
+        # briefly after `purge` returns. Make our outer cleanup idempotent and
+        # tolerate that concurrent deletion without hiding persistent errors.
+        for ($attempt = 0; $attempt -lt 3; ++$attempt) {
+            if (-not (Test-Path -LiteralPath $resolvedTemporaryRoot)) {
+                break
+            }
+
+            try {
+                Remove-Item -LiteralPath $resolvedTemporaryRoot `
+                    -Recurse -Force -ErrorAction Stop
+                break
+            } catch {
+                if (-not (Test-Path -LiteralPath $resolvedTemporaryRoot)) {
+                    break
+                }
+                if ($attempt -eq 2) {
+                    throw
+                }
+                Start-Sleep -Milliseconds 100
+            }
+        }
     }
 }
 
