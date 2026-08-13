@@ -99,6 +99,7 @@ private slots:
   void sequenceGuiImportIsUndoable();
   void sequenceDiagramCanBeCreatedFromUiApi();
   void sequenceManualAuthoringIsUndoable();
+  void sequenceTargetOperationDisplayPersistsAndIsUndoable();
   void sequenceFragmentOperandsMigrateFromSchemaSeven();
   void unversionedProjectMigrates();
   void stereotypeCatalogSeedMigrationAndEmptyPersistence();
@@ -702,6 +703,72 @@ void CoreTests::sequenceDiagramCanBeCreatedFromUiApi() {
                        }));
 }
 
+void CoreTests::sequenceTargetOperationDisplayPersistsAndIsUndoable() {
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+
+  ProjectData project =
+      createStarterProject(QStringLiteral("Sequence operation display"));
+  project.diagrams.first().type = DiagramType::Sequence;
+  project.diagrams.first().sequenceParticipants.append(
+      {QStringLiteral("participant-1"),
+       QStringLiteral("participant-1"),
+       QStringLiteral("Participant 1"),
+       {},
+       {},
+       QRectF(80, 40, 160, 48),
+       {}});
+  const QString diagramId = project.diagrams.first().id;
+  QVERIFY(ProjectSerializer::save(temporary.path(), project).ok);
+
+  ProjectController controller;
+  QVERIFY(controller.openProject(QUrl::fromLocalFile(temporary.path())));
+  QVERIFY(findDiagram(controller.data(), diagramId)
+              ->sequenceTargetOperationDisplayMode ==
+          SequenceTargetOperationDisplayMode::Hidden);
+  QVERIFY(findDiagram(controller.data(), diagramId)
+              ->showSequenceMessageStereotypes);
+
+  controller.setSequenceTargetOperationDisplayMode(diagramId,
+                                                   QStringLiteral("name-only"));
+  QVERIFY(findDiagram(controller.data(), diagramId)
+              ->sequenceTargetOperationDisplayMode ==
+          SequenceTargetOperationDisplayMode::NameOnly);
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Change target operation display"));
+
+  controller.undo();
+  QVERIFY(findDiagram(controller.data(), diagramId)
+              ->sequenceTargetOperationDisplayMode ==
+          SequenceTargetOperationDisplayMode::Hidden);
+  controller.redo();
+  QVERIFY(findDiagram(controller.data(), diagramId)
+              ->sequenceTargetOperationDisplayMode ==
+          SequenceTargetOperationDisplayMode::NameOnly);
+
+  controller.setSequenceTargetOperationDisplayMode(
+      diagramId, QStringLiteral("full-signature"));
+  controller.setSequenceMessageStereotypesVisible(diagramId, false);
+  QVERIFY(!findDiagram(controller.data(), diagramId)
+               ->showSequenceMessageStereotypes);
+  QCOMPARE(controller.undoText(),
+           QStringLiteral("Change message stereotype visibility"));
+  controller.undo();
+  QVERIFY(findDiagram(controller.data(), diagramId)
+              ->showSequenceMessageStereotypes);
+  controller.redo();
+  QVERIFY(!findDiagram(controller.data(), diagramId)
+               ->showSequenceMessageStereotypes);
+  QVERIFY(controller.saveProject());
+  const LoadOutcome reloaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(reloaded.ok);
+  QVERIFY(findDiagram(reloaded.project, diagramId)
+              ->sequenceTargetOperationDisplayMode ==
+          SequenceTargetOperationDisplayMode::FullSignature);
+  QVERIFY(!findDiagram(reloaded.project, diagramId)
+               ->showSequenceMessageStereotypes);
+}
+
 void CoreTests::sequenceManualAuthoringIsUndoable() {
   QTemporaryDir temporary;
   QVERIFY(temporary.isValid());
@@ -881,7 +948,7 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
 
   const QString automaticCallId = controller.createSequenceMessage(
       diagramId, sourceId, targetId, QStringLiteral("sync"),
-      QStringLiteral("automaticCall()"), {}, -1.0, true);
+      QStringLiteral("automaticCall()"), {}, -1.0);
   QVERIFY(!automaticCallId.isEmpty());
   diagram = findDiagram(controller.data(), diagramId);
   QVERIFY(diagram);
@@ -896,12 +963,84 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
   QVERIFY(automaticActivation->endMessageId.isEmpty());
   const QString automaticActivationId = automaticActivation->id;
 
+  // A second external call cannot become another initiator of the activation
+  // that is already open. It closes that span and starts a consecutive
+  // top-level activation; undo restores the original open span atomically.
+  const QString successorCallId = controller.createSequenceMessage(
+      diagramId, sourceId, targetId, QStringLiteral("sync"),
+      QStringLiteral("successorCall()"), {}, -1.0);
+  QVERIFY(!successorCallId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QCOMPARE(
+      findSequenceActivation(*diagram, automaticActivationId)->endMessageId,
+      successorCallId);
+  const auto successorActivation =
+      std::find_if(diagram->sequenceActivations.cbegin(),
+                   diagram->sequenceActivations.cend(),
+                   [&successorCallId](const SequenceActivation &candidate) {
+                     return candidate.startMessageId == successorCallId;
+                   });
+  QVERIFY(successorActivation != diagram->sequenceActivations.cend());
+  QVERIFY(successorActivation->endMessageId.isEmpty());
+  const QString successorActivationId = successorActivation->id;
+
+  const QString successorReturnId = controller.createSequenceMessage(
+      diagramId, targetId, sourceId, QStringLiteral("return"),
+      QStringLiteral("successorResult"), {}, -1.0, successorActivationId);
+  QVERIFY(!successorReturnId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QCOMPARE(
+      findSequenceActivation(*diagram, successorActivationId)->endMessageId,
+      successorReturnId);
+  const qreal splitRow = (findSequenceMessage(*diagram, successorCallId)->y +
+                          findSequenceMessage(*diagram, successorReturnId)->y) /
+                         2.0;
+  const QString splitCallId = controller.createSequenceMessage(
+      diagramId, sourceId, targetId, QStringLiteral("sync"),
+      QStringLiteral("splitCall()"), {}, splitRow);
+  QVERIFY(!splitCallId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QCOMPARE(
+      findSequenceActivation(*diagram, successorActivationId)->endMessageId,
+      splitCallId);
+  const auto splitActivation =
+      std::find_if(diagram->sequenceActivations.cbegin(),
+                   diagram->sequenceActivations.cend(),
+                   [&splitCallId](const SequenceActivation &candidate) {
+                     return candidate.startMessageId == splitCallId;
+                   });
+  QVERIFY(splitActivation != diagram->sequenceActivations.cend());
+  QCOMPARE(splitActivation->endMessageId, successorReturnId);
+
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceMessage(*diagram, splitCallId));
+  QCOMPARE(
+      findSequenceActivation(*diagram, successorActivationId)->endMessageId,
+      successorReturnId);
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceMessage(*diagram, successorReturnId));
+  QVERIFY(findSequenceActivation(*diagram, successorActivationId)
+              ->endMessageId.isEmpty());
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceMessage(*diagram, successorCallId));
+  QVERIFY(findSequenceActivation(*diagram, automaticActivationId)
+              ->endMessageId.isEmpty());
+
   // The gesture may explicitly choose an outer activation even while a nested
   // self-call is still open. Returning from that parent implicitly ends the
   // nested execution span, so a decorative nested return is not mandatory.
   const QString automaticSelfCallId = controller.createSequenceMessage(
       diagramId, targetId, targetId, QStringLiteral("sync"),
-      QStringLiteral("nested()"), {}, -1.0, true, automaticActivationId);
+      QStringLiteral("nested()"), {}, -1.0, automaticActivationId);
   QVERIFY(!automaticSelfCallId.isEmpty());
   diagram = findDiagram(controller.data(), diagramId);
   QVERIFY(diagram);
@@ -921,8 +1060,8 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
   // while the first child remains open. It creates a sibling execution level,
   // not a child of whichever inner bar happens to be visually on top.
   const QString siblingSelfCallId = controller.createSequenceMessage(
-      diagramId, targetId, targetId, QStringLiteral("async"),
-      QStringLiteral("sibling()"), {}, -1.0, true, automaticActivationId);
+      diagramId, targetId, targetId, QStringLiteral("sync"),
+      QStringLiteral("sibling()"), {}, -1.0, automaticActivationId);
   QVERIFY(!siblingSelfCallId.isEmpty());
   diagram = findDiagram(controller.data(), diagramId);
   QVERIFY(diagram);
@@ -938,6 +1077,36 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
   const QString siblingActivationId = siblingActivation->id;
   QCOMPARE(findSequenceActivation(*diagram, nestedActivationId)->endMessageId,
            siblingSelfCallId);
+
+  // A later external synchronous call replaces the complete execution stack,
+  // not only its top-level bar. All active nested levels end at the same row
+  // before the new top-level activation starts.
+  const QString stackReplacementId = controller.createSequenceMessage(
+      diagramId, sourceId, targetId, QStringLiteral("sync"),
+      QStringLiteral("replaceStack()"));
+  QVERIFY(!stackReplacementId.isEmpty());
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QCOMPARE(
+      findSequenceActivation(*diagram, automaticActivationId)->endMessageId,
+      stackReplacementId);
+  QCOMPARE(findSequenceActivation(*diagram, siblingActivationId)->endMessageId,
+           stackReplacementId);
+  const auto replacementActivation =
+      std::find_if(diagram->sequenceActivations.cbegin(),
+                   diagram->sequenceActivations.cend(),
+                   [&stackReplacementId](const SequenceActivation &candidate) {
+                     return candidate.startMessageId == stackReplacementId;
+                   });
+  QVERIFY(replacementActivation != diagram->sequenceActivations.cend());
+  controller.undo();
+  diagram = findDiagram(controller.data(), diagramId);
+  QVERIFY(diagram);
+  QVERIFY(!findSequenceMessage(*diagram, stackReplacementId));
+  QVERIFY(findSequenceActivation(*diagram, automaticActivationId)
+              ->endMessageId.isEmpty());
+  QVERIFY(findSequenceActivation(*diagram, siblingActivationId)
+              ->endMessageId.isEmpty());
 
   const QString roundTripPath =
       temporary.filePath(QStringLiteral("source-activation-roundtrip"));
@@ -955,7 +1124,7 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
 
   const QString automaticReturnId = controller.createSequenceMessage(
       diagramId, targetId, sourceId, QStringLiteral("return"),
-      QStringLiteral("done"), {}, -1.0, true, automaticActivationId);
+      QStringLiteral("done"), {}, -1.0, automaticActivationId);
   QVERIFY(!automaticReturnId.isEmpty());
   diagram = findDiagram(controller.data(), diagramId);
   QVERIFY(diagram);
@@ -1019,16 +1188,24 @@ void CoreTests::sequenceManualAuthoringIsUndoable() {
   QVERIFY(!findSequenceActivation(*diagram, automaticActivationId));
 
   // A create message starts an object's lifetime, not an execution span.
-  // Automatic handling must not leave an unbounded activation on its target.
+  // Type-derived handling must not leave an unbounded activation on its target.
   const qsizetype activationCountBeforeCreate =
       diagram->sequenceActivations.size();
+  const qsizetype messageCountBeforeCreate = diagram->sequenceMessages.size();
   const QString createMessageId = controller.createSequenceMessage(
       diagramId, sourceId, targetId, QStringLiteral("create"),
-      QStringLiteral("construct"), {}, -1.0, true);
+      QStringLiteral("construct"), {}, -1.0);
   QVERIFY(!createMessageId.isEmpty());
   diagram = findDiagram(controller.data(), diagramId);
   QVERIFY(diagram);
   QCOMPARE(diagram->sequenceActivations.size(), activationCountBeforeCreate);
+  QVERIFY(!controller.canCreateSequenceCreate(diagramId, targetId));
+  QVERIFY(controller
+              .createSequenceMessage(diagramId, sourceId, targetId,
+                                     QStringLiteral("create"),
+                                     QStringLiteral("duplicate construct"))
+              .isEmpty());
+  QCOMPARE(diagram->sequenceMessages.size(), messageCountBeforeCreate + 1);
   controller.undo();
   diagram = findDiagram(controller.data(), diagramId);
   QVERIFY(diagram);
@@ -1289,6 +1466,9 @@ void CoreTests::sequenceFragmentOperandsMigrateFromSchemaSeven() {
   QCOMPARE(migrated.project.schemaVersion, kCurrentProjectSchemaVersion);
   const auto *migratedDiagram = findDiagram(migrated.project, diagram.id);
   QVERIFY(migratedDiagram);
+  QVERIFY(migratedDiagram->sequenceTargetOperationDisplayMode ==
+          SequenceTargetOperationDisplayMode::Hidden);
+  QVERIFY(!migratedDiagram->showSequenceMessageStereotypes);
   const auto *migratedFragment = findSequenceCombinedFragment(
       *migratedDiagram, QStringLiteral("fragment-1"));
   QVERIFY(migratedFragment);
@@ -6957,11 +7137,15 @@ void CoreTests::sourceEditorNavigationUsesImportedLocations() {
   const QVariantList targetOperationChoices =
       controller.sequenceMessageTargetOperationChoices(sequence.id, worker.id);
   QVERIFY(targetOperationChoices.size() >= 2);
-  QCOMPARE(targetOperationChoices.constLast()
-               .toMap()
-               .value(QStringLiteral("id"))
-               .toString(),
+  const QVariantMap operationChoice =
+      targetOperationChoices.constLast().toMap();
+  QCOMPARE(operationChoice.value(QStringLiteral("id")).toString(),
            operation.id);
+  QCOMPARE(operationChoice.value(QStringLiteral("label")).toString(),
+           modelOperationSignature(operation));
+  QVERIFY(!operationChoice.value(QStringLiteral("label"))
+               .toString()
+               .contains(imported.name));
 
   const QVariantMap sequenceLocation = sourceEditor.sourceLocation(
       QStringLiteral("sequence-message"), sequenceMessage.id);

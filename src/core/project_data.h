@@ -29,6 +29,11 @@ enum class ConnectorRouting { Straight, Orthogonal };
 enum class MemberVisibility { Public, Protected, Private, Package };
 enum class OperationKind { Method, Constructor, Destructor };
 enum class OperationSignatureMode { Full, NameAndReturnType, NameOnly };
+enum class SequenceTargetOperationDisplayMode {
+  Hidden,
+  NameOnly,
+  FullSignature
+};
 enum class SequenceExecutionContextType { Thread, EventLoop, Executor, Task };
 enum class SequenceMessageType {
   Synchronous,
@@ -69,6 +74,10 @@ OperationKind operationKindFromString(const QString &value, bool *ok = nullptr);
 QString toString(OperationSignatureMode mode);
 OperationSignatureMode operationSignatureModeFromString(const QString &value,
                                                         bool *ok = nullptr);
+QString toString(SequenceTargetOperationDisplayMode mode);
+SequenceTargetOperationDisplayMode
+sequenceTargetOperationDisplayModeFromString(const QString &value,
+                                             bool *ok = nullptr);
 QString toString(SequenceExecutionContextType type);
 SequenceExecutionContextType
 sequenceExecutionContextTypeFromString(const QString &value,
@@ -463,6 +472,14 @@ struct Diagram {
   QList<SequenceMessage> sequenceMessages;
   QList<SequenceActivation> sequenceActivations;
   QList<SequenceCombinedFragment> sequenceCombinedFragments;
+  // Linked operations are semantic message metadata. Their diagram-level
+  // presentation is independent from the free-form message label.
+  SequenceTargetOperationDisplayMode sequenceTargetOperationDisplayMode =
+      SequenceTargetOperationDisplayMode::Hidden;
+  // Message kinds are UML stereotypes (for example, «sync» and «return»).
+  // New sequence diagrams show them by default; schema migration records the
+  // previous hidden behavior explicitly for existing projects.
+  bool showSequenceMessageStereotypes = true;
   QJsonObject sequenceExtra;
   QJsonObject extra;
 

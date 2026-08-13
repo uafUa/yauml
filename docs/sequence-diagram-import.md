@@ -227,7 +227,9 @@ contexts, source evidence, and activations. Existing schema-4 diagrams migrate
 to schema 5 as explicit `type: "class"` diagrams. Schema 6 adds optional
 combined-fragment records; schema 7 adds optional target-operation links on
 messages; schema 8 generalizes combined fragments to ordered operand lists;
-schema 9 lets pointer-authored messages retain their exact source activation.
+schema 9 lets pointer-authored messages retain their exact source activation;
+schema 10 stores target-operation display mode; and schema 11 stores whether
+message-kind stereotypes are visible.
 
 ## Current editor behavior
 
@@ -245,27 +247,39 @@ the same undo operation. Self-messages use the same gesture. While holding the
 mouse button during the drag, press `S` for a synchronous call, `A` for an
 asynchronous signal, `R` for a return, `C` for create, or `D` for destroy. The
 chosen kind is committed immediately on release with empty optional details
-and automatic activation handling; omitting the key opens the full editor.
+and its `«kind»` is shown beside the preview arrow; omitting the key opens the
+full editor.
 
-The message editor updates activations automatically by default: synchronous
-and asynchronous messages start a target activation. A return dragged from an
-activation closes that chosen activation and must go back to the participant
-that opened it. Returning from an outer activation implicitly ends its open
+Activation behavior follows the message kind and is not a separate authoring
+option. A synchronous call starts a target activation; a synchronous self-call
+from an activation starts a nested activation. An asynchronous signal does not
+start one. When another external synchronous call arrives during an activation,
+it ends the current span and starts a consecutive top-level activation instead
+of adding a second initiating message or visually nesting the new span. An
+existing later return boundary transfers to the successor. A return dragged
+from an activation closes that chosen activation and must go back to the
+participant that opened it. Returning from an outer activation implicitly ends
+its open
 nested activations at the same row, so decorative nested return arrows are not
-required. Destroy messages end an open activation on their target. The checkbox
-can disable automatic span changes for a message. Message creation and its
-activation changes form one undo unit. A self-message dragged from a specific
-activation leaves that exact bar. Repeated calls from the same outer activation
-create sibling bars at the same visual depth, even while an earlier sibling is
-still open. Starting the next sibling implicitly ends those open descendants
-at the new message row, and a small visual gap keeps adjacent sibling bars
-distinct. Deleting a closing return keeps every span it closed and makes
-those activations open-ended again; deleting an
-activation's start message still removes the invalid span.
+required. Destroy messages end an open activation on their target. Message
+creation and its activation changes form one undo unit. A self-message dragged
+from a specific activation leaves that exact bar. Repeated calls from the same
+outer activation create sibling bars at the same visual depth, even while an
+earlier sibling is still open. Starting the next sibling implicitly ends those
+open descendants at the new message row, and a small visual gap keeps adjacent
+sibling bars distinct. Deleting a closing return keeps every span it closed and
+makes those activations open-ended again; deleting an activation's start
+message still removes the invalid span.
+
+A new external synchronous call replaces the target participant's complete
+active execution stack: every currently active nested level ends at the new
+message row, then a new top-level activation begins. This rule also applies to
+older diagrams whose explicit source-activation links are incomplete.
 
 A create message instead places the target participant header at the message
 row and starts its lifeline below the header. This expresses object lifetime
-without misusing an activation bar to represent it.
+without misusing an activation bar to represent it. A participant may have
+only one incoming create message.
 
 A participant linked to a model type shows the short type name as its primary
 title and the namespace on a smaller second line. An optional instance alias is
@@ -296,7 +310,14 @@ assignments and Undo restores them.
 
 Messages linked to target operations support source navigation. The combined-
 fragment editor can add and remove ordered `alt`/`par` operands and edit each
-guard independently.
+guard independently. **Target operation** in the diagram menu controls whether
+linked operations are hidden, shown by name, or shown as a full signature. The
+participant type's FQDN is never repeated in that message annotation. Operation
+selectors show only member signatures and filter incrementally as text is
+typed, which keeps imported types with many methods practical to navigate.
+**Show message stereotypes** independently controls persistent `«sync»`,
+`«async»`, `«return»`, `«create»`, and `«destroy»` labels. New sequence diagrams
+show them by default; the quick-gesture preview always shows the chosen kind.
 
 Sequence authoring shortcuts use the same commands and undo history as the
 context menus:

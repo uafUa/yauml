@@ -791,6 +791,17 @@ QJsonObject sequenceEvidenceToJson(const SequenceSourceEvidence &evidence) {
 
 QJsonObject sequenceDataToJson(const Diagram &diagram) {
   QJsonObject object = diagram.sequenceExtra;
+  if (diagram.sequenceTargetOperationDisplayMode !=
+      SequenceTargetOperationDisplayMode::Hidden) {
+    object.insert(QStringLiteral("targetOperationDisplay"),
+                  toString(diagram.sequenceTargetOperationDisplayMode));
+  } else {
+    object.remove(QStringLiteral("targetOperationDisplay"));
+  }
+  if (!diagram.showSequenceMessageStereotypes)
+    object.insert(QStringLiteral("showMessageStereotypes"), false);
+  else
+    object.remove(QStringLiteral("showMessageStereotypes"));
   QJsonArray contexts;
   for (const auto &context : diagram.sequenceExecutionContexts) {
     QJsonObject item = context.extra;
@@ -933,6 +944,36 @@ void readSequenceData(const QJsonValue &value, Diagram &diagram,
     return;
   }
   const QJsonObject object = value.toObject();
+  const QJsonValue targetOperationDisplay =
+      object.value(QStringLiteral("targetOperationDisplay"));
+  if (!targetOperationDisplay.isUndefined()) {
+    bool displayModeOk = false;
+    diagram.sequenceTargetOperationDisplayMode =
+        sequenceTargetOperationDisplayModeFromString(
+            targetOperationDisplay.toString(), &displayModeOk);
+    if (!displayModeOk) {
+      diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral(
+                    "Sequence targetOperationDisplay has an unknown value"),
+                diagram.id));
+      diagram.sequenceTargetOperationDisplayMode =
+          SequenceTargetOperationDisplayMode::Hidden;
+    }
+  }
+  const QJsonValue showMessageStereotypes =
+      object.value(QStringLiteral("showMessageStereotypes"));
+  if (!showMessageStereotypes.isUndefined()) {
+    if (!showMessageStereotypes.isBool()) {
+      diagnostics.append(error(
+          QStringLiteral("validation"),
+          QStringLiteral("Sequence showMessageStereotypes must be a boolean"),
+          diagram.id));
+    } else {
+      diagram.showSequenceMessageStereotypes =
+          showMessageStereotypes.toBool();
+    }
+  }
   const auto requireArray = [&](const QString &key) {
     const QJsonValue field = object.value(key);
     if (!field.isUndefined() && !field.isArray())
@@ -1110,7 +1151,9 @@ void readSequenceData(const QJsonValue &value, Diagram &diagram,
     diagram.sequenceCombinedFragments.append(std::move(fragment));
   }
   diagram.sequenceExtra = withoutKeys(
-      object, {QStringLiteral("executionContexts"),
+      object, {QStringLiteral("targetOperationDisplay"),
+               QStringLiteral("showMessageStereotypes"),
+               QStringLiteral("executionContexts"),
                QStringLiteral("participants"), QStringLiteral("messages"),
                QStringLiteral("activations"), QStringLiteral("fragments")});
 }
@@ -2627,6 +2670,7 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
 
     QSet<QString> sequenceMessageIds;
     QSet<QString> sequenceMessageKeys;
+    QSet<QString> sequenceCreateTargets;
     QHash<QString, int> sequenceMessageOrder;
     qreal previousMessageY = -std::numeric_limits<qreal>::infinity();
     QHash<QString, const SequenceActivation *> sequenceActivationById;
@@ -2648,6 +2692,16 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
                   QStringLiteral("Sequence message keys must be unique"),
                   message.id));
       sequenceMessageKeys.insert(key);
+      if (message.type == SequenceMessageType::Create) {
+        if (sequenceCreateTargets.contains(message.targetParticipantId)) {
+          diagnostics.append(error(
+              QStringLiteral("validation"),
+              QStringLiteral("A sequence participant has more than one "
+                             "incoming create message"),
+              message.id));
+        }
+        sequenceCreateTargets.insert(message.targetParticipantId);
+      }
       if (!sequenceParticipantIds.contains(message.sourceParticipantId))
         diagnostics.append(error(
             QStringLiteral("validation"),

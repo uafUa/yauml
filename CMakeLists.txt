@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(yauml VERSION 0.10.0 LANGUAGES CXX)
+project(yauml VERSION 0.11.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -266,6 +266,7 @@ qt_add_qml_module(yauml
         qml/CatalogToolButton.qml
         qml/CompartmentVisibilityToolButton.qml
         qml/OperationSignatureModeToolButton.qml
+        qml/SearchableOperationComboBox.qml
         qml/ContextToolboxFrame.qml
         qml/DiagramArea.qml
         qml/DiagramCanvasMenu.qml
@@ -378,6 +379,11 @@ if(BUILD_TESTING)
         )
     endif()
     add_test(NAME yauml_canvas_tests COMMAND yauml_canvas_tests)
+    add_test(NAME yauml_qml_component_tests
+        COMMAND Qt6::qmltestrunner
+            -input ${CMAKE_CURRENT_SOURCE_DIR}/tests/qml
+            -import ${CMAKE_CURRENT_SOURCE_DIR}/qml
+            -o -,txt)
     qt_add_executable(yauml_render_tests
         tests/render_regression_tests.cpp
     )
@@ -446,11 +452,15 @@ if(BUILD_TESTING)
                 "PATH=path_list_prepend:$<TARGET_FILE_DIR:Qt6::Core>")
         set_tests_properties(yauml_canvas_tests yauml_ui_smoke PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=windows;QT_QUICK_BACKEND=software")
+        set_tests_properties(yauml_qml_component_tests PROPERTIES
+            ENVIRONMENT
+                "QT_QPA_PLATFORM=windows;QT_QUICK_BACKEND=software;QT_FORCE_STDERR_LOGGING=1")
         set_tests_properties(yauml_render_regression PROPERTIES
             ENVIRONMENT
                 "QT_QPA_PLATFORM=windows;QSG_RHI_PREFER_SOFTWARE_RENDERER=1;QT_SCALE_FACTOR=1")
     else()
-        set_tests_properties(yauml_canvas_tests yauml_ui_smoke PROPERTIES
+        set_tests_properties(yauml_canvas_tests yauml_qml_component_tests
+            yauml_ui_smoke PROPERTIES
             ENVIRONMENT "QT_QPA_PLATFORM=offscreen;QT_QUICK_BACKEND=software")
         set_tests_properties(yauml_render_regression PROPERTIES
             ENVIRONMENT

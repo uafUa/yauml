@@ -239,6 +239,33 @@ OperationSignatureMode operationSignatureModeFromString(const QString &value,
   return OperationSignatureMode::Full;
 }
 
+QString toString(SequenceTargetOperationDisplayMode mode) {
+  switch (mode) {
+  case SequenceTargetOperationDisplayMode::Hidden:
+    return QStringLiteral("hidden");
+  case SequenceTargetOperationDisplayMode::NameOnly:
+    return QStringLiteral("name-only");
+  case SequenceTargetOperationDisplayMode::FullSignature:
+    return QStringLiteral("full-signature");
+  }
+  return QStringLiteral("hidden");
+}
+
+SequenceTargetOperationDisplayMode
+sequenceTargetOperationDisplayModeFromString(const QString &value, bool *ok) {
+  if (ok)
+    *ok = true;
+  if (value == QStringLiteral("hidden"))
+    return SequenceTargetOperationDisplayMode::Hidden;
+  if (value == QStringLiteral("name-only"))
+    return SequenceTargetOperationDisplayMode::NameOnly;
+  if (value == QStringLiteral("full-signature"))
+    return SequenceTargetOperationDisplayMode::FullSignature;
+  if (ok)
+    *ok = false;
+  return SequenceTargetOperationDisplayMode::Hidden;
+}
+
 QString toString(SequenceExecutionContextType type) {
   switch (type) {
   case SequenceExecutionContextType::Thread:
@@ -527,7 +554,7 @@ const SequenceActivation *findSequenceActivation(const Diagram &diagram,
 }
 
 SequenceCombinedFragment *findSequenceCombinedFragment(Diagram &diagram,
-                                                        const QString &id) {
+                                                       const QString &id) {
   return findById(diagram.sequenceCombinedFragments, id);
 }
 

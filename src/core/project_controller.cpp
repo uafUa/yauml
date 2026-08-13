@@ -183,6 +183,54 @@ QStringList openDescendantActivationIds(const Diagram &diagram,
   return ids;
 }
 
+const SequenceActivation *topLevelActivationAt(const Diagram &diagram,
+                                               const QString &participantId,
+                                               qreal row) {
+  const SequenceActivation *result = nullptr;
+  qreal latestStartY = -std::numeric_limits<qreal>::infinity();
+  for (const SequenceActivation &activation : diagram.sequenceActivations) {
+    if (activation.participantId != participantId ||
+        activation.startMessageId.isEmpty() ||
+        !activationContainsRow(diagram, activation, row)) {
+      continue;
+    }
+    const auto *startMessage =
+        findSequenceMessage(diagram, activation.startMessageId);
+    if (!startMessage || startMessage->y >= row)
+      continue;
+
+    const auto *parent =
+        startMessage->sourceActivationId.isEmpty()
+            ? nullptr
+            : findSequenceActivation(diagram, startMessage->sourceActivationId);
+    if (parent && parent->participantId == participantId)
+      continue;
+    if (startMessage->y >= latestStartY) {
+      result = &activation;
+      latestStartY = startMessage->y;
+    }
+  }
+  return result;
+}
+
+QStringList activeMessageBoundActivationIds(const Diagram &diagram,
+                                            const QString &participantId,
+                                            qreal row) {
+  QStringList ids;
+  for (const SequenceActivation &activation : diagram.sequenceActivations) {
+    if (activation.participantId != participantId ||
+        activation.startMessageId.isEmpty() ||
+        !activationContainsRow(diagram, activation, row)) {
+      continue;
+    }
+    const auto *startMessage =
+        findSequenceMessage(diagram, activation.startMessageId);
+    if (startMessage && startMessage->y < row)
+      ids.append(activation.id);
+  }
+  return ids;
+}
+
 const ModelOperation *findOperation(const ModelElement &element,
                                     const QString &operationId) {
   const auto found =
@@ -4394,11 +4442,26 @@ bool ProjectController::canCreateSequenceReturn(
                              boundary, sourceActivationId) != nullptr;
 }
 
+bool ProjectController::canCreateSequenceCreate(
+    const QString &diagramId, const QString &targetParticipantId) const {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || diagram->type != DiagramType::Sequence ||
+      !findSequenceParticipant(*diagram, targetParticipantId)) {
+    return false;
+  }
+  return std::none_of(
+      diagram->sequenceMessages.cbegin(), diagram->sequenceMessages.cend(),
+      [&targetParticipantId](const SequenceMessage &message) {
+        return message.type == SequenceMessageType::Create &&
+               message.targetParticipantId == targetParticipantId;
+      });
+}
+
 QString ProjectController::createSequenceMessage(
     const QString &diagramId, const QString &sourceParticipantId,
     const QString &targetParticipantId, const QString &type,
     const QString &text, const QString &targetOperationId, qreal requestedY,
-    bool automaticActivation, const QString &sourceActivationId) {
+    const QString &sourceActivationId) {
   const auto *diagram = findDiagram(m_data, diagramId);
   bool typeOk = false;
   const SequenceMessageType messageType =
@@ -4422,6 +4485,14 @@ QString ProjectController::createSequenceMessage(
     m_diagnostics.addError(QStringLiteral("sequence"),
                            QStringLiteral("The selected operation does not "
                                           "belong to the target participant"));
+    return {};
+  }
+  if (messageType == SequenceMessageType::Create &&
+      !canCreateSequenceCreate(diagramId, targetParticipantId)) {
+    m_diagnostics.addWarning(
+        QStringLiteral("sequence"),
+        QStringLiteral("A participant can have only one incoming create "
+                       "message"));
     return {};
   }
 
@@ -4510,23 +4581,50 @@ QString ProjectController::createSequenceMessage(
     message.targetOperationId = targetOperationId;
   }
   const QString messageId = message.id;
+  // Activation behavior follows message semantics and is not a user option:
+  // synchronous calls open an execution span, asynchronous signals do not,
+  // returns close their source span, and destroy closes the target span.
   const bool startsTargetActivation =
-      automaticActivation && (messageType == SequenceMessageType::Synchronous ||
-                              messageType == SequenceMessageType::Asynchronous);
+      messageType == SequenceMessageType::Synchronous;
+  // A non-self call arriving while the participant is already executing does
+  // not create a second incoming edge for the same activation. It closes the
+  // current activation family and starts the next top-level span. If the old
+  // span already had a later return, that boundary transfers to its successor.
+  const auto *targetActivationToAdvance =
+      startsTargetActivation && sourceParticipantId != targetParticipantId
+          ? topLevelActivationAt(*diagram, targetParticipantId, message.y)
+          : nullptr;
+  const QString successorEndMessageId =
+      targetActivationToAdvance ? targetActivationToAdvance->endMessageId
+                                : QString{};
+  const QString successorExecutionContextId =
+      targetActivationToAdvance ? targetActivationToAdvance->executionContextId
+                                : QString{};
   QStringList activationToCloseIds;
-  if (automaticActivation && returnActivation) {
+  if (returnActivation) {
     // Closing an explicitly chosen outer activation implicitly closes every
     // still-open nested activation at the same row. Nested return arrows are
     // optional, but their execution bars cannot outlive their parent.
     activationToCloseIds =
         openNestedActivationIds(*diagram, *returnActivation, message.y);
-  } else if (automaticActivation) {
-    if (sourceActivation) {
+  } else {
+    if (startsTargetActivation && sourceActivation) {
       // Starting another message from an outer bar means control has already
       // returned from any still-open descendants. Close them at this message
       // row before opening the next sibling activation.
       activationToCloseIds =
           openDescendantActivationIds(*diagram, *sourceActivation, message.y);
+    }
+    if (startsTargetActivation &&
+        sourceParticipantId != targetParticipantId) {
+      // A new external synchronous call replaces the participant's complete
+      // execution stack. Close every active message-bound level, including
+      // legacy activations whose parent reference is absent or incomplete.
+      for (const QString &activationId : activeMessageBoundActivationIds(
+               *diagram, targetParticipantId, message.y)) {
+        if (!activationToCloseIds.contains(activationId))
+          activationToCloseIds.append(activationId);
+      }
     }
     if (messageType == SequenceMessageType::Destroy) {
       if (const auto *activation = latestOpenMessageBoundActivation(
@@ -4567,8 +4665,9 @@ QString ProjectController::createSequenceMessage(
         activation->endY.value_or(-1.0), activation->executionContextId);
   }
   if (startsTargetActivation)
-    createSequenceActivation(diagramId, targetParticipantId, messageId, {}, {},
-                             -1.0, -1.0, {});
+    createSequenceActivation(diagramId, targetParticipantId, messageId,
+                             successorEndMessageId, {}, -1.0, -1.0,
+                             successorExecutionContextId);
   if (useMacro)
     m_undoStack.endMacro();
   return messageId;
@@ -4591,11 +4690,9 @@ QVariantList ProjectController::sequenceMessageTargetOperationChoices(
     return choices;
 
   for (const ModelOperation &operation : element->operations) {
-    choices.append(
-        QVariantMap{{QStringLiteral("id"), operation.id},
-                    {QStringLiteral("label"),
-                     QStringLiteral("%1::%2").arg(
-                         element->name, modelOperationSignature(operation))}});
+    choices.append(QVariantMap{
+        {QStringLiteral("id"), operation.id},
+        {QStringLiteral("label"), modelOperationSignature(operation)}});
   }
   return choices;
 }
@@ -4973,6 +5070,31 @@ void ProjectController::setDiagramOperationSignatureMode(
     return;
   pushCommand(std::make_unique<SetDiagramOperationSignatureModeCommand>(
       this, diagramId, diagram->operationSignatureMode, after));
+}
+
+void ProjectController::setSequenceTargetOperationDisplayMode(
+    const QString &diagramId, const QString &mode) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  bool valid = false;
+  const SequenceTargetOperationDisplayMode after =
+      sequenceTargetOperationDisplayModeFromString(mode, &valid);
+  if (!diagram || diagram->type != DiagramType::Sequence || !valid ||
+      diagram->sequenceTargetOperationDisplayMode == after) {
+    return;
+  }
+  pushCommand(std::make_unique<SetSequenceTargetOperationDisplayModeCommand>(
+      this, diagramId, diagram->sequenceTargetOperationDisplayMode, after));
+}
+
+void ProjectController::setSequenceMessageStereotypesVisible(
+    const QString &diagramId, bool visible) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || diagram->type != DiagramType::Sequence ||
+      diagram->showSequenceMessageStereotypes == visible) {
+    return;
+  }
+  pushCommand(std::make_unique<SetSequenceMessageStereotypesVisibleCommand>(
+      this, diagramId, diagram->showSequenceMessageStereotypes, visible));
 }
 
 void ProjectController::setNodeCompartmentVisibility(

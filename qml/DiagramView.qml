@@ -1473,20 +1473,16 @@ Item {
         property string endpointSummary: ""
         property var operationChoices: []
         property bool returnAllowed: false
-
-        function indexOfOperation(id) {
-            for (let index = 0; index < operationChoices.length; ++index) {
-                if (operationChoices[index].id === id)
-                    return index
-            }
-            return 0
-        }
+        property bool createAllowed: true
 
         function refreshAcceptState() {
             const okButton = standardButton(Dialog.Ok)
             if (okButton)
-                okButton.enabled = sequenceMessageType.currentValue !== "return"
-                        || returnAllowed
+                okButton.enabled =
+                        (sequenceMessageType.currentValue !== "return"
+                         || returnAllowed)
+                        && (sequenceMessageType.currentValue !== "create"
+                            || createAllowed)
         }
 
         parent: Overlay.overlay
@@ -1498,17 +1494,16 @@ Item {
         standardButtons: Dialog.Ok | Dialog.Cancel
         onOpened: {
             sequenceMessageText.clear()
-            sequenceMessageTargetOperation.currentIndex = indexOfOperation("")
-            sequenceMessageAutomaticActivation.checked = true
+            sequenceMessageTargetOperation.selectValue("")
             returnAllowed = canvas.sequenceReturnCreationAllowed()
+            createAllowed = canvas.sequenceCreateCreationAllowed()
             refreshAcceptState()
             sequenceMessageText.forceActiveFocus()
         }
         onAccepted: canvas.createSequenceMessage(
                         sequenceMessageType.currentValue,
                         sequenceMessageText.text,
-                        sequenceMessageTargetOperation.currentValue,
-                        sequenceMessageAutomaticActivation.checked)
+                        sequenceMessageTargetOperation.selectedValue)
         onRejected: canvas.cancelPendingSequenceMessage()
 
         contentItem: ColumnLayout {
@@ -1543,22 +1538,27 @@ Item {
                 color: uiTheme.warningBorder
                 text: qsTr("A return must leave an open activation and go back to the participant that called that activation.")
             }
-            CheckBox {
-                id: sequenceMessageAutomaticActivation
-                Layout.fillWidth: true
-                visible: sequenceMessageType.currentValue !== "create"
-                text: sequenceMessageType.currentValue === "return"
-                      ? qsTr("End the source activation automatically")
-                      : sequenceMessageType.currentValue === "destroy"
-                        ? qsTr("End the target activation automatically")
-                        : qsTr("Start a target activation automatically")
-            }
             Label {
                 Layout.fillWidth: true
                 visible: sequenceMessageType.currentValue === "create"
+                         && !sequenceMessageDialog.createAllowed
+                wrapMode: Text.Wrap
+                color: uiTheme.warningBorder
+                text: qsTr("The target participant already has an incoming create message.")
+            }
+            Label {
+                Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 color: uiTheme.mutedText
-                text: qsTr("The target participant begins at this message; an activation is not opened automatically.")
+                text: sequenceMessageType.currentValue === "sync"
+                      ? qsTr("A synchronous call starts a target activation. A self-call creates a nested activation.")
+                      : sequenceMessageType.currentValue === "async"
+                        ? qsTr("An asynchronous signal does not start a target activation.")
+                        : sequenceMessageType.currentValue === "return"
+                          ? qsTr("A return ends its source activation.")
+                          : sequenceMessageType.currentValue === "destroy"
+                            ? qsTr("A destroy message ends the target activation and lifeline.")
+                            : qsTr("The target participant begins at this message; an activation is not opened.")
             }
             Label { text: qsTr("Message text (optional)") }
             TextField {
@@ -1568,12 +1568,10 @@ Item {
                 Keys.onReturnPressed: sequenceMessageDialog.accept()
             }
             Label { text: qsTr("Target operation (optional)") }
-            ComboBox {
+            SearchableOperationComboBox {
                 id: sequenceMessageTargetOperation
                 Layout.fillWidth: true
-                model: sequenceMessageDialog.operationChoices
-                textRole: "label"
-                valueRole: "id"
+                choices: sequenceMessageDialog.operationChoices
             }
         }
     }
@@ -1581,15 +1579,6 @@ Item {
     CatalogDialog {
         id: sequenceMessageOperationDialog
         property var editorData: ({})
-
-        function indexOfOperation(id) {
-            const choices = editorData.choices || []
-            for (let index = 0; index < choices.length; ++index) {
-                if (choices[index].id === id)
-                    return index
-            }
-            return 0
-        }
 
         parent: Overlay.overlay
         anchors.centerIn: parent
@@ -1599,11 +1588,11 @@ Item {
         title: qsTr("Link target operation")
         standardButtons: Dialog.Ok | Dialog.Cancel
         onOpened: {
-            linkedTargetOperation.currentIndex = indexOfOperation(
+            linkedTargetOperation.selectValue(
                         editorData.targetOperationId || "")
         }
         onAccepted: canvas.setSelectedSequenceMessageTargetOperation(
-                        linkedTargetOperation.currentValue)
+                        linkedTargetOperation.selectedValue)
 
         contentItem: ColumnLayout {
             spacing: 10
@@ -1615,12 +1604,10 @@ Item {
                           sequenceMessageOperationDialog.editorData.targetName || "")
             }
             Label { text: qsTr("Target operation") }
-            ComboBox {
+            SearchableOperationComboBox {
                 id: linkedTargetOperation
                 Layout.fillWidth: true
-                model: sequenceMessageOperationDialog.editorData.choices || []
-                textRole: "label"
-                valueRole: "id"
+                choices: sequenceMessageOperationDialog.editorData.choices || []
             }
         }
     }

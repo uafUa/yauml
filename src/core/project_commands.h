@@ -962,6 +962,41 @@ private:
   OperationSignatureMode m_after;
 };
 
+class SetSequenceTargetOperationDisplayModeCommand final
+    : public ProjectCommand {
+public:
+  SetSequenceTargetOperationDisplayModeCommand(
+      ProjectController *controller, QString diagramId,
+      SequenceTargetOperationDisplayMode before,
+      SequenceTargetOperationDisplayMode after);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, SequenceTargetOperationDisplayMode value);
+
+  QString m_diagramId;
+  SequenceTargetOperationDisplayMode m_before;
+  SequenceTargetOperationDisplayMode m_after;
+};
+
+class SetSequenceMessageStereotypesVisibleCommand final
+    : public ProjectCommand {
+public:
+  SetSequenceMessageStereotypesVisibleCommand(ProjectController *controller,
+                                              QString diagramId, bool before,
+                                              bool after);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, bool value);
+
+  QString m_diagramId;
+  bool m_before;
+  bool m_after;
+};
+
 class SetDiagramFilterCommand final : public ProjectCommand {
 public:
   SetDiagramFilterCommand(ProjectController *controller, QString diagramId,

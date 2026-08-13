@@ -142,6 +142,52 @@ Menu {
         enabled: root.canvas.selectedSequenceParticipantCount > 0
         onTriggered: root.sequenceCombinedFragmentRequested()
     }
+    Menu {
+        title: qsTr("Target operation")
+        visible: root.sequenceDiagram
+        height: visible ? implicitHeight : 0
+        MenuItem {
+            text: qsTr("Do not show")
+            checkable: true
+            checked: root.canvasAvailable
+                     && root.canvas.sequenceTargetOperationDisplayMode
+                        === "hidden"
+            onTriggered: root.canvas.setSequenceTargetOperationDisplayMode(
+                             "hidden")
+        }
+        MenuItem {
+            text: qsTr("Show only name")
+            checkable: true
+            checked: root.canvasAvailable
+                     && root.canvas.sequenceTargetOperationDisplayMode
+                        === "name-only"
+            onTriggered: root.canvas.setSequenceTargetOperationDisplayMode(
+                             "name-only")
+        }
+        MenuItem {
+            text: qsTr("Show full signature")
+            checkable: true
+            checked: root.canvasAvailable
+                     && root.canvas.sequenceTargetOperationDisplayMode
+                        === "full-signature"
+            onTriggered: root.canvas.setSequenceTargetOperationDisplayMode(
+                             "full-signature")
+        }
+    }
+    MenuItem {
+        text: qsTr("Show message stereotypes")
+        visible: root.sequenceDiagram
+        height: visible ? implicitHeight : 0
+        checkable: true
+        checked: root.canvasAvailable
+                 && root.canvas.sequenceMessageStereotypesVisible
+        onTriggered: root.canvas.setSequenceMessageStereotypesVisible(
+                         !root.canvas.sequenceMessageStereotypesVisible)
+    }
+    MenuSeparator {
+        visible: root.sequenceDiagram
+        height: visible ? implicitHeight : 0
+    }
     MenuSeparator {
         visible: root.structuralDiagram
         height: visible ? implicitHeight : 0

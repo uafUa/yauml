@@ -267,6 +267,33 @@ void migrateVersionEightToNine(ProjectJsonDocuments &documents) {
   documents.manifest.insert(QStringLiteral("schemaVersion"), 9);
 }
 
+// Target-operation presentation is an optional sequence-diagram setting.
+// Existing diagrams retain the historical behavior of showing only their
+// free-form message labels, represented by the new `hidden` default.
+void migrateVersionNineToTen(ProjectJsonDocuments &documents) {
+  documents.manifest.insert(QStringLiteral("schemaVersion"), 10);
+}
+
+// New sequence diagrams show message-kind stereotypes by default. Existing
+// diagrams retain their previous appearance by persisting the hidden state.
+void migrateVersionTenToEleven(ProjectJsonDocuments &documents) {
+  QJsonArray diagrams =
+      documents.diagrams.value(QStringLiteral("diagrams")).toArray();
+  for (qsizetype index = 0; index < diagrams.size(); ++index) {
+    QJsonObject diagram = diagrams.at(index).toObject();
+    if (diagram.value(QStringLiteral("type")).toString() !=
+        QStringLiteral("sequence")) {
+      continue;
+    }
+    QJsonObject sequence = diagram.value(QStringLiteral("sequence")).toObject();
+    sequence.insert(QStringLiteral("showMessageStereotypes"), false);
+    diagram.insert(QStringLiteral("sequence"), sequence);
+    diagrams.replace(index, diagram);
+  }
+  documents.diagrams.insert(QStringLiteral("diagrams"), diagrams);
+  documents.manifest.insert(QStringLiteral("schemaVersion"), 11);
+}
+
 } // namespace
 
 SchemaMigrationOutcome
@@ -325,6 +352,14 @@ ProjectSchemaMigrator::migrate(ProjectJsonDocuments documents) {
     case 8:
       migrateVersionEightToNine(outcome.documents);
       version = 9;
+      break;
+    case 9:
+      migrateVersionNineToTen(outcome.documents);
+      version = 10;
+      break;
+    case 10:
+      migrateVersionTenToEleven(outcome.documents);
+      version = 11;
       break;
     default:
       outcome.diagnostics.append(schemaError(

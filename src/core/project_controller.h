@@ -298,12 +298,13 @@ public:
       const QString &diagramId, const QString &sourceParticipantId,
       const QString &targetParticipantId, const QString &type,
       const QString &text = {}, const QString &targetOperationId = {},
-      qreal requestedY = -1.0, bool automaticActivation = false,
-      const QString &sourceActivationId = {});
+      qreal requestedY = -1.0, const QString &sourceActivationId = {});
   [[nodiscard]] bool canCreateSequenceReturn(
       const QString &diagramId, const QString &sourceParticipantId,
       const QString &targetParticipantId, qreal beforeY = -1.0,
       const QString &sourceActivationId = {}) const;
+  [[nodiscard]] bool canCreateSequenceCreate(
+      const QString &diagramId, const QString &targetParticipantId) const;
   Q_INVOKABLE QVariantList sequenceMessageTargetOperationChoices(
       const QString &diagramId, const QString &targetParticipantId) const;
   Q_INVOKABLE bool
@@ -358,6 +359,11 @@ public:
                                                 bool visible);
   Q_INVOKABLE void setDiagramOperationSignatureMode(const QString &diagramId,
                                                     const QString &mode);
+  Q_INVOKABLE void
+  setSequenceTargetOperationDisplayMode(const QString &diagramId,
+                                        const QString &mode);
+  Q_INVOKABLE void
+  setSequenceMessageStereotypesVisible(const QString &diagramId, bool visible);
   Q_INVOKABLE void setNodeCompartmentVisibility(const QString &diagramId,
                                                 const QString &nodeId,
                                                 const QString &compartment,

@@ -686,17 +686,19 @@ history memory grow with total project size rather than the size of each edit.
   unit. During a drag, `S`, `A`, `R`, `C`, and `D` select the message kind and
   commit it directly on release; a gesture without a kind key retains the
   details dialog.
-- Message authoring optionally maintains activation spans: call/async
-  messages start a target activation, while return and destroy messages close
-  applicable open activations. A pointer-created return closes the exact
+- Message authoring derives activation behavior from the message kind:
+  synchronous calls start a target activation, synchronous self-calls nest,
+  and asynchronous signals do not start a bar. Return and destroy messages
+  close applicable open activations. A pointer-created return closes the exact
   activation from which it was dragged and must target that activation's
   caller. Closing an outer activation implicitly closes its still-open nested
   spans, so nested return arrows remain optional. Deleting the return reopens
-  those activations instead of deleting their execution spans. This behavior
-  is enabled by default in the message dialog and remains one undo unit.
+  those activations instead of deleting their execution spans. The complete
+  semantic update remains one undo unit; there is no independent checkbox that
+  can create an inconsistent message/activation combination.
 - Create messages position the target participant header at the creation row
   and begin its lifeline below the header instead of opening an unbounded
-  activation bar.
+  activation bar. A participant accepts at most one incoming create message.
 - Selected activation bars expose top and bottom resize handles. Bounds snap
   to nearby participant message rows and retain stable message IDs; free drops
   become explicit geometry, with Alt available to suppress snapping.
@@ -709,7 +711,13 @@ history memory grow with total project size rather than the size of each edit.
   bounds remain attached to message IDs, and two-operand kinds render their
   divider and guards.
 - Target-operation links provide stable method identity and source navigation
-  for behavioral messages.
+  for behavioral messages. A schema-10 diagram setting optionally adds the
+  linked method name or its full owner-free signature to message labels;
+  operation selectors use compact signatures and incremental filtering.
+- Schema 11 adds optional diagram-level message-kind stereotypes. New sequence
+  diagrams show `«sync»`, `«async»`, `«return»`, `«create»`, and `«destroy»` by
+  default, while migrated diagrams retain their prior hidden presentation. The
+  active kind is also visible while using a quick message gesture.
 - Combined-fragment operands are generalized in schema 8. The editor can add,
   remove, and independently guard any number of ordered `alt`/`par` branches;
   layout, persistence, import, migration, and hit testing consume the same
@@ -719,6 +727,10 @@ history memory grow with total project size rather than the size of each edit.
   activations at one depth instead of following whichever inner bar happens to
   be on top. A later sibling implicitly closes open descendants of its selected
   source, and adjacent sibling bars render with a small separation.
+- Each activation has one initiating incoming message. A later external call
+  ends every active level on that participant and advances it to a consecutive
+  top-level activation. Any existing return boundary transfers to the new span,
+  which remains at the same visual depth as the previous top-level activation.
 - Keyboard authoring is available through discoverable sequence-menu
   shortcuts for participants, messages, activations, fragments, editing, and
   deletion. Each shortcut delegates to the same dialog or focused command used

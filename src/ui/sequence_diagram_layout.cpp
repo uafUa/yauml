@@ -1,5 +1,6 @@
 #include "ui/sequence_diagram_layout.h"
 
+#include "core/model_operation.h"
 #include "core/presentation_layout.h"
 
 #include <QHash>
@@ -25,6 +26,65 @@ constexpr qreal kFragmentTopPadding = 20.0;
 constexpr qreal kFragmentBottomPadding = 18.0;
 constexpr qreal kParticipantPrimaryHeight = 28.0;
 constexpr qreal kParticipantSecondaryHeight = 18.0;
+
+const ModelOperation *targetOperation(const ProjectData &project,
+                                      const SequenceMessage &message) {
+  const ModelElement *owner =
+      findElement(project, message.targetOperationElementId);
+  if (!owner)
+    return nullptr;
+  const auto operation =
+      std::find_if(owner->operations.cbegin(), owner->operations.cend(),
+                   [&message](const ModelOperation &candidate) {
+                     return candidate.id == message.targetOperationId;
+                   });
+  return operation == owner->operations.cend() ? nullptr : &*operation;
+}
+
+QString targetOperationLabel(const Diagram &diagram,
+                             const ModelOperation &operation) {
+  if (diagram.sequenceTargetOperationDisplayMode ==
+      SequenceTargetOperationDisplayMode::NameOnly) {
+    return operation.name;
+  }
+
+  // Build from structured fields instead of a legacy custom signature. This
+  // guarantees that the target owner/FQDN is never repeated in the message.
+  ModelOperation canonical = operation;
+  canonical.customSignature.clear();
+  QString signature =
+      modelOperationSignature(canonical, OperationSignatureMode::Full);
+  if (signature.size() >= 2 && signature.at(1) == u' ')
+    signature.remove(0, 2); // UML member-visibility prefix.
+  return signature;
+}
+
+QString sequenceMessageLabel(const ProjectData &project, const Diagram &diagram,
+                             const SequenceMessage &message) {
+  QString label;
+  if (diagram.sequenceTargetOperationDisplayMode ==
+      SequenceTargetOperationDisplayMode::Hidden) {
+    label = message.text;
+  } else if (const ModelOperation *operation =
+                 targetOperation(project, message)) {
+    const QString operationLabel = targetOperationLabel(diagram, *operation);
+    if (message.text.isEmpty() || message.text == operationLabel ||
+        message.text == operation->name ||
+        message.text == operation->name + QStringLiteral("()")) {
+      label = operationLabel;
+    } else {
+      label = QStringLiteral("%1 — %2").arg(message.text, operationLabel);
+    }
+  } else {
+    label = message.text;
+  }
+  if (!diagram.showSequenceMessageStereotypes)
+    return label;
+  const QString stereotype =
+      QStringLiteral("«%1»").arg(toString(message.type));
+  return label.isEmpty() ? stereotype
+                         : QStringLiteral("%1 %2").arg(stereotype, label);
+}
 
 qreal distanceToSegment(const QPointF &point, const QPointF &start,
                         const QPointF &end) {
@@ -276,6 +336,11 @@ SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
         // siblings. They therefore share a visual depth even if their spans
         // overlap, rather than drifting progressively farther right.
         depth = *parentDepth + 1;
+      } else if (startMessage && startMessage->sourceParticipantId !=
+                                     activation.participantId) {
+        // Separate incoming calls create consecutive top-level activations.
+        // Their list order must not make each new span look like a nested call.
+        depth = 0;
       }
     }
     activationDepthById.insert(activation.id, depth);
@@ -290,23 +355,34 @@ SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
     layout.activations.append(std::move(visual));
   }
 
-  // Consecutive sibling activations share the same horizontal level. Their
-  // semantic boundary is the message that closes one and starts the next, but
-  // two rectangles touching at that row look like one uninterrupted bar.
-  // Shorten only the preceding bar to preserve the new call's attachment row
-  // while leaving a small, zoom-independent visual break.
-  for (SequenceActivationLayout &earlier : layout.activations) {
-    for (const SequenceActivationLayout &later :
-         std::as_const(layout.activations)) {
-      if (earlier.id == later.id ||
-          earlier.participantId != later.participantId ||
-          std::abs(earlier.rect.left() - later.rect.left()) > 0.01 ||
-          std::abs(earlier.rect.bottom() - later.rect.top()) > 0.01) {
+  // A synchronous call can end the complete active stack and start a new
+  // top-level activation at the same message. Rectangles touching at that row
+  // look like one uninterrupted bar, so leave a small visual break. Apply it
+  // to every activation closed by the new call—not only the previous bar at
+  // the same depth—so no nested level protrudes beyond its parent.
+  for (const SequenceActivation &laterModel : diagram.sequenceActivations) {
+    if (laterModel.startMessageId.isEmpty())
+      continue;
+    const auto laterLayout = std::find_if(
+        layout.activations.cbegin(), layout.activations.cend(),
+        [&laterModel](const SequenceActivationLayout &candidate) {
+          return candidate.id == laterModel.id;
+        });
+    if (laterLayout == layout.activations.cend())
+      continue;
+    const qreal separatedBottom =
+        laterLayout->rect.top() - kSiblingActivationGap;
+    for (SequenceActivationLayout &earlierLayout : layout.activations) {
+      if (earlierLayout.id == laterModel.id ||
+          earlierLayout.participantId != laterModel.participantId)
         continue;
-      }
-      const qreal separatedBottom = later.rect.top() - kSiblingActivationGap;
-      if (separatedBottom > earlier.rect.top())
-        earlier.rect.setBottom(separatedBottom);
+      const auto *earlierModel =
+          findSequenceActivation(diagram, earlierLayout.id);
+      if (!earlierModel ||
+          earlierModel->endMessageId != laterModel.startMessageId)
+        continue;
+      if (separatedBottom > earlierLayout.rect.top())
+        earlierLayout.rect.setBottom(separatedBottom);
     }
   }
 
@@ -367,7 +443,7 @@ SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
         lifelineXByParticipant.value(message.targetParticipantId);
     SequenceMessageLayout visual;
     visual.id = message.id;
-    visual.text = message.text;
+    visual.text = sequenceMessageLabel(project, diagram, message);
     visual.type = message.type;
     visual.confidence = message.evidence.confidence;
     const auto *closingActivation =

@@ -65,6 +65,13 @@ representation.
 Schema 9 adds an optional source-activation reference to sequence messages.
 Pointer-authored messages can therefore preserve the exact execution level
 chosen by the user; legacy messages continue to use the innermost active bar.
+Schema 10 adds a diagram-level presentation mode for linked target operations.
+The optional setting defaults to hidden, preserving the appearance of existing
+sequence diagrams while allowing names or full owner-free signatures.
+Schema 11 adds diagram-level visibility for sequence-message stereotypes. New
+sequence diagrams show kinds such as `«sync»` and `«return»`; migration writes
+the hidden state for existing diagrams so opening an older project does not
+silently alter its appearance.
 
 Opening an unversioned project produces an informational log entry and marks the
 loaded representation as migrated, but does not itself make an external write.

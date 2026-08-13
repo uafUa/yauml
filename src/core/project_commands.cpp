@@ -1844,6 +1844,54 @@ void SetDiagramOperationSignatureModeCommand::apply(
     diagram->operationSignatureMode = value;
 }
 
+SetSequenceTargetOperationDisplayModeCommand::
+    SetSequenceTargetOperationDisplayModeCommand(
+        ProjectController *controller, QString diagramId,
+        SequenceTargetOperationDisplayMode before,
+        SequenceTargetOperationDisplayMode after)
+    : ProjectCommand(controller,
+                     QStringLiteral("Change target operation display")),
+      m_diagramId(std::move(diagramId)), m_before(before), m_after(after) {}
+
+void SetSequenceTargetOperationDisplayModeCommand::execute(
+    ProjectData &project) {
+  apply(project, m_after);
+}
+
+void SetSequenceTargetOperationDisplayModeCommand::revert(
+    ProjectData &project) {
+  apply(project, m_before);
+}
+
+void SetSequenceTargetOperationDisplayModeCommand::apply(
+    ProjectData &project, SequenceTargetOperationDisplayMode value) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    diagram->sequenceTargetOperationDisplayMode = value;
+}
+
+SetSequenceMessageStereotypesVisibleCommand::
+    SetSequenceMessageStereotypesVisibleCommand(ProjectController *controller,
+                                                QString diagramId,
+                                                bool before, bool after)
+    : ProjectCommand(controller,
+                     QStringLiteral("Change message stereotype visibility")),
+      m_diagramId(std::move(diagramId)), m_before(before), m_after(after) {}
+
+void SetSequenceMessageStereotypesVisibleCommand::execute(
+    ProjectData &project) {
+  apply(project, m_after);
+}
+
+void SetSequenceMessageStereotypesVisibleCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void SetSequenceMessageStereotypesVisibleCommand::apply(ProjectData &project,
+                                                        bool value) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    diagram->showSequenceMessageStereotypes = value;
+}
+
 SetDiagramFilterCommand::SetDiagramFilterCommand(ProjectController *controller,
                                                  QString diagramId,
                                                  DiagramFilter before,

@@ -125,6 +125,12 @@ class DiagramCanvas : public QQuickItem {
                  selectedOperationsVisibility NOTIFY canvasSelectionChanged)
   Q_PROPERTY(QString diagramOperationSignatureMode READ
                  diagramOperationSignatureMode NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(
+      QString sequenceTargetOperationDisplayMode READ
+          sequenceTargetOperationDisplayMode NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(bool sequenceMessageStereotypesVisible READ
+                 sequenceMessageStereotypesVisible NOTIFY
+                     canvasSelectionChanged)
   Q_PROPERTY(QString selectedOperationSignatureMode READ
                  selectedOperationSignatureMode NOTIFY canvasSelectionChanged)
   Q_PROPERTY(int incomingRelatedTypeCount READ incomingRelatedTypeCount NOTIFY
@@ -243,6 +249,8 @@ public:
   QString selectedAttributesVisibility() const;
   QString selectedOperationsVisibility() const;
   QString diagramOperationSignatureMode() const;
+  QString sequenceTargetOperationDisplayMode() const;
+  bool sequenceMessageStereotypesVisible() const;
   QString selectedOperationSignatureMode() const;
   int incomingRelatedTypeCount() const;
   int outgoingRelatedTypeCount() const;
@@ -293,11 +301,11 @@ public:
   setSelectedSequenceParticipantExecutionContext(const QString &contextId);
   Q_INVOKABLE bool createSequenceMessage(const QString &type,
                                          const QString &text,
-                                         const QString &targetOperationId = {},
-                                         bool automaticActivation = false);
+                                         const QString &targetOperationId = {});
   Q_INVOKABLE void cancelPendingSequenceMessage();
   Q_INVOKABLE QString sequenceMessageEndpointSummary() const;
   Q_INVOKABLE bool sequenceReturnCreationAllowed() const;
+  Q_INVOKABLE bool sequenceCreateCreationAllowed() const;
   Q_INVOKABLE QVariantList sequenceMessageTargetOperationChoices() const;
   Q_INVOKABLE QVariantMap sequenceMessageTargetOperationEditorData() const;
   Q_INVOKABLE bool
@@ -352,6 +360,8 @@ public:
   Q_INVOKABLE void setDiagramCompartmentVisible(const QString &compartment,
                                                 bool visible);
   Q_INVOKABLE void setDiagramOperationSignatureMode(const QString &mode);
+  Q_INVOKABLE void setSequenceTargetOperationDisplayMode(const QString &mode);
+  Q_INVOKABLE void setSequenceMessageStereotypesVisible(bool visible);
   Q_INVOKABLE void setSelectedCompartmentVisibility(const QString &compartment,
                                                     const QString &visibility);
   Q_INVOKABLE void setSelectedOperationSignatureMode(const QString &mode);
