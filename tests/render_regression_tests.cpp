@@ -294,6 +294,14 @@ void RenderRegressionTests::canonicalDiagramMatchesBaseline() {
 
   ProjectController controller;
   QVERIFY(populateCanonicalDiagram(controller));
+  const QString diagramId = controller.data().diagrams.first().id;
+  // The reference image intentionally includes type icons. Make that
+  // per-diagram choice explicit: new projects inherit the application default,
+  // which is not part of this headless test fixture and may differ by runner.
+  controller.setDiagramDisplayOptions(
+      diagramId, {{QStringLiteral("showTypeIcons"), true}});
+  QCOMPARE(controller.data().diagrams.first().showTypeIcons,
+           std::optional<bool>(true));
 
   QQuickWindow window;
   window.setTitle(QStringLiteral("yauml render regression"));
@@ -314,7 +322,7 @@ void RenderRegressionTests::canonicalDiagramMatchesBaseline() {
   canvas->setScale(1.0 / window.devicePixelRatio());
   canvas->setVisible(true);
   canvas->setProject(&controller);
-  canvas->setDiagramId(controller.data().diagrams.first().id);
+  canvas->setDiagramId(diagramId);
   canvas->setTypeIconSources(canonicalTypeIconSources());
   canvas->setTypeIconsVisible(true);
   canvas->setGridSpacing(20);
