@@ -1844,6 +1844,27 @@ void SetDiagramOperationSignatureModeCommand::apply(
     diagram->operationSignatureMode = value;
 }
 
+SetDiagramDisplayOptionsCommand::SetDiagramDisplayOptionsCommand(
+    ProjectController *controller, QString diagramId,
+    DiagramDisplayOptions before, DiagramDisplayOptions after)
+    : ProjectCommand(controller, QStringLiteral("Change diagram display")),
+      m_diagramId(std::move(diagramId)), m_before(std::move(before)),
+      m_after(std::move(after)) {}
+
+void SetDiagramDisplayOptionsCommand::execute(ProjectData &project) {
+  apply(project, m_after);
+}
+
+void SetDiagramDisplayOptionsCommand::revert(ProjectData &project) {
+  apply(project, m_before);
+}
+
+void SetDiagramDisplayOptionsCommand::apply(
+    ProjectData &project, const DiagramDisplayOptions &options) {
+  if (auto *diagram = findDiagram(project, m_diagramId))
+    applyDisplayOptions(*diagram, options);
+}
+
 SetSequenceTargetOperationDisplayModeCommand::
     SetSequenceTargetOperationDisplayModeCommand(
         ProjectController *controller, QString diagramId,
@@ -1871,8 +1892,8 @@ void SetSequenceTargetOperationDisplayModeCommand::apply(
 
 SetSequenceMessageStereotypesVisibleCommand::
     SetSequenceMessageStereotypesVisibleCommand(ProjectController *controller,
-                                                QString diagramId,
-                                                bool before, bool after)
+                                                QString diagramId, bool before,
+                                                bool after)
     : ProjectCommand(controller,
                      QStringLiteral("Change message stereotype visibility")),
       m_diagramId(std::move(diagramId)), m_before(before), m_after(after) {}

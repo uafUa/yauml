@@ -1700,6 +1700,14 @@ ApplicationWindow {
             text: qsTr("New diagram…")
             onTriggered: newDiagramDialog.open()
         }
+        CatalogMenuItem {
+            catalogId: "diagram.displayOptions"
+            visible: treeContextMenu.targetKind === "diagram"
+            height: visible ? implicitHeight : 0
+            text: qsTr("Display options…")
+            onTriggered: diagramDisplayOptionsDialog.openForDiagram(
+                             treeContextMenu.targetId)
+        }
         MenuSeparator {
             visible: treeContextMenu.targetKind === "folder"
                      || treeContextMenu.targetKind === "element"
@@ -1814,6 +1822,11 @@ ApplicationWindow {
                         treeContextMenu.targetId,
                         styleId)
         }
+    }
+
+    DiagramDisplayOptionsDialog {
+        id: diagramDisplayOptionsDialog
+        objectName: "projectTreeDiagramDisplayOptionsDialog"
     }
 
     ProjectStereotypeDialog {
@@ -2395,7 +2408,7 @@ ApplicationWindow {
                         }
                         CheckBox {
                             id: diagramTypeIcons
-                            text: qsTr("Show type icons in diagram presentation titles")
+                            text: qsTr("Show type icons in new diagrams by default")
                         }
                         CheckBox {
                             id: snapToGrid

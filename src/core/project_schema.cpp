@@ -294,6 +294,13 @@ void migrateVersionTenToEleven(ProjectJsonDocuments &documents) {
   documents.manifest.insert(QStringLiteral("schemaVersion"), 11);
 }
 
+// Type-icon visibility is an optional per-diagram override. Leaving it absent
+// preserves the pre-schema-12 behavior of following the application setting;
+// editing the diagram or creating a new one materializes an explicit value.
+void migrateVersionElevenToTwelve(ProjectJsonDocuments &documents) {
+  documents.manifest.insert(QStringLiteral("schemaVersion"), 12);
+}
+
 } // namespace
 
 SchemaMigrationOutcome
@@ -360,6 +367,10 @@ ProjectSchemaMigrator::migrate(ProjectJsonDocuments documents) {
     case 10:
       migrateVersionTenToEleven(outcome.documents);
       version = 11;
+      break;
+    case 11:
+      migrateVersionElevenToTwelve(outcome.documents);
+      version = 12;
       break;
     default:
       outcome.diagnostics.append(schemaError(

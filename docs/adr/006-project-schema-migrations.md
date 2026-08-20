@@ -72,6 +72,9 @@ Schema 11 adds diagram-level visibility for sequence-message stereotypes. New
 sequence diagrams show kinds such as `«sync»` and `«return»`; migration writes
 the hidden state for existing diagrams so opening an older project does not
 silently alter its appearance.
+Schema 12 adds an optional per-diagram type-icon visibility override. An absent
+value continues to follow the application preference, preserving existing
+projects; newly created or explicitly edited diagrams persist their own value.
 
 Opening an unversioned project produces an informational log entry and marks the
 loaded representation as migrated, but does not itself make an external write.

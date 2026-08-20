@@ -236,8 +236,9 @@ message-kind stereotypes are visible.
 The scene-graph canvas renders participant headers and lifelines, execution
 context labels, activation bars, and sync, async, return, create, destroy, and
 self messages. Confirmed and inferred evidence have distinct presentation.
-Fit-to-content, PNG export, and PDF export use the same deterministic sequence
-layout.
+Fit-to-content and PNG, PDF, SVG, and Draw.io export use the same deterministic
+sequence layout. SVG is a vector illustration; Draw.io preserves the layout as
+editable drawing objects rather than as a round-trip yauml project.
 
 Participant headers can be moved horizontally and messages vertically without
 changing their order. Drag from a lifeline or activation to another lifeline,

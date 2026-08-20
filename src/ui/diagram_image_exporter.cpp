@@ -3,6 +3,7 @@
 #include "core/project_controller.h"
 #include "core/project_data.h"
 #include "ui/diagram_canvas.h"
+#include "ui/diagram_document_exporter.h"
 #include "ui/ui_theme.h"
 
 #include <QDir>
@@ -138,6 +139,68 @@ void DiagramImageExporter::exportPng(const QUrl &fileUrl,
 void DiagramImageExporter::exportPdf(const QUrl &fileUrl,
                                      qreal requestedScale) {
   exportDiagram(fileUrl, requestedScale, OutputFormat::Pdf);
+}
+
+void DiagramImageExporter::exportSvg(const QUrl &fileUrl) {
+  exportDocument(fileUrl, QStringLiteral("svg"), QStringLiteral("SVG"), false);
+}
+
+void DiagramImageExporter::exportDrawio(const QUrl &fileUrl) {
+  exportDocument(fileUrl, QStringLiteral("drawio"), QStringLiteral("Draw.io"),
+                 true);
+}
+
+void DiagramImageExporter::exportDocument(const QUrl &fileUrl,
+                                          const QString &suffix,
+                                          const QString &formatName,
+                                          bool drawio) {
+  if (m_busy)
+    return;
+  const quint64 serial = ++m_exportSerial;
+  const Diagram *diagram =
+      m_project ? findDiagram(m_project->data(), m_diagramId) : nullptr;
+  if (!diagram) {
+    fail(QStringLiteral("Cannot export: the diagram is not available."),
+         serial);
+    return;
+  }
+  const QString outputPath = exportOutputPath(fileUrl, suffix);
+  if (outputPath.isEmpty()) {
+    fail(QStringLiteral("%1 export requires a local file destination.")
+             .arg(formatName),
+         serial);
+    return;
+  }
+
+  setBusy(true);
+  ui::DiagramDocumentExportOptions options;
+  options.typeIconsVisible = m_typeIconsVisible;
+  options.typeIconSources = m_typeIconSources;
+  options.margin = kExportMargin;
+  const ui::DiagramDocumentExportResult result =
+      ui::exportDiagramDocument(m_project->data(), *diagram, outputPath,
+                                drawio ? ui::DiagramDocumentFormat::Drawio
+                                       : ui::DiagramDocumentFormat::Svg,
+                                options);
+  if (!result.success) {
+    fail(result.error.isEmpty()
+             ? QStringLiteral("Could not write %1 export: %2")
+                   .arg(formatName, outputPath)
+             : result.error,
+         serial);
+    return;
+  }
+
+  m_project->diagnostics()->addInfo(
+      QStringLiteral("export"),
+      QStringLiteral("Exported diagram \"%1\" as %2 to %3 (%4 × %5 scene "
+                     "units).")
+          .arg(diagram->name, formatName, outputPath)
+          .arg(result.documentSize.width())
+          .arg(result.documentSize.height()),
+      m_diagramId);
+  setBusy(false);
+  emit exportSucceeded(QUrl::fromLocalFile(outputPath), result.documentSize);
 }
 
 void DiagramImageExporter::exportDiagram(const QUrl &fileUrl,

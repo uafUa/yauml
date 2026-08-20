@@ -85,7 +85,8 @@ folders.
 - In-place text editing, undo/redo, contextual toolboxes, and named styles.
 - Diagram filters by type, stereotype, name, field, or operation.
 - One-click expansion of incoming or outgoing type dependencies.
-- Complete-diagram export to PNG or single-page PDF.
+- Complete-diagram export to PNG, single-page PDF, vector SVG, or editable
+  Draw.io while retaining the diagram layout.
 
 ### Sequence diagrams
 

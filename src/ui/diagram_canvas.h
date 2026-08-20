@@ -119,6 +119,8 @@ class DiagramCanvas : public QQuickItem {
                  canvasSelectionChanged)
   Q_PROPERTY(bool diagramOperationsVisible READ diagramOperationsVisible NOTIFY
                  canvasSelectionChanged)
+  Q_PROPERTY(bool diagramTypeIconsVisible READ diagramTypeIconsVisible NOTIFY
+                 canvasSelectionChanged)
   Q_PROPERTY(QString selectedAttributesVisibility READ
                  selectedAttributesVisibility NOTIFY canvasSelectionChanged)
   Q_PROPERTY(QString selectedOperationsVisibility READ
@@ -128,9 +130,9 @@ class DiagramCanvas : public QQuickItem {
   Q_PROPERTY(
       QString sequenceTargetOperationDisplayMode READ
           sequenceTargetOperationDisplayMode NOTIFY canvasSelectionChanged)
-  Q_PROPERTY(bool sequenceMessageStereotypesVisible READ
-                 sequenceMessageStereotypesVisible NOTIFY
-                     canvasSelectionChanged)
+  Q_PROPERTY(
+      bool sequenceMessageStereotypesVisible READ
+          sequenceMessageStereotypesVisible NOTIFY canvasSelectionChanged)
   Q_PROPERTY(QString selectedOperationSignatureMode READ
                  selectedOperationSignatureMode NOTIFY canvasSelectionChanged)
   Q_PROPERTY(int incomingRelatedTypeCount READ incomingRelatedTypeCount NOTIFY
@@ -246,6 +248,7 @@ public:
   int selectedVerticalPortSnapPoints() const;
   bool diagramAttributesVisible() const;
   bool diagramOperationsVisible() const;
+  bool diagramTypeIconsVisible() const;
   QString selectedAttributesVisibility() const;
   QString selectedOperationsVisibility() const;
   QString diagramOperationSignatureMode() const;

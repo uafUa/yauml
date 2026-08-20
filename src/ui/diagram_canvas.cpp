@@ -2605,6 +2605,13 @@ bool DiagramCanvas::diagramOperationsVisible() const {
   return !currentDiagram || currentDiagram->showOperations;
 }
 
+bool DiagramCanvas::diagramTypeIconsVisible() const {
+  const auto *currentDiagram = diagram();
+  return currentDiagram
+             ? currentDiagram->showTypeIcons.value_or(m_typeIconsVisible)
+             : m_typeIconsVisible;
+}
+
 QString DiagramCanvas::selectedAttributesVisibility() const {
   return selectedCompartmentVisibility(true);
 }
@@ -2905,6 +2912,10 @@ void DiagramCanvas::setTypeIconsVisible(bool visible) {
   m_typeIconsVisible = visible;
   m_textDirty = true;
   emit typeIconsVisibleChanged();
+  // The effective per-diagram value may still inherit this application
+  // default. Notify bindings such as vector export even though no selection
+  // changed.
+  emit canvasSelectionChanged();
   update();
 }
 
@@ -4131,11 +4142,10 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
               right = std::max(right, point.x());
             }
             const qreal labelWidth = std::max<qreal>(80.0, right - left);
-            snapshot.sequenceMessagePreviewLabelRect =
-                QRectF((left + right - labelWidth) / 2.0,
-                       snapshot.sequenceMessagePreview.constFirst().y() -
-                           kLineHeight,
-                       labelWidth, kLineHeight);
+            snapshot.sequenceMessagePreviewLabelRect = QRectF(
+                (left + right - labelWidth) / 2.0,
+                snapshot.sequenceMessagePreview.constFirst().y() - kLineHeight,
+                labelWidth, kLineHeight);
           }
         }
       }
@@ -4257,7 +4267,7 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
             {rect, (*element)->type,
              presentation_layout::elementDisplayNameInPackage(
                  projectData, **element, containingPackageId(node.id)),
-             m_typeIconsVisible
+             diagramTypeIconsVisible()
                  ? m_typeIconSources.value(toString((*element)->type))
                        .toString()
                  : QString{},
@@ -6354,14 +6364,14 @@ bool DiagramCanvas::sequenceCreateCreationAllowed() const {
   const bool hasGestureEndpoints = !m_pendingSequenceMessageSource.isEmpty() &&
                                    !m_pendingSequenceMessageTarget.isEmpty();
   if (!m_project || !currentDiagram ||
-      (!hasGestureEndpoints && m_selectedSequenceParticipantOrder.size() != 2)) {
+      (!hasGestureEndpoints &&
+       m_selectedSequenceParticipantOrder.size() != 2)) {
     return false;
   }
   const QString targetParticipantId =
       hasGestureEndpoints ? m_pendingSequenceMessageTarget
                           : m_selectedSequenceParticipantOrder.constLast();
-  return m_project->canCreateSequenceCreate(m_diagramId,
-                                            targetParticipantId);
+  return m_project->canCreateSequenceCreate(m_diagramId, targetParticipantId);
 }
 
 QVariantList DiagramCanvas::sequenceMessageTargetOperationChoices() const {

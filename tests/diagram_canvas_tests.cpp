@@ -141,6 +141,7 @@ private slots:
   void lassoStartsOnEmptyContainerBody();
   void contextualSelectAllUsesContainerScope();
   void diagramFiltersHideInteractionAndSelection();
+  void diagramTypeIconVisibilityOverridesTheApplicationDefault();
   void clippedChildIsOnlyInteractiveInsideContainer();
   void fullyClippedNodesDoNotExposeConnectors();
   void arrangementAndNudgingAreUndoableTransactions();
@@ -395,19 +396,19 @@ void DiagramCanvasTests::sequenceLayoutInteractionAndUndoAreDeterministic() {
       SequenceTargetOperationDisplayMode::FullSignature;
   const ui::SequenceDiagramLayout operationSignatureLayout =
       ui::buildSequenceDiagramLayout(project, operationSignatureDiagram);
-  QCOMPARE(operationSignatureLayout.messages.first().text,
-           QStringLiteral("«sync» request() — handle(request: sample::Request): "
-                          "sample::Result const"));
+  QCOMPARE(
+      operationSignatureLayout.messages.first().text,
+      QStringLiteral("«sync» request() — handle(request: sample::Request): "
+                     "sample::Result const"));
   QVERIFY(!operationSignatureLayout.messages.first().text.contains(
       QStringLiteral("sample::Service::")));
   operationSignatureDiagram.sequenceMessages.first().text =
       QStringLiteral("handle()");
   const ui::SequenceDiagramLayout matchingOperationLayout =
       ui::buildSequenceDiagramLayout(project, operationSignatureDiagram);
-  QCOMPARE(
-      matchingOperationLayout.messages.first().text,
-      QStringLiteral("«sync» handle(request: sample::Request): "
-                     "sample::Result const"));
+  QCOMPARE(matchingOperationLayout.messages.first().text,
+           QStringLiteral("«sync» handle(request: sample::Request): "
+                          "sample::Result const"));
   // Incoming and outgoing messages attach to the nearest edge of the active
   // execution bar instead of disappearing below its fill at the lifeline.
   QCOMPARE(initialLayout.messages.first().points.constLast().x(), 453.0);
@@ -565,8 +566,7 @@ void DiagramCanvasTests::sequenceLayoutInteractionAndUndoAreDeterministic() {
   const auto nestedConsecutiveBar = std::find_if(
       consecutiveLayout.activations.cbegin(),
       consecutiveLayout.activations.cend(), [](const auto &candidate) {
-        return candidate.id ==
-               QStringLiteral("activation-consecutive-nested");
+        return candidate.id == QStringLiteral("activation-consecutive-nested");
       });
   QVERIFY(firstConsecutiveBar != consecutiveLayout.activations.cend());
   QVERIFY(secondConsecutiveBar != consecutiveLayout.activations.cend());
@@ -775,8 +775,8 @@ void DiagramCanvasTests::sequenceLayoutInteractionAndUndoAreDeterministic() {
   QCOMPARE(messageCreationRequests.count(), 1);
   QCOMPARE(canvas.sequenceMessageEndpointSummary(),
            QStringLiteral("Client \u2192 Service"));
-  QVERIFY(canvas.createSequenceMessage(
-      QStringLiteral("sync"), QStringLiteral("earlyCall()")));
+  QVERIFY(canvas.createSequenceMessage(QStringLiteral("sync"),
+                                       QStringLiteral("earlyCall()")));
   QCOMPARE(controller.data().diagrams.first().sequenceMessages.first().text,
            QStringLiteral("earlyCall()"));
   QCOMPARE(controller.data().diagrams.first().sequenceMessages.first().y,
@@ -2436,6 +2436,30 @@ void DiagramCanvasTests::diagramFiltersHideInteractionAndSelection() {
   QCOMPARE(canvas.visibleNodeCount(), 2);
   canvas.key(Qt::Key_A, Qt::ControlModifier);
   QCOMPARE(canvas.selectedNodeCount(), 2);
+}
+
+void DiagramCanvasTests::
+    diagramTypeIconVisibilityOverridesTheApplicationDefault() {
+  ProjectController controller;
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  const QString diagramId = controller.data().diagrams.first().id;
+
+  // A legacy diagram without an override follows the current application
+  // preference supplied to the canvas.
+  canvas.setTypeIconsVisible(true);
+  QVERIFY(canvas.diagramTypeIconsVisible());
+
+  controller.setDiagramDisplayOptions(
+      diagramId,
+      {{QStringLiteral("showAttributes"), true},
+       {QStringLiteral("showOperations"), true},
+       {QStringLiteral("showTypeIcons"), false},
+       {QStringLiteral("operationSignatureMode"), QStringLiteral("full")}});
+  QVERIFY(!canvas.diagramTypeIconsVisible());
+
+  controller.undo();
+  QVERIFY(canvas.diagramTypeIconsVisible());
 }
 
 void DiagramCanvasTests::clippedChildIsOnlyInteractiveInsideContainer() {

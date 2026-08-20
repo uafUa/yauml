@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(yauml VERSION 0.11.1 LANGUAGES CXX)
+project(yauml VERSION 0.12.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -147,6 +147,8 @@ add_library(yauml_canvas STATIC
     src/ui/diagram_clipping.h
     src/ui/diagram_canvas.cpp
     src/ui/diagram_canvas.h
+    src/ui/diagram_document_exporter.cpp
+    src/ui/diagram_document_exporter.h
     src/ui/diagram_image_exporter.cpp
     src/ui/diagram_image_exporter.h
     src/ui/sequence_diagram_layout.cpp
@@ -270,6 +272,7 @@ qt_add_qml_module(yauml
         qml/ContextToolboxFrame.qml
         qml/DiagramArea.qml
         qml/DiagramCanvasMenu.qml
+        qml/DiagramDisplayOptionsDialog.qml
         qml/DiagramFilterDialog.qml
         qml/DiagramView.qml
         qml/DiagramWindow.qml

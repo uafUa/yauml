@@ -63,6 +63,14 @@ int main(int argc, char *argv[]) {
 
   yauml::ProjectController project;
   yauml::ApplicationSettings applicationSettings;
+  project.setDefaultDiagramTypeIconsVisible(
+      applicationSettings.diagramTypeIconsVisible());
+  QObject::connect(&applicationSettings,
+                   &yauml::ApplicationSettings::diagramTypeIconsVisibleChanged,
+                   &project, [&project, &applicationSettings] {
+                     project.setDefaultDiagramTypeIconsVisible(
+                         applicationSettings.diagramTypeIconsVisible());
+                   });
   yauml::SourceEditorController sourceEditor(&project, &applicationSettings);
   yauml::CppImportController cppImport(&project, &applicationSettings);
   yauml::WorkspaceController workspace(&project, true);
@@ -269,12 +277,12 @@ int main(int argc, char *argv[]) {
                                  QStringLiteral("class"), {}, false, false)
                 .toString()
                 .toUtf8();
-        std::fprintf(
-            stderr,
-            "UI smoke project-tree icons failed: assigned=%d "
-            "ready=%d delegates=%lld registry-class=%s\n",
-            assignedIcons, readyIcons, static_cast<long long>(treeIcons.size()),
-            registryClassIcon.constData());
+        std::fprintf(stderr,
+                     "UI smoke project-tree icons failed: assigned=%d "
+                     "ready=%d delegates=%lld registry-class=%s\n",
+                     assignedIcons, readyIcons,
+                     static_cast<long long>(treeIcons.size()),
+                     registryClassIcon.constData());
         std::fflush(stderr);
         QCoreApplication::exit(1);
       }

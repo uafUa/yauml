@@ -353,12 +353,24 @@ Item {
         diagramFilterDialog.openForCanvas(canvas)
     }
 
+    function openDiagramDisplayOptionsDialog() {
+        diagramDisplayOptionsDialog.openForDiagram(root.diagramId)
+    }
+
     function openPngExportDialog() {
         pngExportDialog.open()
     }
 
     function openPdfExportDialog() {
         pdfExportDialog.open()
+    }
+
+    function openSvgExportDialog() {
+        svgExportDialog.open()
+    }
+
+    function openDrawioExportDialog() {
+        drawioExportDialog.open()
     }
 
     function openAutomaticLayoutDialog(scope) {
@@ -1101,11 +1113,16 @@ Item {
         objectName: "diagramFilterDialog"
     }
 
+    DiagramDisplayOptionsDialog {
+        id: diagramDisplayOptionsDialog
+        objectName: "diagramDisplayOptionsDialog"
+    }
+
     DiagramImageExporter {
         id: diagramImageExporter
         project: projectController
         diagramId: root.diagramId
-        typeIconsVisible: applicationSettings.diagramTypeIconsVisible
+        typeIconsVisible: canvas.diagramTypeIconsVisible
         typeIconSources: root.typeIconSources
     }
 
@@ -1125,6 +1142,24 @@ Item {
         nameFilters: [qsTr("PDF documents (*.pdf)")]
         defaultSuffix: "pdf"
         onAccepted: diagramImageExporter.exportPdf(selectedFile)
+    }
+
+    FileDialog {
+        id: svgExportDialog
+        title: qsTr("Export diagram as SVG")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("SVG images (*.svg)")]
+        defaultSuffix: "svg"
+        onAccepted: diagramImageExporter.exportSvg(selectedFile)
+    }
+
+    FileDialog {
+        id: drawioExportDialog
+        title: qsTr("Export diagram as Draw.io")
+        fileMode: FileDialog.SaveFile
+        nameFilters: [qsTr("Draw.io diagrams (*.drawio)")]
+        defaultSuffix: "drawio"
+        onAccepted: diagramImageExporter.exportDrawio(selectedFile)
     }
 
     StereotypeDropdown {
@@ -1176,9 +1211,12 @@ Item {
         id: canvasMenu
         canvas: root.diagramCanvas
         shortcutsEnabled: root.visible && !root.inPlaceEditorVisible
+        onDisplayOptionsRequested: root.openDiagramDisplayOptionsDialog()
         onFilterRequested: root.openDiagramFilterDialog()
         onExportPngRequested: root.openPngExportDialog()
         onExportPdfRequested: root.openPdfExportDialog()
+        onExportSvgRequested: root.openSvgExportDialog()
+        onExportDrawioRequested: root.openDrawioExportDialog()
         onAutomaticLayoutRequested:
             root.openAutomaticLayoutDialog("diagram")
         onConnectorOptimizationRequested: function(scope) {

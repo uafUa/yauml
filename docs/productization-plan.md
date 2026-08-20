@@ -2,8 +2,8 @@
 
 Status: the command foundation and the planned Phase 3–7 product slices are
 implemented for current product demand. Incremental-loading work,
-cross-platform packaging, and SVG export remain explicitly deferred until
-real usage justifies them.
+and cross-platform packaging remain explicitly deferred until real usage
+justifies them.
 
 The product owner accepted the MVP on 2026-07-21. This plan turns the broader
 architecture roadmap into bounded, testable delivery tranches. MVP audit notes
@@ -107,6 +107,11 @@ history memory grow with total project size rather than the size of each edit.
   effective visibility drives scene-graph rendering, in-place hit testing, and
   fit-to-content sizing; all settings persist in diagram JSON5 and use compact
   undo commands.
+- A shared **Diagram display options** dialog groups these presentation choices
+  for the canvas, diagram tab, and project-tree entry. Type-title icons are a
+  persisted per-diagram choice; the application preference is only the default
+  for newly created diagrams, while older diagrams without an override retain
+  their historical preference-driven behavior.
 - Operations are structured semantic records rather than opaque display
   strings. Stable identity, parameters, return type, visibility, modifiers,
   and precise source location persist in schema 4, with automatic migration
@@ -653,8 +658,13 @@ history memory grow with total project size rather than the size of each edit.
 - Single-page PDF export reuses the same bounded off-screen Qt Quick capture as
   PNG, so filtered content, sequence diagrams, styles, clipping, and complete
   diagram bounds remain identical across both formats.
-- Add SVG export only when there is concrete product demand; it remains outside
-  the critical productization path.
+- SVG and Draw.io export are implemented for documentation workflows. Both are
+  produced from one vector-document scene and therefore retain the persisted
+  class or sequence layout, filtering, styles, connector routes and
+  annotations, notes, and container geometry. SVG keeps text and geometry
+  resolution independent; Draw.io emits editable cells and routed edges.
+- These illustration formats are deliberately one-way. They do not encode the
+  complete yauml semantic model and are not round-trip project formats.
 
 ## Phase 7: sequence diagrams — baseline complete
 
@@ -673,7 +683,8 @@ history memory grow with total project size rather than the size of each edit.
 - The first Qt Quick scene-graph rendering slice is implemented: participant
   headers and lifelines, sync/async/return/create/destroy/self messages,
   activation bars, execution-context labels, evidence styling, hit testing,
-  fit-to-content, and PNG export all share one deterministic layout.
+  fit-to-content, and PNG/PDF/SVG/Draw.io export all share one deterministic
+  layout.
 - Participant horizontal movement, message vertical movement with strict order,
   participant/message selection, Ctrl+A, and in-place text editing use focused
   polymorphic commands with undo/redo coverage. Bound participant headers use a

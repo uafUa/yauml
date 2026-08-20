@@ -317,6 +317,11 @@
     },
 
     diagram: {
+      displayOptions: {
+        label: "Edit diagram display options",
+        contexts: ["diagram context menu", "diagram tab menu", "project-tree context menu"],
+        svg: "",
+      },
       exportPng: {
         label: "Export diagram as PNG",
         contexts: ["diagram context menu", "diagram tab menu"],
@@ -324,6 +329,16 @@
       },
       exportPdf: {
         label: "Export diagram as PDF",
+        contexts: ["diagram context menu", "diagram tab menu"],
+        svg: "",
+      },
+      exportSvg: {
+        label: "Export diagram as SVG",
+        contexts: ["diagram context menu", "diagram tab menu"],
+        svg: "",
+      },
+      exportDrawio: {
+        label: "Export diagram as Draw.io",
         contexts: ["diagram context menu", "diagram tab menu"],
         svg: "",
       },

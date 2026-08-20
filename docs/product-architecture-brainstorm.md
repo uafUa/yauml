@@ -635,7 +635,9 @@ deferred because it is less important than a reliable source-to-model workflow.
 - Full-diagram PNG export through the shared Qt Quick renderer is implemented.
 - Single-page PDF export reuses the same diagram-bounds, bounded capture, and
   export orchestration.
-- SVG export only if later product demand justifies it.
+- SVG and Draw.io documentation export are implemented through a shared
+  vector-document scene; both preserve class and sequence layout without
+  becoming round-trip project formats.
 
 ## 19. Early architectural decisions to record as ADRs
 

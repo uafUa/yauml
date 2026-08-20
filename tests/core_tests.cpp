@@ -124,6 +124,7 @@ private slots:
   void largeModelGeometryCommandUndoRedo();
   void bulkDiagramPlacementIsOneUndoableCommand();
   void diagramCompartmentVisibilityPersistsAndIsUndoable();
+  void diagramDisplayOptionsPersistAndAreUndoable();
   void structuredOperationsAndSignatureModesPersist();
   void diagramFiltersPersistMatchAndUndo();
   void relatedTypeNeighborhoodActionsAreDirectionalAndUndoable();
@@ -1466,6 +1467,9 @@ void CoreTests::sequenceFragmentOperandsMigrateFromSchemaSeven() {
   QCOMPARE(migrated.project.schemaVersion, kCurrentProjectSchemaVersion);
   const auto *migratedDiagram = findDiagram(migrated.project, diagram.id);
   QVERIFY(migratedDiagram);
+  // Schema 12 deliberately leaves the per-diagram icon override absent so an
+  // older project retains its preference-driven presentation behavior.
+  QVERIFY(!migratedDiagram->showTypeIcons.has_value());
   QVERIFY(migratedDiagram->sequenceTargetOperationDisplayMode ==
           SequenceTargetOperationDisplayMode::Hidden);
   QVERIFY(!migratedDiagram->showSequenceMessageStereotypes);
@@ -3732,6 +3736,55 @@ void CoreTests::diagramCompartmentVisibilityPersistsAndIsUndoable() {
   QVERIFY(loaded.ok);
   QCOMPARE(loaded.project, controller.data());
   QCOMPARE(findElement(loaded.project, firstElementId)->attributes.size(), 1);
+}
+
+void CoreTests::diagramDisplayOptionsPersistAndAreUndoable() {
+  ProjectController controller;
+  const QString diagramId = controller.data().diagrams.first().id;
+
+  // A diagram from an older project has no explicit icon override and keeps
+  // following the application preference until its display options are saved.
+  const QVariantMap inherited =
+      controller.diagramDisplayOptions(diagramId, true);
+  QVERIFY(inherited.value(QStringLiteral("typeIconsInherited")).toBool());
+  QVERIFY(inherited.value(QStringLiteral("showTypeIcons")).toBool());
+
+  controller.setDiagramDisplayOptions(
+      diagramId, {{QStringLiteral("showAttributes"), false},
+                  {QStringLiteral("showOperations"), false},
+                  {QStringLiteral("showTypeIcons"), true},
+                  {QStringLiteral("operationSignatureMode"),
+                   QStringLiteral("name-only")}});
+  const Diagram &edited = controller.data().diagrams.first();
+  QVERIFY(!edited.showAttributes);
+  QVERIFY(!edited.showOperations);
+  QVERIFY(edited.showTypeIcons == std::optional<bool>(true));
+  QVERIFY(edited.operationSignatureMode == OperationSignatureMode::NameOnly);
+  QCOMPARE(controller.undoText(), QStringLiteral("Change diagram display"));
+
+  controller.undo();
+  const Diagram &restored = controller.data().diagrams.first();
+  QVERIFY(restored.showAttributes);
+  QVERIFY(restored.showOperations);
+  QVERIFY(!restored.showTypeIcons.has_value());
+  QVERIFY(restored.operationSignatureMode == OperationSignatureMode::Full);
+  controller.redo();
+
+  // The application preference seeds only diagrams created afterwards.
+  controller.setDefaultDiagramTypeIconsVisible(true);
+  const QString newDiagramId = controller.addDiagram();
+  const auto *newDiagram = findDiagram(controller.data(), newDiagramId);
+  QVERIFY(newDiagram);
+  QVERIFY(newDiagram->showTypeIcons == std::optional<bool>(true));
+
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  QVERIFY(ProjectSerializer::save(temporary.path(), controller.data()).ok);
+  const LoadOutcome loaded = ProjectSerializer::load(temporary.path());
+  QVERIFY2(loaded.ok, qPrintable(loaded.diagnostics.isEmpty()
+                                     ? QString{}
+                                     : loaded.diagnostics.first().message));
+  QCOMPARE(loaded.project, controller.data());
 }
 
 void CoreTests::structuredOperationsAndSignatureModesPersist() {

@@ -398,6 +398,27 @@ sequenceEvidenceConfidenceFromString(const QString &value, bool *ok) {
 
 QString newId() { return QUuid::createUuid().toString(QUuid::WithoutBraces); }
 
+DiagramDisplayOptions displayOptions(const Diagram &diagram) {
+  return {diagram.showAttributes,
+          diagram.showOperations,
+          diagram.operationSignatureMode,
+          diagram.showTypeIcons,
+          diagram.sequenceTargetOperationDisplayMode,
+          diagram.showSequenceMessageStereotypes};
+}
+
+void applyDisplayOptions(Diagram &diagram,
+                         const DiagramDisplayOptions &options) {
+  diagram.showAttributes = options.showAttributes;
+  diagram.showOperations = options.showOperations;
+  diagram.operationSignatureMode = options.operationSignatureMode;
+  diagram.showTypeIcons = options.showTypeIcons;
+  diagram.sequenceTargetOperationDisplayMode =
+      options.sequenceTargetOperationDisplayMode;
+  diagram.showSequenceMessageStereotypes =
+      options.showSequenceMessageStereotypes;
+}
+
 ProjectData createStarterProject(const QString &name) {
   ProjectData project;
   project.id = newId();

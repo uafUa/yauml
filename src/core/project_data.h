@@ -461,6 +461,10 @@ struct Diagram {
   bool showAttributes = true;
   bool showOperations = true;
   OperationSignatureMode operationSignatureMode = OperationSignatureMode::Full;
+  // Older projects inherit the application preference until the user saves
+  // an explicit choice for this diagram. Newly created diagrams materialize
+  // their preference-derived default immediately.
+  std::optional<bool> showTypeIcons;
   DiagramFilter filter;
   QList<ContainerPresentation> containers;
   QList<NodePresentation> nodes;
@@ -485,6 +489,25 @@ struct Diagram {
 
   bool operator==(const Diagram &) const = default;
 };
+
+// Compact before/after value used by the display-options command. Keeping the
+// presentation flags together makes accepting the dialog one undo operation
+// without copying the potentially large diagram contents.
+struct DiagramDisplayOptions {
+  bool showAttributes = true;
+  bool showOperations = true;
+  OperationSignatureMode operationSignatureMode = OperationSignatureMode::Full;
+  std::optional<bool> showTypeIcons;
+  SequenceTargetOperationDisplayMode sequenceTargetOperationDisplayMode =
+      SequenceTargetOperationDisplayMode::Hidden;
+  bool showSequenceMessageStereotypes = true;
+
+  bool operator==(const DiagramDisplayOptions &) const = default;
+};
+
+DiagramDisplayOptions displayOptions(const Diagram &diagram);
+void applyDisplayOptions(Diagram &diagram,
+                         const DiagramDisplayOptions &options);
 
 // Project-scoped source synchronization settings. Keeping this in the
 // manifest (rather than application preferences) lets each model remember its

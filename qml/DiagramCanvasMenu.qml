@@ -21,8 +21,11 @@ Menu {
         canvasAvailable && canvas.diagramType === "sequence"
 
     signal filterRequested()
+    signal displayOptionsRequested()
     signal exportPngRequested()
     signal exportPdfRequested()
+    signal exportSvgRequested()
+    signal exportDrawioRequested()
     signal automaticLayoutRequested()
     signal connectorOptimizationRequested(string scope)
     signal sequenceMessageRequested()
@@ -59,6 +62,11 @@ Menu {
     title: qsTr("Diagram")
     enabled: canvasAvailable
 
+    CatalogMenuItem {
+        catalogId: "diagram.displayOptions"
+        text: qsTr("Display options…")
+        onTriggered: root.displayOptionsRequested()
+    }
     MenuItem {
         text: root.canvasAvailable && root.canvas.filterActive
               ? qsTr("Edit active filter…") : qsTr("Filter items…")
@@ -142,113 +150,7 @@ Menu {
         enabled: root.canvas.selectedSequenceParticipantCount > 0
         onTriggered: root.sequenceCombinedFragmentRequested()
     }
-    Menu {
-        title: qsTr("Target operation")
-        visible: root.sequenceDiagram
-        height: visible ? implicitHeight : 0
-        MenuItem {
-            text: qsTr("Do not show")
-            checkable: true
-            checked: root.canvasAvailable
-                     && root.canvas.sequenceTargetOperationDisplayMode
-                        === "hidden"
-            onTriggered: root.canvas.setSequenceTargetOperationDisplayMode(
-                             "hidden")
-        }
-        MenuItem {
-            text: qsTr("Show only name")
-            checkable: true
-            checked: root.canvasAvailable
-                     && root.canvas.sequenceTargetOperationDisplayMode
-                        === "name-only"
-            onTriggered: root.canvas.setSequenceTargetOperationDisplayMode(
-                             "name-only")
-        }
-        MenuItem {
-            text: qsTr("Show full signature")
-            checkable: true
-            checked: root.canvasAvailable
-                     && root.canvas.sequenceTargetOperationDisplayMode
-                        === "full-signature"
-            onTriggered: root.canvas.setSequenceTargetOperationDisplayMode(
-                             "full-signature")
-        }
-    }
-    MenuItem {
-        text: qsTr("Show message stereotypes")
-        visible: root.sequenceDiagram
-        height: visible ? implicitHeight : 0
-        checkable: true
-        checked: root.canvasAvailable
-                 && root.canvas.sequenceMessageStereotypesVisible
-        onTriggered: root.canvas.setSequenceMessageStereotypesVisible(
-                         !root.canvas.sequenceMessageStereotypesVisible)
-    }
-    MenuSeparator {
-        visible: root.sequenceDiagram
-        height: visible ? implicitHeight : 0
-    }
-    MenuSeparator {
-        visible: root.structuralDiagram
-        height: visible ? implicitHeight : 0
-    }
-    Menu {
-        title: qsTr("Compartment visibility")
-        visible: root.structuralDiagram
-        height: visible ? implicitHeight : 0
-        MenuItem {
-            text: qsTr("Show attributes")
-            checkable: true
-            checked: root.canvasAvailable
-                     && root.canvas.diagramAttributesVisible
-            onTriggered: root.canvas.setDiagramCompartmentVisible(
-                             "attributes",
-                             !root.canvas.diagramAttributesVisible)
-        }
-        MenuItem {
-            text: qsTr("Show operations")
-            checkable: true
-            checked: root.canvasAvailable
-                     && root.canvas.diagramOperationsVisible
-            onTriggered: root.canvas.setDiagramCompartmentVisible(
-                             "operations",
-                             !root.canvas.diagramOperationsVisible)
-        }
-        MenuSeparator {}
-        Menu {
-            title: qsTr("Operation signatures")
-            MenuItem {
-                text: qsTr("Full signature")
-                checkable: true
-                checked: root.canvasAvailable
-                         && root.canvas.diagramOperationSignatureMode === "full"
-                onTriggered: root.canvas.setDiagramOperationSignatureMode(
-                                 "full")
-            }
-            MenuItem {
-                text: qsTr("Name + return type")
-                checkable: true
-                checked: root.canvasAvailable
-                         && root.canvas.diagramOperationSignatureMode
-                            === "name-and-return-type"
-                onTriggered: root.canvas.setDiagramOperationSignatureMode(
-                                 "name-and-return-type")
-            }
-            MenuItem {
-                text: qsTr("Name only")
-                checkable: true
-                checked: root.canvasAvailable
-                         && root.canvas.diagramOperationSignatureMode
-                            === "name-only"
-                onTriggered: root.canvas.setDiagramOperationSignatureMode(
-                                 "name-only")
-            }
-        }
-    }
-    MenuSeparator {
-        visible: root.structuralDiagram
-        height: visible ? implicitHeight : 0
-    }
+    MenuSeparator {}
     CatalogMenuItem {
         catalogId: "diagram.exportPng"
         text: qsTr("Export diagram as PNG…")
@@ -258,6 +160,16 @@ Menu {
         catalogId: "diagram.exportPdf"
         text: qsTr("Export diagram as PDF…")
         onTriggered: root.exportPdfRequested()
+    }
+    CatalogMenuItem {
+        catalogId: "diagram.exportSvg"
+        text: qsTr("Export diagram as SVG…")
+        onTriggered: root.exportSvgRequested()
+    }
+    CatalogMenuItem {
+        catalogId: "diagram.exportDrawio"
+        text: qsTr("Export diagram as Draw.io…")
+        onTriggered: root.exportDrawioRequested()
     }
     MenuSeparator {}
     CatalogMenuItem {

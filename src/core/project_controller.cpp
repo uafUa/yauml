@@ -1493,6 +1493,18 @@ DiagramListModel *ProjectController::diagramModel() const {
 }
 DiagnosticModel *ProjectController::diagnostics() { return &m_diagnostics; }
 const ProjectData &ProjectController::data() const { return m_data; }
+void ProjectController::setDefaultDiagramTypeIconsVisible(bool visible) {
+  m_defaultDiagramTypeIconsVisible = visible;
+  // The untouched starter diagram has not reached the user when the
+  // application seeds this value. Later preference changes only affect new
+  // diagrams and never rewrite an existing diagram behind the user's back.
+  if (!m_diagramDefaultsInitialized && m_projectPath.isEmpty() && !dirty() &&
+      m_data.elements.isEmpty() && m_data.diagrams.size() == 1 &&
+      m_data.diagrams.first().nodes.isEmpty()) {
+    m_data.diagrams.first().showTypeIcons = visible;
+  }
+  m_diagramDefaultsInitialized = true;
+}
 QString ProjectController::projectName() const { return m_data.name; }
 QString ProjectController::projectPath() const { return m_projectPath; }
 QString ProjectController::selectedId() const { return m_selectedId; }
@@ -1624,9 +1636,11 @@ void ProjectController::newProject(const QString &name) {
   setExternallyChangedProjectFiles({}, false);
   m_selectedId.clear();
   m_selectedKind.clear();
-  setDataDirect(createStarterProject(name.trimmed().isEmpty()
-                                         ? QStringLiteral("New Project")
-                                         : name.trimmed()));
+  ProjectData project = createStarterProject(name.trimmed().isEmpty()
+                                                 ? QStringLiteral("New Project")
+                                                 : name.trimmed());
+  project.diagrams.first().showTypeIcons = m_defaultDiagramTypeIconsVisible;
+  setDataDirect(project);
   m_diagnostics.addInfo(QStringLiteral("project"),
                         QStringLiteral("Created a new project"));
 }
@@ -2303,6 +2317,7 @@ QString ProjectController::addDiagram() {
   diagram.id = newId();
   diagram.name =
       QStringLiteral("Class Diagram %1").arg(m_data.diagrams.size() + 1);
+  diagram.showTypeIcons = m_defaultDiagramTypeIconsVisible;
   pushCommand(std::make_unique<CreateDiagramCommand>(this, m_data, diagram));
   selectObject(diagram.id, QStringLiteral("diagram"));
   return diagram.id;
@@ -4615,8 +4630,7 @@ QString ProjectController::createSequenceMessage(
       activationToCloseIds =
           openDescendantActivationIds(*diagram, *sourceActivation, message.y);
     }
-    if (startsTargetActivation &&
-        sourceParticipantId != targetParticipantId) {
+    if (startsTargetActivation && sourceParticipantId != targetParticipantId) {
       // A new external synchronous call replaces the participant's complete
       // execution stack. Close every active message-bound level, including
       // legacy activations whose parent reference is absent or incomplete.
@@ -5070,6 +5084,83 @@ void ProjectController::setDiagramOperationSignatureMode(
     return;
   pushCommand(std::make_unique<SetDiagramOperationSignatureModeCommand>(
       this, diagramId, diagram->operationSignatureMode, after));
+}
+
+QVariantMap
+ProjectController::diagramDisplayOptions(const QString &diagramId,
+                                         bool defaultTypeIconsVisible) const {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram)
+    return {};
+  const DiagramDisplayOptions options = displayOptions(*diagram);
+  return {{QStringLiteral("diagramType"), toString(diagram->type)},
+          {QStringLiteral("showAttributes"), options.showAttributes},
+          {QStringLiteral("showOperations"), options.showOperations},
+          {QStringLiteral("operationSignatureMode"),
+           toString(options.operationSignatureMode)},
+          {QStringLiteral("showTypeIcons"),
+           options.showTypeIcons.value_or(defaultTypeIconsVisible)},
+          {QStringLiteral("typeIconsInherited"),
+           !options.showTypeIcons.has_value()},
+          {QStringLiteral("targetOperationDisplayMode"),
+           toString(options.sequenceTargetOperationDisplayMode)},
+          {QStringLiteral("showMessageStereotypes"),
+           options.showSequenceMessageStereotypes}};
+}
+
+void ProjectController::setDiagramDisplayOptions(const QString &diagramId,
+                                                 const QVariantMap &values) {
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram)
+    return;
+
+  const DiagramDisplayOptions before = displayOptions(*diagram);
+  DiagramDisplayOptions after = before;
+  if (diagram->type == DiagramType::Class) {
+    after.showAttributes =
+        values.value(QStringLiteral("showAttributes"), before.showAttributes)
+            .toBool();
+    after.showOperations =
+        values.value(QStringLiteral("showOperations"), before.showOperations)
+            .toBool();
+    bool signatureModeOk = false;
+    const OperationSignatureMode signatureMode =
+        operationSignatureModeFromString(
+            values
+                .value(QStringLiteral("operationSignatureMode"),
+                       toString(before.operationSignatureMode))
+                .toString(),
+            &signatureModeOk);
+    if (!signatureModeOk)
+      return;
+    after.operationSignatureMode = signatureMode;
+    after.showTypeIcons = values
+                              .value(QStringLiteral("showTypeIcons"),
+                                     before.showTypeIcons.value_or(
+                                         m_defaultDiagramTypeIconsVisible))
+                              .toBool();
+  } else {
+    bool targetModeOk = false;
+    const SequenceTargetOperationDisplayMode targetMode =
+        sequenceTargetOperationDisplayModeFromString(
+            values
+                .value(QStringLiteral("targetOperationDisplayMode"),
+                       toString(before.sequenceTargetOperationDisplayMode))
+                .toString(),
+            &targetModeOk);
+    if (!targetModeOk)
+      return;
+    after.sequenceTargetOperationDisplayMode = targetMode;
+    after.showSequenceMessageStereotypes =
+        values
+            .value(QStringLiteral("showMessageStereotypes"),
+                   before.showSequenceMessageStereotypes)
+            .toBool();
+  }
+  if (after == before)
+    return;
+  pushCommand(std::make_unique<SetDiagramDisplayOptionsCommand>(this, diagramId,
+                                                                before, after));
 }
 
 void ProjectController::setSequenceTargetOperationDisplayMode(

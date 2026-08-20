@@ -970,8 +970,7 @@ void readSequenceData(const QJsonValue &value, Diagram &diagram,
           QStringLiteral("Sequence showMessageStereotypes must be a boolean"),
           diagram.id));
     } else {
-      diagram.showSequenceMessageStereotypes =
-          showMessageStereotypes.toBool();
+      diagram.showSequenceMessageStereotypes = showMessageStereotypes.toBool();
     }
   }
   const auto requireArray = [&](const QString &key) {
@@ -1249,6 +1248,10 @@ QByteArray diagramsBytes(const ProjectData &project) {
     } else {
       object.remove(QStringLiteral("operationSignatureMode"));
     }
+    if (diagram.showTypeIcons)
+      object.insert(QStringLiteral("showTypeIcons"), *diagram.showTypeIcons);
+    else
+      object.remove(QStringLiteral("showTypeIcons"));
     const QJsonObject filter = filterToJson(diagram.filter);
     if (diagram_filter::isActive(diagram.filter) || !filter.isEmpty())
       object.insert(QStringLiteral("filter"), filter);
@@ -1978,6 +1981,18 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
         readDiagramVisibility(QStringLiteral("showAttributes"));
     diagram.showOperations =
         readDiagramVisibility(QStringLiteral("showOperations"));
+    const QJsonValue showTypeIcons =
+        object.value(QStringLiteral("showTypeIcons"));
+    if (!showTypeIcons.isUndefined()) {
+      if (showTypeIcons.isBool()) {
+        diagram.showTypeIcons = showTypeIcons.toBool();
+      } else {
+        outcome.diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("Diagram showTypeIcons must be a boolean"),
+                  diagram.id));
+      }
+    }
     const QJsonValue signatureModeValue =
         object.value(QStringLiteral("operationSignatureMode"));
     if (!signatureModeValue.isUndefined()) {
@@ -1999,7 +2014,8 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
         object,
         {QStringLiteral("id"), QStringLiteral("name"), QStringLiteral("type"),
          QStringLiteral("showAttributes"), QStringLiteral("showOperations"),
-         QStringLiteral("operationSignatureMode"), QStringLiteral("filter"),
+         QStringLiteral("operationSignatureMode"),
+         QStringLiteral("showTypeIcons"), QStringLiteral("filter"),
          QStringLiteral("containers"), QStringLiteral("nodes"),
          QStringLiteral("connectors"), QStringLiteral("notes"),
          QStringLiteral("noteAttachments"), QStringLiteral("sequence")});
@@ -2694,11 +2710,11 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
       sequenceMessageKeys.insert(key);
       if (message.type == SequenceMessageType::Create) {
         if (sequenceCreateTargets.contains(message.targetParticipantId)) {
-          diagnostics.append(error(
-              QStringLiteral("validation"),
-              QStringLiteral("A sequence participant has more than one "
-                             "incoming create message"),
-              message.id));
+          diagnostics.append(
+              error(QStringLiteral("validation"),
+                    QStringLiteral("A sequence participant has more than one "
+                                   "incoming create message"),
+                    message.id));
         }
         sequenceCreateTargets.insert(message.targetParticipantId);
       }

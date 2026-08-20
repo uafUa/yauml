@@ -962,6 +962,23 @@ private:
   OperationSignatureMode m_after;
 };
 
+class SetDiagramDisplayOptionsCommand final : public ProjectCommand {
+public:
+  SetDiagramDisplayOptionsCommand(ProjectController *controller,
+                                  QString diagramId,
+                                  DiagramDisplayOptions before,
+                                  DiagramDisplayOptions after);
+
+private:
+  void execute(ProjectData &project) override;
+  void revert(ProjectData &project) override;
+  void apply(ProjectData &project, const DiagramDisplayOptions &options);
+
+  QString m_diagramId;
+  DiagramDisplayOptions m_before;
+  DiagramDisplayOptions m_after;
+};
+
 class SetSequenceTargetOperationDisplayModeCommand final
     : public ProjectCommand {
 public:

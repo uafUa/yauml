@@ -1,6 +1,7 @@
 #include "core/project_controller.h"
 #include "core/stereotype_catalog.h"
 #include "ui/diagram_canvas.h"
+#include "ui/diagram_document_exporter.h"
 #include "ui/diagram_image_exporter.h"
 #include "ui/ui_theme.h"
 
@@ -15,9 +16,11 @@
 #include <QScreen>
 #include <QSettings>
 #include <QTemporaryDir>
+#include <QXmlStreamReader>
 #include <QtTest>
 
 #include <algorithm>
+#include <array>
 #include <cmath>
 
 using namespace yauml;
@@ -255,6 +258,9 @@ private slots:
   void canonicalDiagramMatchesBaseline();
   void pngExporterCapturesCompleteDiagram();
   void pdfExporterCapturesCompleteDiagram();
+  void svgExporterWritesVectorClassDiagram();
+  void drawioExporterWritesEditableClassDiagram();
+  void vectorExportersSupportSequenceDiagrams();
 };
 
 void RenderRegressionTests::initTestCase() {
@@ -437,6 +443,149 @@ void RenderRegressionTests::pdfExporterCapturesCompleteDiagram() {
   QVERIFY(bytes.startsWith("%PDF-"));
   QVERIFY(bytes.trimmed().endsWith("%%EOF"));
   QVERIFY(bytes.size() > 1024);
+}
+
+void RenderRegressionTests::svgExporterWritesVectorClassDiagram() {
+  ProjectController controller;
+  QVERIFY(populateCanonicalDiagram(controller));
+  QTemporaryDir outputDirectory;
+  QVERIFY(outputDirectory.isValid());
+  const QString outputPath =
+      outputDirectory.filePath(QStringLiteral("canonical.svg"));
+
+  ui::DiagramDocumentExportOptions options;
+  options.typeIconsVisible = true;
+  options.typeIconSources = canonicalTypeIconSources();
+  const ui::DiagramDocumentExportResult result = ui::exportDiagramDocument(
+      controller.data(), controller.data().diagrams.first(), outputPath,
+      ui::DiagramDocumentFormat::Svg, options);
+  QVERIFY2(result.success, qPrintable(result.error));
+  QVERIFY(result.documentSize.width() > 600);
+  QVERIFY(result.documentSize.height() > 400);
+
+  QFile exported(outputPath);
+  QVERIFY(exported.open(QIODevice::ReadOnly));
+  const QByteArray bytes = exported.readAll();
+  QVERIFY(bytes.contains("<svg"));
+  QVERIFY(bytes.contains("<polyline"));
+  QVERIFY(bytes.contains("OrderService"));
+  QVERIFY(bytes.contains("data:image/svg+xml;base64"));
+  QXmlStreamReader xml(bytes);
+  while (!xml.atEnd())
+    xml.readNext();
+  QVERIFY2(!xml.hasError(), qPrintable(xml.errorString()));
+}
+
+void RenderRegressionTests::drawioExporterWritesEditableClassDiagram() {
+  ProjectController controller;
+  QVERIFY(populateCanonicalDiagram(controller));
+  QTemporaryDir outputDirectory;
+  QVERIFY(outputDirectory.isValid());
+  const QString outputPath =
+      outputDirectory.filePath(QStringLiteral("canonical.drawio"));
+
+  const ui::DiagramDocumentExportResult result = ui::exportDiagramDocument(
+      controller.data(), controller.data().diagrams.first(), outputPath,
+      ui::DiagramDocumentFormat::Drawio);
+  QVERIFY2(result.success, qPrintable(result.error));
+
+  QFile exported(outputPath);
+  QVERIFY(exported.open(QIODevice::ReadOnly));
+  const QByteArray bytes = exported.readAll();
+  QVERIFY(bytes.contains("<mxfile"));
+  QVERIFY(bytes.contains("<mxGraphModel"));
+  QVERIFY(bytes.contains("OrderService"));
+  QVERIFY(bytes.contains("edge=\"1\""));
+  QVERIFY(bytes.contains("yaumlId="));
+  QVERIFY(bytes.contains("swimlane;"));
+  QVERIFY(bytes.contains("childLayout=stackLayout"));
+  QXmlStreamReader xml(bytes);
+  QString umlClassCellId;
+  bool foundEditableMember = false;
+  while (!xml.atEnd()) {
+    xml.readNext();
+    if (!xml.isStartElement() || xml.name() != QStringLiteral("mxCell"))
+      continue;
+    const auto attributes = xml.attributes();
+    const QString style = attributes.value(QStringLiteral("style")).toString();
+    if (style.startsWith(QStringLiteral("swimlane;")) &&
+        attributes.hasAttribute(QStringLiteral("yaumlId"))) {
+      umlClassCellId = attributes.value(QStringLiteral("id")).toString();
+    } else if (!umlClassCellId.isEmpty() &&
+               attributes.value(QStringLiteral("parent")) == umlClassCellId &&
+               style.startsWith(QStringLiteral("text;"))) {
+      foundEditableMember = true;
+    }
+  }
+  QVERIFY2(!xml.hasError(), qPrintable(xml.errorString()));
+  QVERIFY2(!umlClassCellId.isEmpty(),
+           "The Draw.io export must contain a native UML class container");
+  QVERIFY2(foundEditableMember,
+           "UML attributes and operations must be editable child cells");
+}
+
+void RenderRegressionTests::vectorExportersSupportSequenceDiagrams() {
+  ProjectData project = createStarterProject(QStringLiteral("Sequence export"));
+  Diagram sequence;
+  sequence.id = newId();
+  sequence.name = QStringLiteral("Request flow");
+  sequence.type = DiagramType::Sequence;
+  const QString callerId = newId();
+  const QString serviceId = newId();
+  sequence.sequenceParticipants = {{callerId,
+                                    QStringLiteral("caller"),
+                                    QStringLiteral("Caller"),
+                                    {},
+                                    {},
+                                    {20.0, 20.0, 180.0, 60.0},
+                                    {}},
+                                   {serviceId,
+                                    QStringLiteral("service"),
+                                    QStringLiteral("Service"),
+                                    {},
+                                    {},
+                                    {360.0, 20.0, 180.0, 60.0},
+                                    {}}};
+  SequenceMessage message;
+  message.id = newId();
+  message.key = QStringLiteral("submit");
+  message.sourceParticipantId = callerId;
+  message.targetParticipantId = serviceId;
+  message.type = SequenceMessageType::Synchronous;
+  message.text = QStringLiteral("submit(request)");
+  message.y = 150.0;
+  sequence.sequenceMessages.append(message);
+  sequence.sequenceActivations.append({newId(),
+                                       QStringLiteral("service-activation"),
+                                       serviceId,
+                                       {},
+                                       message.id,
+                                       {},
+                                       std::nullopt,
+                                       250.0,
+                                       QStringLiteral("handle request"),
+                                       {}});
+  project.diagrams.append(sequence);
+
+  QTemporaryDir outputDirectory;
+  QVERIFY(outputDirectory.isValid());
+  for (const auto &[format, suffix] :
+       std::array<std::pair<ui::DiagramDocumentFormat, QString>, 2>{
+           std::pair{ui::DiagramDocumentFormat::Svg, QStringLiteral("svg")},
+           std::pair{ui::DiagramDocumentFormat::Drawio,
+                     QStringLiteral("drawio")}}) {
+    const QString path =
+        outputDirectory.filePath(QStringLiteral("sequence.") + suffix);
+    const ui::DiagramDocumentExportResult result = ui::exportDiagramDocument(
+        project, project.diagrams.last(), path, format);
+    QVERIFY2(result.success, qPrintable(result.error));
+    QFile exported(path);
+    QVERIFY(exported.open(QIODevice::ReadOnly));
+    const QByteArray bytes = exported.readAll();
+    QVERIFY(bytes.contains("submit(request)"));
+    QVERIFY(bytes.contains("Caller"));
+    QVERIFY(bytes.contains("Service"));
+  }
 }
 
 QTEST_MAIN(RenderRegressionTests)

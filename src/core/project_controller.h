@@ -103,6 +103,7 @@ public:
   QStringList externallyChangedProjectFiles() const;
   QVariantList diagramStyles() const;
   QVariantList stereotypeCatalog() const;
+  void setDefaultDiagramTypeIconsVisible(bool visible);
 
   Q_INVOKABLE void
   newProject(const QString &name = QStringLiteral("New Project"));
@@ -303,8 +304,9 @@ public:
       const QString &diagramId, const QString &sourceParticipantId,
       const QString &targetParticipantId, qreal beforeY = -1.0,
       const QString &sourceActivationId = {}) const;
-  [[nodiscard]] bool canCreateSequenceCreate(
-      const QString &diagramId, const QString &targetParticipantId) const;
+  [[nodiscard]] bool
+  canCreateSequenceCreate(const QString &diagramId,
+                          const QString &targetParticipantId) const;
   Q_INVOKABLE QVariantList sequenceMessageTargetOperationChoices(
       const QString &diagramId, const QString &targetParticipantId) const;
   Q_INVOKABLE bool
@@ -359,6 +361,10 @@ public:
                                                 bool visible);
   Q_INVOKABLE void setDiagramOperationSignatureMode(const QString &diagramId,
                                                     const QString &mode);
+  Q_INVOKABLE QVariantMap diagramDisplayOptions(
+      const QString &diagramId, bool defaultTypeIconsVisible) const;
+  Q_INVOKABLE void setDiagramDisplayOptions(const QString &diagramId,
+                                            const QVariantMap &options);
   Q_INVOKABLE void
   setSequenceTargetOperationDisplayMode(const QString &diagramId,
                                         const QString &mode);
@@ -553,6 +559,8 @@ private:
   DiagnosticModel m_diagnostics;
   ProjectTreeModel *m_treeModel;
   DiagramListModel *m_diagramModel;
+  bool m_defaultDiagramTypeIconsVisible = false;
+  bool m_diagramDefaultsInitialized = false;
 };
 
 } // namespace yauml

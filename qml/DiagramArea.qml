@@ -227,6 +227,10 @@ Rectangle {
                                 canvas: targetView
                                         ? targetView.diagramCanvas : null
                                 createAtViewportCenter: true
+                                onDisplayOptionsRequested: {
+                                    if (targetView)
+                                        targetView.openDiagramDisplayOptionsDialog()
+                                }
                                 onFilterRequested: {
                                     if (targetView)
                                         targetView.openDiagramFilterDialog()
@@ -238,6 +242,14 @@ Rectangle {
                                 onExportPdfRequested: {
                                     if (targetView)
                                         targetView.openPdfExportDialog()
+                                }
+                                onExportSvgRequested: {
+                                    if (targetView)
+                                        targetView.openSvgExportDialog()
+                                }
+                                onExportDrawioRequested: {
+                                    if (targetView)
+                                        targetView.openDrawioExportDialog()
                                 }
                                 onAutomaticLayoutRequested: {
                                     if (targetView)

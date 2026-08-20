@@ -13,11 +13,9 @@ namespace yauml {
 class DiagramCanvas;
 class ProjectController;
 
-// Renders a complete diagram through the production Qt Quick canvas and writes
-// the captured result as PNG or a single-page PDF. The temporary render surface
-// keeps export state out of the interactive canvas and provides the same
-// geometry, text, clipping, filtering, styling, and connector rendering as the
-// editor for every output format.
+// Exports a complete diagram. PNG/PDF use the production Qt Quick canvas;
+// SVG/Draw.io use a shared vector-document scene so both illustration formats
+// retain the same persisted layout without rasterizing text or geometry.
 class DiagramImageExporter : public QObject {
   Q_OBJECT
   Q_PROPERTY(ProjectController *project READ project WRITE setProject NOTIFY
@@ -46,6 +44,8 @@ public:
 
   Q_INVOKABLE void exportPng(const QUrl &fileUrl, qreal requestedScale = 1.0);
   Q_INVOKABLE void exportPdf(const QUrl &fileUrl, qreal requestedScale = 1.0);
+  Q_INVOKABLE void exportSvg(const QUrl &fileUrl);
+  Q_INVOKABLE void exportDrawio(const QUrl &fileUrl);
 
 signals:
   void projectChanged();
@@ -61,6 +61,8 @@ private:
 
   void exportDiagram(const QUrl &fileUrl, qreal requestedScale,
                      OutputFormat format);
+  void exportDocument(const QUrl &fileUrl, const QString &suffix,
+                      const QString &formatName, bool drawio);
   void capture(quint64 serial);
   void fail(const QString &message, quint64 serial);
   void resetSurface();
