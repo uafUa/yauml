@@ -36,14 +36,19 @@ struct ConnectorRouteChange {
   QList<ConnectorBendPoint> afterBendPoints;
 };
 
+struct NewElementConnection {
+  Relationship relationship;
+  ConnectorPresentation connector;
+};
+
 class CreateElementCommand final : public ProjectCommand {
 public:
-  CreateElementCommand(ProjectController *controller,
-                       const ProjectData &project, ModelElement element,
-                       QString diagramId,
-                       std::optional<NodePresentation> nodePresentation,
-                       std::optional<ContainerPresentation>
-                           containerPresentation = std::nullopt);
+  CreateElementCommand(
+      ProjectController *controller, const ProjectData &project,
+      ModelElement element, QString diagramId,
+      std::optional<NodePresentation> nodePresentation,
+      std::optional<ContainerPresentation> containerPresentation = std::nullopt,
+      std::optional<NewElementConnection> connection = std::nullopt);
 
 private:
   void execute(ProjectData &project) override;
@@ -55,6 +60,9 @@ private:
   std::optional<NodePresentation> m_nodePresentation;
   std::optional<ContainerPresentation> m_containerPresentation;
   qsizetype m_presentationIndex = -1;
+  std::optional<NewElementConnection> m_connection;
+  qsizetype m_relationshipIndex = -1;
+  qsizetype m_connectorIndex = -1;
 };
 
 class ApplyCppImportCommand final : public ProjectCommand {

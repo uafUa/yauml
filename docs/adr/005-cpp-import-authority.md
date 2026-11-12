@@ -83,11 +83,17 @@ raw pointer, or reference is aggregation. An unclassified template wrapper is
 association, avoiding an unsupported ownership claim. A type appearing only in
 an operation parameter or return type is dependency. Structural member evidence
 suppresses a weaker signature dependency for the same source/target pair.
-Owning and shared pointer-template names are persisted application preferences;
-the defaults are `std::unique_ptr` and `std::shared_ptr`. Type-use relationship
-identity uses the source and target Clang identities independently of whether
-the current evidence is a member or operation signature, so preference-driven
-or source-driven reclassification updates the existing relationship through the
+Pointer/container rules are persisted application preferences. The seeded
+table includes `std::unique_ptr`, `std::shared_ptr`, `std::optional`, standard
+sequence/set/map containers, and container adaptors, with a relationship type,
+multiplicity expression, and target template argument for every row. Map-like
+rules target the mapped value rather than the key, and fixed-capacity containers
+may derive multiplicity from a non-type template argument. The exact maintained
+default list lives in `CppImportOptions::defaultMemberTypeRules()` and is
+covered by settings-migration tests. Type-use relationship identity uses the
+source and target Clang identities independently of whether the current
+evidence is a member or operation signature, so preference-driven or
+source-driven reclassification updates the existing relationship through the
 same baseline and conflict rules.
 
 When a bound declaration or relationship disappears from discovery, it is

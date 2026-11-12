@@ -1,0 +1,24 @@
+# Keep the repository index platform-neutral. Git materializes LF text on all
+# platforms unless an executable Windows script explicitly requires CRLF.
+* text=auto eol=lf
+
+*.bat text eol=crlf
+*.cmd text eol=crlf
+
+# These formats must never pass through text conversion or text diff drivers.
+*.7z binary
+*.db binary
+*.dll binary
+*.docx binary
+*.exe binary
+*.ico binary
+*.jar binary
+*.jpeg binary
+*.jpg binary
+*.lib binary
+*.pdf binary
+*.pdb binary
+*.png binary
+*.qm binary
+*.sqlite binary
+*.zip binary

@@ -4,6 +4,7 @@
 #include "core/presentation_layout.h"
 #include "core/project_controller.h"
 #include "core/project_serializer.h"
+#include "ui/activity_diagram_layout.h"
 #include "ui/connector_routing.h"
 #include "ui/diagram_arrangement.h"
 #include "ui/diagram_canvas.h"
@@ -118,6 +119,11 @@ class DiagramCanvasTests final : public QObject {
 
 private slots:
   void arrangementGeometryRulesAreDeterministic();
+  void activityNodesAndFlowsUseCanvasGestures();
+  void activityFlowCanCreateItsDestination();
+  void activitySelectionSupportsLassoAndArrangement();
+  void sequenceFragmentFitsSelfMessageBelowHeading();
+  void sequenceMessageDragRequiresArrowOrVisibleLabel();
   void sequenceLayoutInteractionAndUndoAreDeterministic();
   void snappingGeometryRulesAreDeterministic();
   void nestedContainerClippingAndOverflowAreDeterministic();
@@ -153,6 +159,7 @@ private slots:
   void relationshipEndAnnotationsAreEditable();
   void connectorAnnotationsMoveResetAndExposeStereotypes();
   void edgeGestureCreatesCancelsAndSupportsSelfConnections();
+  void classShiftDragCanConnectOrCreateItsDestination();
   void relationshipToolboxRequiresSelectedEdgeAndCreatesConnector();
   void multiSelectionToolboxTracksArrangementCommands();
   void connectorToolboxEditsRoutingAndAnnotations();
@@ -260,6 +267,302 @@ void DiagramCanvasTests::arrangementGeometryRulesAreDeterministic() {
       graphNodes, graphEdges, verticalOptions);
   QVERIFY(geometryById(topToBottom, QStringLiteral("a")).bottom() <
           geometryById(topToBottom, QStringLiteral("b")).top());
+}
+
+void DiagramCanvasTests::activityNodesAndFlowsUseCanvasGestures() {
+  ProjectController controller;
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  const QString id = controller.addActivityDiagram();
+  canvas.setDiagramId(id);
+  QCOMPARE(canvas.diagramType(), QStringLiteral("activity"));
+  const auto graph = [&]() -> const ActivityDiagramData & {
+    return findDiagram(controller.data(), id)->activity;
+  };
+  const QPointF defaultPan(30.0, 30.0);
+  const QPointF initial = graph().nodes.first().center + defaultPan;
+  const QPointF action(190.0, 245.0);
+  const QPointF moved(310.0, 280.0);
+
+  QSignalSpy context(&canvas, &DiagramCanvas::contextMenuRequested);
+  canvas.rightClick(action);
+  QCOMPARE(context.size(), 1);
+  QCOMPARE(context.first().first().toString(), QStringLiteral("activity"));
+  canvas.addActivityNode(QStringLiteral("action"), false);
+  QCOMPARE(graph().nodes.size(), 2);
+  QCOMPARE(graph().nodes.last().center, action - defaultPan);
+
+  canvas.drag(initial, action, Qt::ShiftModifier);
+  QCOMPARE(graph().flows.size(), 1);
+  const auto layout = ui::buildActivityDiagramLayout(graph());
+  const auto &route = layout.flows.first();
+  QCOMPARE(route.points.size(), 2);
+  QVERIFY(route.points.first().y() > layout.nodes.first().bounds.center().y());
+  QVERIFY(route.points.last().y() < layout.nodes.last().bounds.center().y());
+  QVERIFY(ui::hitActivityFlow(
+      layout, QLineF(route.points.first(), route.points.last()).center(), 4.0));
+  QVERIFY(canvas.diagramContentBounds().contains(layout.contentBounds));
+
+  QSignalSpy edits(&canvas, &DiagramCanvas::editRequested);
+  canvas.key(Qt::Key_F2);
+  QCOMPARE(edits.size(), 1);
+  QCOMPARE(edits.first().first().toString(), graph().flows.first().id);
+  QCOMPARE(edits.first().at(1).toString(), QStringLiteral("activityText"));
+  canvas.doubleClick(action);
+  QCOMPARE(edits.size(), 2);
+  QCOMPARE(edits.last().first().toString(), graph().nodes.last().id);
+
+  canvas.drag(action, moved);
+  QCOMPARE(graph().nodes.last().center, moved - defaultPan);
+  controller.undo();
+  QCOMPARE(graph().nodes.last().center, action - defaultPan);
+  canvas.press(action);
+  canvas.move(moved);
+  canvas.key(Qt::Key_Escape);
+  canvas.release(moved);
+  QCOMPARE(graph().nodes.last().center, action - defaultPan);
+  canvas.key(Qt::Key_Delete);
+  QCOMPARE(graph().nodes.size(), 1);
+  QVERIFY(graph().flows.isEmpty());
+  controller.undo();
+  QCOMPARE(graph().nodes.size(), 2);
+  QCOMPARE(graph().flows.size(), 1);
+}
+
+void DiagramCanvasTests::activityFlowCanCreateItsDestination() {
+  ProjectController controller;
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  const QString id = controller.addActivityDiagram();
+  canvas.setDiagramId(id);
+  const auto graph = [&]() -> const ActivityDiagramData & {
+    return findDiagram(controller.data(), id)->activity;
+  };
+  const QString source = graph().nodes.first().id;
+  const QPointF start = graph().nodes.first().center + QPointF(30.0, 30.0);
+  const QPointF destination(340.0, 310.0);
+  QSignalSpy requested(&canvas, &DiagramCanvas::connectionDestinationRequested);
+
+  canvas.drag(start, destination, Qt::ShiftModifier);
+  QCOMPARE(requested.size(), 1);
+  QCOMPARE(requested.first().at(0).toDouble(), destination.x());
+  QCOMPARE(requested.first().at(1).toDouble(), destination.y());
+  QCOMPARE(graph().nodes.size(), 1);
+  QVERIFY(graph().flows.isEmpty());
+  canvas.cancelConnectionDestination();
+  canvas.createConnectionDestination(QStringLiteral("action"));
+  QCOMPARE(graph().nodes.size(), 1);
+
+  canvas.drag(start, destination, Qt::ShiftModifier);
+  canvas.createConnectionDestination(QStringLiteral("initial"));
+  QCOMPARE(graph().nodes.size(), 1);
+  QVERIFY(graph().flows.isEmpty());
+
+  canvas.drag(start, destination, Qt::ShiftModifier);
+  canvas.createConnectionDestination(QStringLiteral("final"));
+  QCOMPARE(graph().nodes.size(), 2);
+  QVERIFY(graph().nodes.last().type == ActivityNodeType::Final);
+  QCOMPARE(graph().nodes.last().center, destination - QPointF(30.0, 30.0));
+  QCOMPARE(graph().flows.size(), 1);
+  QCOMPARE(graph().flows.first().sourceId, source);
+  QCOMPARE(graph().flows.first().targetId, graph().nodes.last().id);
+  controller.undo();
+  QCOMPARE(graph().nodes.size(), 1);
+  QVERIFY(graph().flows.isEmpty());
+  controller.redo();
+  QCOMPARE(graph().nodes.size(), 2);
+  QCOMPARE(graph().flows.size(), 1);
+
+  requested.clear();
+  canvas.drag(destination, {550.0, 350.0}, Qt::ShiftModifier);
+  QVERIFY(requested.isEmpty());
+  QCOMPARE(graph().flows.size(), 1);
+}
+
+void DiagramCanvasTests::activitySelectionSupportsLassoAndArrangement() {
+  ProjectController controller;
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  const QString id = controller.addActivityDiagram();
+  canvas.setDiagramId(id);
+  const auto graph = [&]() -> const ActivityDiagramData & {
+    return findDiagram(controller.data(), id)->activity;
+  };
+  const auto first = graph().nodes.first().id;
+  const auto second =
+      controller.addActivityNode(id, ActivityNodeType::Action, {360, 220});
+  const auto third =
+      controller.addActivityNode(id, ActivityNodeType::Action, {580, 180});
+  QVERIFY(!controller.addActivityFlow(id, first, second).isEmpty());
+  QVERIFY(!controller.addActivityFlow(id, second, third).isEmpty());
+  const auto original = graph();
+
+  canvas.drag({100, 90}, {690, 290});
+  QCOMPARE(canvas.selectedActivityNodeCount(), 3);
+  QCOMPARE(canvas.selectedActivityItemCount(), 5);
+  canvas.hover({390, 250});
+  QVERIFY(canvas.arrangementToolboxCandidate());
+  canvas.rightClick({390, 250});
+  QCOMPARE(canvas.selectedActivityItemCount(), 5);
+
+  canvas.drag({390, 250}, {412, 281});
+  for (qsizetype i = 0; i < original.nodes.size(); ++i)
+    QCOMPARE(graph().nodes.at(i).center,
+             original.nodes.at(i).center + QPointF(22, 31));
+  controller.undo();
+  QVERIFY(graph() == original);
+
+  canvas.press({610, 210});
+  canvas.release({610, 210});
+  canvas.arrangeSelection(QStringLiteral("alignTop"));
+  const auto arranged = ui::buildActivityDiagramLayout(graph());
+  QCOMPARE(arranged.nodes.at(0).bounds.top(),
+           arranged.nodes.at(2).bounds.top());
+  QCOMPARE(arranged.nodes.at(1).bounds.top(),
+           arranged.nodes.at(2).bounds.top());
+  QCOMPARE(graph().nodes.at(2).center, original.nodes.at(2).center);
+  controller.undo();
+  QVERIFY(graph() == original);
+
+  canvas.arrangeSelection(QStringLiteral("distributeHorizontally"));
+  QVERIFY(graph().nodes.at(1).center != original.nodes.at(1).center);
+  controller.undo();
+  QVERIFY(graph() == original);
+
+  canvas.press({610, 210}, Qt::ControlModifier);
+  canvas.release({610, 210}, Qt::ControlModifier);
+  QCOMPARE(canvas.selectedActivityNodeCount(), 2);
+  QVERIFY(canvas.previewAutomaticLayout(QStringLiteral("selection"),
+                                        QStringLiteral("top-to-bottom")));
+  QCOMPARE(canvas.automaticLayoutPreviewCount(), 2);
+  QVERIFY(graph() == original);
+  canvas.applyAutomaticLayoutPreview();
+  QVERIFY(graph().nodes.at(1).center != original.nodes.at(1).center);
+  QCOMPARE(graph().nodes.at(2).center, original.nodes.at(2).center);
+  controller.undo();
+  QVERIFY(graph() == original);
+
+  canvas.key(Qt::Key_A, Qt::ControlModifier);
+  QCOMPARE(canvas.selectedActivityItemCount(), 5);
+  canvas.key(Qt::Key_Delete);
+  QVERIFY(graph().nodes.isEmpty());
+  QVERIFY(graph().flows.isEmpty());
+  controller.undo();
+  QVERIFY(graph() == original);
+}
+
+void DiagramCanvasTests::sequenceFragmentFitsSelfMessageBelowHeading() {
+  const ProjectData project;
+  Diagram diagram;
+  diagram.type = DiagramType::Sequence;
+  const QString callerId = QStringLiteral("caller");
+  const QString workerId = QStringLiteral("worker");
+  diagram.sequenceParticipants = {
+      {callerId, callerId, QStringLiteral("Caller"), {}, {},
+       QRectF(40.0, 40.0, 120.0, 60.0), {}},
+      {workerId, workerId, QStringLiteral("Worker"), {}, {},
+       QRectF(280.0, 40.0, 120.0, 60.0), {}}};
+  const QString callId = QStringLiteral("call");
+  const QString retryId = QStringLiteral("retry");
+  const QString nextId = QStringLiteral("next");
+  diagram.sequenceMessages = {
+      {callId, callId, callerId, workerId, SequenceMessageType::Synchronous,
+       QStringLiteral("start service"), 180.0, {}, {}},
+      {retryId, retryId, workerId, workerId, SequenceMessageType::Asynchronous,
+       QStringLiteral("retry registration"), 244.0, {}, {}},
+      {nextId, nextId, workerId, workerId, SequenceMessageType::Asynchronous,
+       QStringLiteral("next event"), 308.0, {}, {}}};
+  diagram.sequenceActivations = {{QStringLiteral("retry-activation"),
+                                  QStringLiteral("retry-activation"), workerId,
+                                  {}, retryId, retryId, {}, {},
+                                  QStringLiteral("retry worker"), {}}};
+
+  const auto withoutFragments = ui::buildSequenceDiagramLayout(project, diagram);
+  diagram.sequenceCombinedFragments = {
+      {QStringLiteral("outer"), QStringLiteral("outer"),
+       SequenceCombinedFragmentType::Optional, {callerId, workerId}, callId,
+       retryId, {{callId, QStringLiteral("service enabled"), {}}}, {}},
+      {QStringLiteral("inner"), QStringLiteral("inner"),
+       SequenceCombinedFragmentType::Optional, {workerId}, retryId, retryId,
+       {{retryId, QStringLiteral("registration failed"), {}}}, {}}};
+  const auto layout = ui::buildSequenceDiagramLayout(project, diagram);
+  QCOMPARE(layout.messages.size(), 3);
+  QCOMPARE(layout.fragments.size(), 2);
+  const auto &retry = layout.messages.at(1);
+  QCOMPARE(retry.points.size(), 4);
+  QCOMPARE(retry.points, withoutFragments.messages.at(1).points);
+  QCOMPARE(retry.labelRect, withoutFragments.messages.at(1).labelRect);
+  const auto &inner = layout.fragments.at(1);
+  QVERIFY(inner.rect.contains(inner.headingRect));
+  QVERIFY(inner.headingRect.bottom() < retry.labelRect.top());
+  QVERIFY(inner.rect.top() > layout.messages.first().points.first().y());
+  QVERIFY(inner.rect.bottom() < layout.messages.last().labelRect.top());
+  for (const auto &fragment : layout.fragments) {
+    QVERIFY(fragment.rect.contains(retry.labelRect));
+    for (const auto &point : retry.points)
+      QVERIFY(fragment.rect.contains(point));
+    QVERIFY(fragment.rect.bottom() > retry.points.last().y());
+    QVERIFY(fragment.rect.right() > retry.points.at(2).x());
+  }
+}
+
+void DiagramCanvasTests::sequenceMessageDragRequiresArrowOrVisibleLabel() {
+  ProjectController controller;
+  const QString diagramId = controller.addSequenceDiagram();
+  const auto diagram = [&] { return findDiagram(controller.data(), diagramId); };
+  const QString source = diagram()->sequenceParticipants.first().id;
+  const QString target = controller.addSequenceParticipant(
+      diagramId, 560.0, QStringLiteral("Target"));
+  controller.setSequenceMessageStereotypesVisible(diagramId, false);
+  const QString labeledId = controller.createSequenceMessage(
+      diagramId, source, target, QStringLiteral("async"),
+      QStringLiteral("retry()"), {}, 180.0);
+  const QString unlabeledId = controller.createSequenceMessage(
+      diagramId, source, target, QStringLiteral("async"), {}, {}, 300.0);
+  QVERIFY(!labeledId.isEmpty());
+  QVERIFY(!unlabeledId.isEmpty());
+
+  const auto layout =
+      ui::buildSequenceDiagramLayout(controller.data(), *diagram());
+  QCOMPARE(layout.messages.size(), 2);
+  const auto &labeled = layout.messages.first();
+  const auto &unlabeled = layout.messages.last();
+  QVERIFY(!labeled.text.isEmpty());
+  QVERIFY(unlabeled.text.isEmpty());
+  const QPointF label = labeled.labelRect.center();
+  const QPointF blankBesideLabel(labeled.labelRect.left() + 50.0, label.y());
+  const QPointF blankAboveUnlabeled = unlabeled.labelRect.center();
+  QVERIFY(labeled.labelRect.contains(blankBesideLabel));
+  QVERIFY(!ui::hitSequenceMessage(layout, label, 2.0, false));
+
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  canvas.setDiagramId(diagramId);
+  constexpr qreal zoom = 1.25;
+  canvas.configureExportViewport(QRectF(0.0, 0.0, 900.0, 600.0), zoom);
+  for (const QPointF &blank : {blankBesideLabel, blankAboveUnlabeled}) {
+    canvas.hover(blank * zoom);
+    QCOMPARE(canvas.cursor().shape(), Qt::ArrowCursor);
+    canvas.drag(blank * zoom, (blank + QPointF(0.0, 22.0)) * zoom);
+    QCOMPARE(canvas.selectedSequenceMessageCount(), 0);
+  }
+  QCOMPARE(findSequenceMessage(*diagram(), labeledId)->y, 180.0);
+  QCOMPARE(findSequenceMessage(*diagram(), unlabeledId)->y, 300.0);
+
+  canvas.hover(label * zoom);
+  QCOMPARE(canvas.cursor().shape(), Qt::SizeVerCursor);
+  QSignalSpy edits(&canvas, &DiagramCanvas::editRequested);
+  canvas.doubleClick(label * zoom);
+  QCOMPARE(edits.size(), 1);
+  QCOMPARE(edits.first().first().toString(), labeledId);
+
+  const QPointF arrow(blankAboveUnlabeled.x(), unlabeled.points.first().y());
+  canvas.hover(arrow * zoom);
+  QCOMPARE(canvas.cursor().shape(), Qt::SizeVerCursor);
+  canvas.drag(arrow * zoom, (arrow + QPointF(0.0, 22.0)) * zoom);
+  QCOMPARE(findSequenceMessage(*diagram(), unlabeledId)->y, 322.0);
+  controller.undo();
+  QCOMPARE(findSequenceMessage(*diagram(), unlabeledId)->y, 300.0);
 }
 
 void DiagramCanvasTests::sequenceLayoutInteractionAndUndoAreDeterministic() {
@@ -3016,13 +3319,14 @@ void DiagramCanvasTests::edgeGestureCreatesCancelsAndSupportsSelfConnections() {
   controller.redo();
   QCOMPARE(controller.data().relationships.size(), 1);
 
-  // Empty drops and Escape discard the candidate without creating an undoable
-  // model change.
+  // Dismissing an empty drop and Escape both discard the candidate without
+  // creating an undoable model change.
   canvas.clearCanvasSelection();
   canvas.press({160.0, 80.0});
   canvas.key(Qt::Key_A);
   canvas.move({700.0, 400.0});
   canvas.release({700.0, 400.0});
+  canvas.cancelConnectionDestination();
   QCOMPARE(controller.data().relationships.size(), 1);
 
   canvas.clearCanvasSelection();
@@ -3062,6 +3366,72 @@ void DiagramCanvasTests::edgeGestureCreatesCancelsAndSupportsSelfConnections() {
   QCOMPARE(controller.data().relationships.size(), 3);
   QVERIFY(controller.data().relationships.constLast().type ==
           RelationshipType::Realization);
+}
+
+void DiagramCanvasTests::classShiftDragCanConnectOrCreateItsDestination() {
+  ProjectController controller;
+  populate(controller, 2);
+  useStandardInteractionGeometry(controller);
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  canvas.setDefaultConnectorRouting(QStringLiteral("orthogonal"));
+  const auto diagram = [&]() -> const Diagram & {
+    return controller.data().diagrams.first();
+  };
+  const QPointF source =
+      diagram().nodes.first().geometry.center() + QPointF(30.0, 30.0);
+  const QPointF target =
+      diagram().nodes.last().geometry.center() + QPointF(30.0, 30.0);
+  const auto sourceElement = diagram().nodes.first().elementId;
+  QSignalSpy requested(&canvas, &DiagramCanvas::connectionDestinationRequested);
+
+  canvas.drag(source, target, Qt::ShiftModifier);
+  QVERIFY(requested.isEmpty());
+  QCOMPARE(controller.data().relationships.size(), 1);
+  QVERIFY(controller.data().relationships.first().type ==
+          RelationshipType::Dependency);
+  QVERIFY(diagram().connectors.first().sourceAnchor.side ==
+          ConnectorSide::Right);
+  controller.undo();
+  QVERIFY(diagram().connectors.isEmpty());
+
+  const QPointF drop(670.0, source.y());
+  canvas.press(source, Qt::ShiftModifier);
+  canvas.move(drop, Qt::ShiftModifier);
+  canvas.key(Qt::Key_A, Qt::ShiftModifier);
+  canvas.release(drop, Qt::ShiftModifier);
+  QCOMPARE(requested.size(), 1);
+  QCOMPARE(diagram().nodes.size(), 2);
+  QVERIFY(controller.data().relationships.isEmpty());
+  QSignalSpy changed(&controller, &ProjectController::stateChanged);
+  QCOMPARE(requested.first().at(2).toString(), QStringLiteral("association"));
+  canvas.createConnectionDestination(QStringLiteral("struct"),
+                                     QStringLiteral("composition"));
+  QCOMPARE(changed.size(), 1);
+  QCOMPARE(diagram().nodes.size(), 3);
+  QCOMPARE(diagram().nodes.last().geometry.center(),
+           drop - QPointF(30.0, 30.0));
+  QVERIFY(controller.data().elements.last().type == ElementType::Struct);
+  QCOMPARE(controller.data().relationships.size(), 1);
+  const Relationship relationship = controller.data().relationships.first();
+  QVERIFY(relationship.type == RelationshipType::Composition);
+  QCOMPARE(relationship.sourceId, sourceElement);
+  QCOMPARE(relationship.targetId, diagram().nodes.last().elementId);
+  QCOMPARE(diagram().connectors.size(), 1);
+  QVERIFY(diagram().connectors.first().routing == ConnectorRouting::Orthogonal);
+  QVERIFY(diagram().connectors.first().sourceAnchor.side ==
+          ConnectorSide::Right);
+  QVERIFY(diagram().connectors.first().targetAnchor.side ==
+          ConnectorSide::Left);
+
+  controller.undo();
+  QCOMPARE(diagram().nodes.size(), 2);
+  QCOMPARE(controller.data().elements.size(), 2);
+  QVERIFY(controller.data().relationships.isEmpty());
+  QVERIFY(diagram().connectors.isEmpty());
+  controller.redo();
+  QCOMPARE(diagram().nodes.size(), 3);
+  QCOMPARE(controller.data().relationships.first().id, relationship.id);
 }
 
 void DiagramCanvasTests::
@@ -3107,7 +3477,7 @@ void DiagramCanvasTests::
   QVERIFY(canvas.beginToolboxRelationship(
       QStringLiteral("realization"), canvas.relationshipToolboxNodeId(),
       canvas.relationshipToolboxSceneAnchor().x(),
-      canvas.relationshipToolboxSceneAnchor().y()));
+      canvas.relationshipToolboxSceneAnchor().y(), 318.0, 112.0));
   canvas.updateToolboxRelationship(330.0, 140.0);
   canvas.finishToolboxRelationship(330.0, 140.0);
   QCOMPARE(controller.data().relationships.size(), 1);
@@ -3116,6 +3486,25 @@ void DiagramCanvasTests::
   const auto &connector = controller.data().diagrams.first().connectors.first();
   QVERIFY(connector.sourceAnchor.side == ConnectorSide::Right);
   QVERIFY(connector.targetAnchor.side == ConnectorSide::Left);
+
+  // A click on the floating button arms placement. Even though the button
+  // lies over empty canvas, releasing it is not a destination drop.
+  const QString sourceId = controller.data().diagrams.first().nodes.first().id;
+  canvas.press({190.0, 140.0});
+  canvas.release({190.0, 140.0});
+  QSignalSpy destination(&canvas,
+                         &DiagramCanvas::connectionDestinationRequested);
+  QVERIFY(canvas.beginToolboxRelationship(
+      QStringLiteral("dependency"), sourceId, 270.0, 110.0, 318.0, 112.0));
+  canvas.updateToolboxRelationship(318.0, 112.0);
+  canvas.finishToolboxRelationship(319.0, 112.0);
+  QVERIFY(destination.isEmpty());
+  QCOMPARE(controller.data().relationships.size(), 1);
+  canvas.hover({330.0, 140.0});
+  canvas.press({330.0, 140.0});
+  canvas.release({330.0, 140.0});
+  QCOMPARE(controller.data().relationships.size(), 2);
+  QVERIFY(destination.isEmpty());
 }
 
 void DiagramCanvasTests::multiSelectionToolboxTracksArrangementCommands() {

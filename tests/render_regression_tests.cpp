@@ -3,6 +3,7 @@
 #include "ui/diagram_canvas.h"
 #include "ui/diagram_document_exporter.h"
 #include "ui/diagram_image_exporter.h"
+#include "ui/sequence_diagram_layout.h"
 #include "ui/ui_theme.h"
 
 #include <QCoreApplication>
@@ -10,6 +11,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QFont>
+#include <QFontMetricsF>
 #include <QGuiApplication>
 #include <QImage>
 #include <QQuickWindow>
@@ -256,6 +258,9 @@ class RenderRegressionTests final : public QObject {
 private slots:
   void initTestCase();
   void canonicalDiagramMatchesBaseline();
+  void wideSequenceLabelAtFractionalZoom_data();
+  void wideSequenceLabelAtFractionalZoom();
+  void activityDiagramExportsRenderedNodesAndFlows();
   void pngExporterCapturesCompleteDiagram();
   void pdfExporterCapturesCompleteDiagram();
   void svgExporterWritesVectorClassDiagram();
@@ -377,6 +382,123 @@ void RenderRegressionTests::canonicalDiagramMatchesBaseline() {
             .arg(artifacts.path());
     QVERIFY2(matches, qPrintable(message));
   }
+}
+
+void RenderRegressionTests::wideSequenceLabelAtFractionalZoom_data() {
+  QTest::addColumn<qreal>("zoom");
+  QTest::newRow("112 percent") << qreal(1.12);
+  QTest::newRow("125 percent") << qreal(1.12 * 1.12);
+}
+
+void RenderRegressionTests::wideSequenceLabelAtFractionalZoom() {
+  QFETCH(qreal, zoom);
+  ProjectController controller;
+  const QString diagramId = controller.addSequenceDiagram();
+  const auto currentDiagram = [&] {
+    return findDiagram(controller.data(), diagramId);
+  };
+  const QString source = currentDiagram()->sequenceParticipants.first().id;
+  const QString target = controller.addSequenceParticipant(
+      diagramId, 2904.0, QStringLiteral("Remote participant"));
+  // This span places the atlas boundary within the label, well away from
+  // either lifeline. Text past the boundary must remain readable without a
+  // dark stripe continuing through the otherwise empty part of the label.
+  QVERIFY(!controller
+               .createSequenceMessage(diagramId, source, target,
+                                      QStringLiteral("async"),
+                                      QString(30, u'M'), {}, 160.0)
+               .isEmpty());
+  const auto layout =
+      ui::buildSequenceDiagramLayout(controller.data(), *currentDiagram());
+  QCOMPARE(layout.messages.size(), 1);
+  const auto &message = layout.messages.first();
+  QVERIFY(message.labelRect.width() > 2048.0);
+  const qreal center = message.labelRect.center().x();
+  const qreal halfText =
+      QFontMetricsF(QGuiApplication::font()).horizontalAdvance(message.text) /
+      2.0;
+
+  const QSize viewport(780, 180);
+  const QRectF view(center - halfText - 28.0, message.labelRect.top() - 20.0,
+                    viewport.width() / zoom, viewport.height() / zoom);
+  QQuickWindow window;
+  window.resize(viewport);
+  auto *canvas = new DiagramCanvas(window.contentItem());
+  canvas->setParentItem(window.contentItem());
+  canvas->setWidth(viewport.width());
+  canvas->setHeight(viewport.height());
+  canvas->setTransformOrigin(QQuickItem::TopLeft);
+  canvas->setScale(1.0 / window.devicePixelRatio());
+  canvas->setProject(&controller);
+  canvas->setDiagramId(diagramId);
+  canvas->configureExportViewport(view, zoom);
+  window.show();
+  if (QGuiApplication::platformName() != QStringLiteral("offscreen"))
+    QVERIFY(QTest::qWaitForWindowExposed(&window));
+  const QImage rendered = captureWindow(window);
+  QVERIFY(!rendered.isNull());
+
+  const auto inkPixels = [&](qreal from, qreal to) {
+    const QRect pixels =
+        QRectF((from - view.left()) * zoom,
+               (message.labelRect.top() - view.top()) * zoom,
+               (to - from) * zoom, (message.labelRect.height() - 2.0) * zoom)
+            .toAlignedRect()
+            .intersected(rendered.rect());
+    int ink = 0;
+    for (int y = pixels.top(); y <= pixels.bottom(); ++y)
+      for (int x = pixels.left(); x <= pixels.right(); ++x)
+        if (qGray(rendered.pixel(x, y)) < 160)
+          ++ink;
+    return ink;
+  };
+  QVERIFY(inkPixels(center - halfText, center - 15.0) > 60);
+  QVERIFY(inkPixels(center + 15.0, center + halfText) > 60);
+  QCOMPARE(inkPixels(center + halfText + 16.0, center + halfText + 140.0), 0);
+}
+
+void RenderRegressionTests::activityDiagramExportsRenderedNodesAndFlows() {
+  ProjectController controller;
+  const QString diagramId = controller.addActivityDiagram();
+  const QString initial =
+      findDiagram(controller.data(), diagramId)->activity.nodes.first().id;
+  const QString action = controller.addActivityNode(
+      diagramId, ActivityNodeType::Action, {160.0, 240.0});
+  const QString final = controller.addActivityNode(
+      diagramId, ActivityNodeType::Final, {160.0, 380.0});
+  QVERIFY(!controller.addActivityFlow(diagramId, initial, action).isEmpty());
+  QVERIFY(!controller.addActivityFlow(diagramId, action, final).isEmpty());
+
+  QTemporaryDir outputDirectory;
+  QVERIFY(outputDirectory.isValid());
+  const QString outputPath =
+      outputDirectory.filePath(QStringLiteral("activity.png"));
+  DiagramImageExporter exporter;
+  exporter.setProject(&controller);
+  exporter.setDiagramId(diagramId);
+  QSignalSpy succeeded(&exporter, &DiagramImageExporter::exportSucceeded);
+  QSignalSpy failed(&exporter, &DiagramImageExporter::exportFailed);
+  exporter.exportPng(QUrl::fromLocalFile(outputPath));
+  QTRY_VERIFY_WITH_TIMEOUT(!succeeded.isEmpty() || !failed.isEmpty(), 20000);
+  QVERIFY2(failed.isEmpty(),
+           qPrintable(failed.isEmpty() ? QString{}
+                                       : failed.first().first().toString()));
+
+  const QImage exported(outputPath);
+  QVERIFY(!exported.isNull());
+  QVERIFY(exported.height() > 290);
+  const auto &palette = ui::uiPalette();
+  int activityFillPixels = 0;
+  int activityInkPixels = 0;
+  for (int y = 0; y < exported.height(); ++y) {
+    for (int x = 0; x < exported.width(); ++x) {
+      const auto color = exported.pixelColor(x, y);
+      activityFillPixels += color == palette.classFill;
+      activityInkPixels += color == palette.connector;
+    }
+  }
+  QVERIFY(activityFillPixels > 1000);
+  QVERIFY(activityInkPixels > 250);
 }
 
 void RenderRegressionTests::pngExporterCapturesCompleteDiagram() {
@@ -563,6 +685,14 @@ void RenderRegressionTests::vectorExportersSupportSequenceDiagrams() {
   message.text = QStringLiteral("submit(request)");
   message.y = 150.0;
   sequence.sequenceMessages.append(message);
+  const QString retryId = newId();
+  sequence.sequenceMessages.append({retryId, QStringLiteral("retry"), serviceId,
+                                    serviceId, SequenceMessageType::Asynchronous,
+                                    QStringLiteral("retry()"), 220.0, {}, {}});
+  sequence.sequenceCombinedFragments.append(
+      {newId(), QStringLiteral("retry-if-needed"),
+       SequenceCombinedFragmentType::Optional, {serviceId}, retryId, retryId,
+       {{retryId, QStringLiteral("failed"), {}}}, {}});
   sequence.sequenceActivations.append({newId(),
                                        QStringLiteral("service-activation"),
                                        serviceId,
@@ -591,6 +721,8 @@ void RenderRegressionTests::vectorExportersSupportSequenceDiagrams() {
     QVERIFY(exported.open(QIODevice::ReadOnly));
     const QByteArray bytes = exported.readAll();
     QVERIFY(bytes.contains("submit(request)"));
+    QVERIFY(bytes.contains("opt [failed]"));
+    QVERIFY(bytes.contains("retry()"));
     QVERIFY(bytes.contains("Caller"));
     QVERIFY(bytes.contains("Service"));
   }

@@ -1,5 +1,9 @@
 function Component()
 {
+    // A test install can coexist with a running copy outside its target root.
+    if (installer.environmentVariable("YAUML_IFW_VERIFICATION_ROOT"))
+        return;
+
     // Let IFW close a running copy before replacing or removing executable
     // files. The in-app updater normally starts after yauml exits, while this
     // also protects updates started directly from maintenancetool.exe.

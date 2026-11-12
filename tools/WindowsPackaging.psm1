@@ -18,4 +18,13 @@ function Get-YaumlProjectVersion {
     return $match.Groups[1].Value
 }
 
-Export-ModuleMember -Function Get-YaumlProjectVersion
+function Get-YaumlSequenceAuthoringFiles {
+    # Keep the repository layout so the skill's relative links also work
+    # from an installed copy.
+    ".agents/skills/create-yauml-sequence-diagram/SKILL.md"
+    ".agents/skills/create-yauml-sequence-diagram/agents/openai.yaml"
+    "docs/sequence-diagram-import.md"
+    "examples/sequence-import/standalone-demo.sequence.json5"
+}
+
+Export-ModuleMember -Function Get-YaumlProjectVersion, Get-YaumlSequenceAuthoringFiles

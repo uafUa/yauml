@@ -8,6 +8,9 @@ Item {
     id: root
     required property string diagramId
     readonly property alias diagramCanvas: canvas
+    readonly property bool activityDiagram: canvas.diagramType === "activity"
+    readonly property int arrangeableNodeCount:
+        canvas.selectedNodeCount + canvas.selectedActivityNodeCount
     readonly property bool inPlaceEditorVisible:
         editor.visible || noteEditor.visible
     property bool relationshipToolboxGestureActive: false
@@ -100,16 +103,19 @@ Item {
         {
             actionId: "arrange.matchWidth",
             action: matchWidthAction,
+            classOnly: true,
             fallback: qsTr("W")
         },
         {
             actionId: "arrange.matchHeight",
             action: matchHeightAction,
+            classOnly: true,
             fallback: qsTr("H")
         },
         {
             actionId: "arrange.matchSize",
             action: matchSizeAction,
+            classOnly: true,
             fallback: qsTr("WH")
         },
         {
@@ -125,11 +131,13 @@ Item {
         {
             actionId: "arrange.fitToContent",
             action: fitSelectionAction,
+            classOnly: true,
             fallback: qsTr("Fit")
         },
         {
             actionId: "style.assignNamed",
             kind: "style",
+            classOnly: true,
             fallback: qsTr("Style"),
             label: qsTr("Choose style for selection")
         }
@@ -300,7 +308,8 @@ Item {
     readonly property var activeRelationshipToolboxActions:
         configuredToolboxActions("relationship", relationshipToolboxActions)
     readonly property var activeArrangementToolboxActions:
-        configuredToolboxActions("selection", arrangementToolboxActions)
+        configuredToolboxActions("selection", arrangementToolboxActions.filter(
+                                     item => !root.activityDiagram || !item.classOnly))
     readonly property var activeConnectorToolboxActions:
         configuredToolboxActions("connector", connectorToolboxActions)
     readonly property var activePresentationToolboxActions:
@@ -472,6 +481,7 @@ Item {
 
         onContextMenuRequested: function(target, menuX, menuY) {
             let menu = target === "sequence-fragment" ? sequenceFragmentMenu
+                       : target === "activity-item" ? activityItemMenu
                        : target === "element" ? elementMenu
                        : target === "connector" ? connectorMenu
                        : target === "container" ? containerMenu
@@ -485,6 +495,21 @@ Item {
             menu.x = menuX
             menu.y = menuY
             menu.open()
+        }
+
+        onConnectionDestinationRequested: function(menuX, menuY, relationshipType) {
+            if (relationshipType.length > 0) {
+                classDestinationPanel.openFor(menuX, menuY, relationshipType)
+            } else {
+                connectionDestinationMenu.x = menuX
+                connectionDestinationMenu.y = menuY
+                connectionDestinationMenu.open()
+            }
+        }
+
+        onDiagramIdChanged: {
+            connectionDestinationMenu.close()
+            classDestinationPanel.close()
         }
 
         onActiveFocusChanged: {
@@ -543,6 +568,118 @@ Item {
 
     }
 
+    Label {
+        visible: canvas.diagramType === "activity"
+        anchors.left: parent.left
+        anchors.bottom: parent.bottom
+        anchors.margins: 12
+        color: uiTheme.mutedText
+        text: qsTr("Right-click to add a node · Shift-drag to connect")
+    }
+
+    DiagramNodeMenu {
+        id: connectionDestinationMenu
+        objectName: "connectionDestinationMenu"
+        diagramType: canvas.diagramType
+        forDestination: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        onNodeTypeSelected: function(type) { canvas.createConnectionDestination(type) }
+        // MenuItem activation can close the menu before emitting triggered.
+        onClosed: Qt.callLater(function() {
+            if (connectionDestinationMenu && canvas && !connectionDestinationMenu.visible)
+                canvas.cancelConnectionDestination()
+        })
+    }
+
+    Popup {
+        id: classDestinationPanel
+        objectName: "classDestinationPanel"
+        width: Math.min(310, root.width)
+        padding: 12
+        focus: true
+        closePolicy: Popup.CloseOnEscape | Popup.CloseOnPressOutside
+        onClosed: canvas.cancelConnectionDestination()
+        onOpened: destinationRelationship.forceActiveFocus()
+
+        function openFor(viewX, viewY, relationshipType) {
+            const choices = root.relationshipToolboxActions
+            const index = choices.findIndex(item => item.type === relationshipType)
+            destinationRelationship.currentIndex = Math.max(0, index)
+            x = Math.max(0, Math.min(viewX, root.width - width))
+            y = Math.max(0, Math.min(viewY, root.height - implicitHeight))
+            open()
+        }
+
+        contentItem: ColumnLayout {
+            spacing: 8
+            Label { text: qsTr("Relationship type") }
+            ComboBox {
+                id: destinationRelationship
+                Layout.fillWidth: true
+                model: root.relationshipToolboxActions
+                textRole: "label"
+                valueRole: "type"
+                Accessible.name: qsTr("Relationship type")
+            }
+            Label { text: qsTr("Create destination") }
+            RowLayout {
+                Layout.fillWidth: true
+                Repeater {
+                    model: connectionDestinationMenu.classTypes.filter(item => !item.standalone)
+                    Button {
+                        required property var modelData
+                        Layout.fillWidth: true
+                        text: modelData.label
+                        onClicked: {
+                            canvas.createConnectionDestination(modelData.type,
+                                                               destinationRelationship.currentValue)
+                            classDestinationPanel.close()
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    onVisibleChanged: {
+        if (!visible) {
+            connectionDestinationMenu.close()
+            classDestinationPanel.close()
+        }
+    }
+
+    Menu {
+        id: activityItemMenu
+        MenuItem {
+            text: qsTr("Edit text…")
+            visible: canvas.activitySelectionEditable
+            height: visible ? implicitHeight : 0
+            onTriggered: canvas.editSelectedActivityItem()
+        }
+        Menu {
+            title: qsTr("Arrange")
+            enabled: canvas.selectedActivityNodeCount >= 2
+            MenuItem { action: automaticLayoutSelectionAction }
+            Menu {
+                title: qsTr("Align")
+                MenuItem { action: alignLeftAction }
+                MenuItem { action: alignHorizontalCenterAction }
+                MenuItem { action: alignRightAction }
+                MenuSeparator {}
+                MenuItem { action: alignTopAction }
+                MenuItem { action: alignVerticalCenterAction }
+                MenuItem { action: alignBottomAction }
+            }
+            MenuItem { action: distributeHorizontallyAction }
+            MenuItem { action: distributeVerticallyAction }
+        }
+        MenuItem {
+            text: canvas.selectedActivityItemCount > 1
+                  ? qsTr("Delete selection") : qsTr("Delete")
+            onTriggered: canvas.deleteSelectedActivityItems()
+        }
+    }
+
     Connections {
         target: uiTheme
         function onPaletteChanged() { canvas.refreshTheme() }
@@ -573,7 +710,7 @@ Item {
             if (!root.relationshipToolboxGestureActive
                     && canvas.connectorInteractionPrompt.length === 0)
                 root.dismissRelationshipToolbox()
-            if (canvas.selectedNodeCount < 2)
+            if (root.arrangeableNodeCount < 2)
                 arrangementToolbox.dismiss()
             if (!canvas.connectorSelected)
                 connectorToolbox.dismiss()
@@ -858,17 +995,19 @@ Item {
 
         function availableScopes() {
             const result = []
-            const selectedCount = canvas.selectedNodeCount
+            const selectedCount = root.arrangeableNodeCount
                     + canvas.selectedContainerCount + canvas.selectedNoteCount
             if (selectedCount >= 2)
                 result.push({ value: "selection",
-                              label: qsTr("Selected presentations") })
+                              label: root.activityDiagram ? qsTr("Selected activity nodes")
+                                                          : qsTr("Selected presentations") })
             if (canvas.containerSelected
                     && canvas.selectedContainerChildPresentationCount >= 2)
                 result.push({ value: "container",
                               label: qsTr("Contents of selected container") })
             result.push({ value: "diagram",
-                          label: qsTr("Top-level diagram presentations") })
+                          label: root.activityDiagram ? qsTr("All activity nodes")
+                                                      : qsTr("Top-level diagram presentations") })
             return result
         }
 
@@ -1000,6 +1139,7 @@ Item {
             }
             CheckBox {
                 id: automaticLayoutRecursive
+                visible: !root.activityDiagram
                 Layout.fillWidth: true
                 text: qsTr("Arrange nested container contents recursively")
                 onToggled: if (automaticLayoutDialog.visible)
@@ -1007,14 +1147,16 @@ Item {
             }
             CheckBox {
                 id: automaticLayoutResizeContainers
+                visible: !root.activityDiagram
                 Layout.fillWidth: true
                 text: qsTr("Resize containers to fit their contents")
                 onToggled: if (automaticLayoutDialog.visible)
                                automaticLayoutDialog.refreshPreview()
             }
-            Label { text: qsTr("After layout") }
+            Label { text: qsTr("After layout"); visible: !root.activityDiagram }
             ComboBox {
                 id: automaticLayoutConnectorHandling
+                visible: !root.activityDiagram
                 Layout.fillWidth: true
                 textRole: "label"
                 valueRole: "value"
@@ -1028,7 +1170,9 @@ Item {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 color: uiTheme.mutedText
-                text: qsTr("Review the live result on the diagram. OK commits layout and optional routing as one undoable command; Cancel restores the original geometry.")
+                text: root.activityDiagram
+                      ? qsTr("Review the layout on the diagram. OK applies it in one undo step.")
+                      : qsTr("Review the live result on the diagram. OK commits layout and optional routing as one undoable command; Cancel restores the original geometry.")
             }
         }
     }
@@ -2545,7 +2689,7 @@ Item {
         catalogId: "arrange.autoLayoutSelection"
         text: qsTr("Auto arrange selection…")
         enabled: root.visible && !root.inPlaceEditorVisible
-                 && canvas.selectedNodeCount + canvas.selectedContainerCount
+                 && root.arrangeableNodeCount + canvas.selectedContainerCount
                     + canvas.selectedNoteCount >= 2
         onTriggered: root.openAutomaticLayoutDialog("selection")
     }
@@ -2555,7 +2699,7 @@ Item {
         catalogId: "arrange.alignLeft"
         text: qsTr("Left")
         shortcut: "Ctrl+Shift+Left"
-        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && root.arrangeableNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignLeft")
     }
     CatalogAction {
@@ -2563,7 +2707,7 @@ Item {
         catalogId: "arrange.alignHorizontalCenters"
         text: qsTr("Horizontal centers")
         shortcut: "Ctrl+Shift+H"
-        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && root.arrangeableNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignHorizontalCenter")
     }
     CatalogAction {
@@ -2571,7 +2715,7 @@ Item {
         catalogId: "arrange.alignRight"
         text: qsTr("Right")
         shortcut: "Ctrl+Shift+Right"
-        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && root.arrangeableNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignRight")
     }
     CatalogAction {
@@ -2579,7 +2723,7 @@ Item {
         catalogId: "arrange.alignTop"
         text: qsTr("Top")
         shortcut: "Ctrl+Shift+Up"
-        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && root.arrangeableNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignTop")
     }
     CatalogAction {
@@ -2587,7 +2731,7 @@ Item {
         catalogId: "arrange.alignVerticalCenters"
         text: qsTr("Vertical centers")
         shortcut: "Ctrl+Shift+V"
-        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && root.arrangeableNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignVerticalCenter")
     }
     CatalogAction {
@@ -2595,7 +2739,7 @@ Item {
         catalogId: "arrange.alignBottom"
         text: qsTr("Bottom")
         shortcut: "Ctrl+Shift+Down"
-        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 2
+        enabled: root.visible && !root.inPlaceEditorVisible && root.arrangeableNodeCount >= 2
         onTriggered: canvas.arrangeSelection("alignBottom")
     }
     CatalogAction {
@@ -2627,7 +2771,7 @@ Item {
         catalogId: "arrange.distributeHorizontally"
         text: qsTr("Distribute horizontally")
         shortcut: "Ctrl+Alt+Shift+H"
-        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 3
+        enabled: root.visible && !root.inPlaceEditorVisible && root.arrangeableNodeCount >= 3
         onTriggered: canvas.arrangeSelection("distributeHorizontally")
     }
     CatalogAction {
@@ -2635,7 +2779,7 @@ Item {
         catalogId: "arrange.distributeVertically"
         text: qsTr("Distribute vertically")
         shortcut: "Ctrl+Alt+Shift+V"
-        enabled: root.visible && !root.inPlaceEditorVisible && canvas.selectedNodeCount >= 3
+        enabled: root.visible && !root.inPlaceEditorVisible && root.arrangeableNodeCount >= 3
         onTriggered: canvas.arrangeSelection("distributeVertically")
     }
 
@@ -2678,11 +2822,14 @@ Item {
         enabled: root.visible && !root.inPlaceEditorVisible
                  && (canvas.selectedNodeCount > 0 || canvas.containerSelected
                      || canvas.connectorSelected || canvas.noteSelected
+                     || canvas.selectedActivityItemCount > 0
                      || canvas.selectedSequenceParticipantCount > 0
                      || canvas.selectedSequenceMessageCount > 0
                      || canvas.selectedSequenceActivationCount > 0
                      || canvas.selectedSequenceCombinedFragmentCount > 0)
-        onActivated: canvas.diagramType === "sequence"
+        onActivated: root.activityDiagram
+                     ? canvas.deleteSelectedActivityItems()
+                     : canvas.diagramType === "sequence"
                      ? canvas.deleteSelectedSequenceItems()
                      : canvas.bendPointSelected
                      ? canvas.removeSelectedBendPoint()
@@ -2725,7 +2872,7 @@ Item {
 
                     ToolTip.visible: relationshipDragArea.containsMouse
                                      && !relationshipDragArea.pressed
-                    ToolTip.text: qsTr("Drag to create %1").arg(
+                    ToolTip.text: qsTr("Click or drag to create %1").arg(
                                       modelData.label)
 
                     MouseArea {
@@ -2738,17 +2885,17 @@ Item {
                         cursorShape: Qt.CrossCursor
 
                         onPressed: function(mouse) {
+                            const canvasPoint = mapToItem(canvas, mouse.x, mouse.y)
                             relationshipStarted =
                                 canvas.beginToolboxRelationship(
                                     modelData.type,
                                     root.relationshipToolboxNodeId,
                                     root.relationshipToolboxSceneX,
-                                    root.relationshipToolboxSceneY)
+                                    root.relationshipToolboxSceneY,
+                                    canvasPoint.x, canvasPoint.y)
                             if (!relationshipStarted)
                                 return
                             root.relationshipToolboxGestureActive = true
-                            const canvasPoint = mapToItem(
-                                canvas, mouse.x, mouse.y)
                             canvas.updateToolboxRelationship(
                                 canvasPoint.x, canvasPoint.y,
                                 mouse.modifiers & Qt.AltModifier)
@@ -2765,6 +2912,7 @@ Item {
                         }
 
                         onReleased: function(mouse) {
+                            canvas.forceActiveFocus()
                             if (relationshipStarted) {
                                 const canvasPoint = mapToItem(
                                     canvas, mouse.x, mouse.y)
@@ -2775,7 +2923,6 @@ Item {
                             relationshipStarted = false
                             root.relationshipToolboxGestureActive = false
                             root.dismissRelationshipToolbox()
-                            canvas.forceActiveFocus()
                         }
 
                         onCanceled: {
@@ -2795,7 +2942,7 @@ Item {
     ContextToolboxFrame {
         id: arrangementToolbox
         candidate: canvas.arrangementToolboxCandidate
-                   && canvas.selectedNodeCount >= 2
+                   && root.arrangeableNodeCount >= 2
                    && !root.inPlaceEditorVisible
                    && root.activeArrangementToolboxActions.length > 0
         candidateKey: canvas.arrangementToolboxNodeId
@@ -3146,8 +3293,12 @@ Item {
                 return
             const next = text
             visible = false
-            if (next !== originalText)
-                projectController.editText(objectId, field, fieldIndex, next)
+            if (next !== originalText) {
+                if (field === "activityText")
+                    projectController.editActivityItemText(root.diagramId, objectId, next)
+                else
+                    projectController.editText(objectId, field, fieldIndex, next)
+            }
             canvas.forceActiveFocus()
         }
 

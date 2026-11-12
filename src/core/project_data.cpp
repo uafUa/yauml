@@ -42,6 +42,8 @@ QString toString(DiagramType type) {
     return QStringLiteral("class");
   case DiagramType::Sequence:
     return QStringLiteral("sequence");
+  case DiagramType::Activity:
+    return QStringLiteral("activity");
   }
   return QStringLiteral("class");
 }
@@ -53,6 +55,8 @@ DiagramType diagramTypeFromString(const QString &value, bool *ok) {
     return DiagramType::Class;
   if (value == QStringLiteral("sequence"))
     return DiagramType::Sequence;
+  if (value == QStringLiteral("activity"))
+    return DiagramType::Activity;
   if (ok)
     *ok = false;
   return DiagramType::Class;

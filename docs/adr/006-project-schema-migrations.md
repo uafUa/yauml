@@ -75,6 +75,9 @@ silently alter its appearance.
 Schema 12 adds an optional per-diagram type-icon visibility override. An absent
 value continues to follow the application preference, preserving existing
 projects; newly created or explicitly edited diagrams persist their own value.
+Schema 13 adds diagram-local activity nodes and control flows. Migration
+advances the manifest marker without changing existing class or sequence
+diagram records.
 
 Opening an unversioned project produces an informational log entry and marks the
 loaded representation as migrated, but does not itself make an external write.

@@ -217,6 +217,7 @@ $temporaryBase = [System.IO.Path]::GetFullPath(
 $temporaryRoot = Join-Path $temporaryBase `
     ("yauml-package-" + [guid]::NewGuid().ToString("N"))
 $stagingDirectory = Join-Path $temporaryRoot $packageBaseName
+$sequenceAuthoringFiles = Get-YaumlSequenceAuthoringFiles
 
 try {
     New-Item -ItemType Directory -Force -Path $stagingDirectory | Out-Null
@@ -229,6 +230,13 @@ try {
     $noticesPath = Join-Path $repositoryRoot "THIRD_PARTY_NOTICES.md"
     if (Test-Path -LiteralPath $noticesPath) {
         Copy-Item -LiteralPath $noticesPath -Destination $stagingDirectory
+    }
+    foreach ($relativePath in $sequenceAuthoringFiles) {
+        $destination = Join-Path $stagingDirectory $relativePath
+        New-Item -ItemType Directory -Force -Path (Split-Path $destination) |
+            Out-Null
+        Copy-Item -LiteralPath (Join-Path $repositoryRoot $relativePath) `
+            -Destination $destination
     }
 
     $qtRoot = Find-QtRoot -ResolvedBuildDirectory $resolvedBuildDirectory
@@ -288,6 +296,20 @@ try {
         -ErrorAction SilentlyContinue
     Compress-Archive -LiteralPath $stagingDirectory `
         -DestinationPath $archivePath -CompressionLevel Optimal
+
+    # Verify the ZIP itself because the installer consumes the archive, and
+    # a staging-directory check would miss omissions during compression.
+    $archive = [System.IO.Compression.ZipFile]::OpenRead($archivePath)
+    try {
+        $archivePaths = $archive.Entries.FullName.Replace('\', '/')
+        foreach ($relativePath in $sequenceAuthoringFiles) {
+            if ($archivePaths -cnotcontains "$packageBaseName/$relativePath") {
+                throw "Sequence authoring file is missing from ZIP: $relativePath"
+            }
+        }
+    } finally {
+        $archive.Dispose()
+    }
 
     $hash = (Get-FileHash -LiteralPath $archivePath -Algorithm SHA256).Hash
     "$($hash.ToLowerInvariant())  $([System.IO.Path]::GetFileName($archivePath))" |

@@ -101,7 +101,13 @@ Controller.prototype.findExistingInstallation = function()
     if (systemInfo.productType !== "windows")
         return null;
 
-    // This also honors --root for automated verification and deployment.
+    // Verification can replace its temporary installation, but must never
+    // fall back to replacing an installation registered elsewhere.
+    var verificationRoot = installer.environmentVariable(
+        "YAUML_IFW_VERIFICATION_ROOT");
+    if (verificationRoot)
+        return this.installationFromRoot(verificationRoot);
+
     var configured = this.installationFromRoot(installer.value("TargetDir"));
     if (configured)
         return configured;

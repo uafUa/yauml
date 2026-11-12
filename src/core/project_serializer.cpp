@@ -789,6 +789,86 @@ QJsonObject sequenceEvidenceToJson(const SequenceSourceEvidence &evidence) {
   return object;
 }
 
+QJsonObject activityDataToJson(const ActivityDiagramData &activity) {
+  QJsonArray nodes;
+  for (const auto &node : activity.nodes) {
+    QJsonObject object = node.extra;
+    object.insert(QStringLiteral("id"), node.id);
+    object.insert(QStringLiteral("type"), toString(node.type));
+    object.insert(QStringLiteral("name"), node.name);
+    object.insert(QStringLiteral("x"), node.center.x());
+    object.insert(QStringLiteral("y"), node.center.y());
+    nodes.append(object);
+  }
+  QJsonArray flows;
+  for (const auto &flow : activity.flows) {
+    QJsonObject object = flow.extra;
+    object.insert(QStringLiteral("id"), flow.id);
+    object.insert(QStringLiteral("sourceId"), flow.sourceId);
+    object.insert(QStringLiteral("targetId"), flow.targetId);
+    object.insert(QStringLiteral("guard"), flow.guard);
+    flows.append(object);
+  }
+  QJsonObject object = activity.extra;
+  object.insert(QStringLiteral("nodes"), nodes);
+  object.insert(QStringLiteral("flows"), flows);
+  return object;
+}
+
+void readActivityData(const QJsonValue &value, Diagram &diagram,
+                      QList<Diagnostic> &diagnostics) {
+  const auto report = [&](const QString &message, const QString &id) {
+    diagnostics.append(error(QStringLiteral("validation"), message, id));
+  };
+  const QJsonObject object = value.toObject();
+  const QJsonValue nodes = object.value(QStringLiteral("nodes"));
+  const QJsonValue flows = object.value(QStringLiteral("flows"));
+  if (!value.isObject() || !nodes.isArray() || !flows.isArray()) {
+    report(QStringLiteral("Activity data must contain nodes and flows arrays"),
+           diagram.id);
+    return;
+  }
+  for (const auto &entry : nodes.toArray()) {
+    const auto item = entry.toObject();
+    const QString id = item.value(QStringLiteral("id")).toString();
+    const auto type = activityNodeTypeFromString(
+        item.value(QStringLiteral("type")).toString());
+    const auto x = item.value(QStringLiteral("x"));
+    const auto y = item.value(QStringLiteral("y"));
+    if (!entry.isObject() || !type || !x.isDouble() || !y.isDouble()) {
+      report(QStringLiteral("Activity node requires a known type and numeric "
+                            "coordinates"),
+             id.isEmpty() ? diagram.id : id);
+      continue;
+    }
+    diagram.activity.nodes.append(
+        {id,
+         *type,
+         item.value(QStringLiteral("name")).toString(),
+         {x.toDouble(), y.toDouble()},
+         withoutKeys(item, {QStringLiteral("id"), QStringLiteral("type"),
+                            QStringLiteral("name"), QStringLiteral("x"),
+                            QStringLiteral("y")})});
+  }
+  for (const auto &entry : flows.toArray()) {
+    const auto item = entry.toObject();
+    if (!entry.isObject()) {
+      report(QStringLiteral("Activity flow must be an object"), diagram.id);
+      continue;
+    }
+    diagram.activity.flows.append(
+        {item.value(QStringLiteral("id")).toString(),
+         item.value(QStringLiteral("sourceId")).toString(),
+         item.value(QStringLiteral("targetId")).toString(),
+         item.value(QStringLiteral("guard")).toString(),
+         withoutKeys(item,
+                     {QStringLiteral("id"), QStringLiteral("sourceId"),
+                      QStringLiteral("targetId"), QStringLiteral("guard")})});
+  }
+  diagram.activity.extra =
+      withoutKeys(object, {QStringLiteral("nodes"), QStringLiteral("flows")});
+}
+
 QJsonObject sequenceDataToJson(const Diagram &diagram) {
   QJsonObject object = diagram.sequenceExtra;
   if (diagram.sequenceTargetOperationDisplayMode !=
@@ -1291,6 +1371,9 @@ QByteArray diagramsBytes(const ProjectData &project) {
       object.insert(QStringLiteral("sequence"), sequenceDataToJson(diagram));
     else
       object.remove(QStringLiteral("sequence"));
+    if (diagram.type == DiagramType::Activity)
+      object.insert(QStringLiteral("activity"),
+                    activityDataToJson(diagram.activity));
     diagrams.append(object);
   }
   root.insert(QStringLiteral("diagrams"), diagrams);
@@ -1735,6 +1818,9 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
     if (diagram.type == DiagramType::Sequence)
       readSequenceData(object.value(QStringLiteral("sequence")), diagram,
                        outcome.diagnostics);
+    if (diagram.type == DiagramType::Activity)
+      readActivityData(object.value(QStringLiteral("activity")), diagram,
+                       outcome.diagnostics);
     const QJsonValue containersValue =
         object.value(QStringLiteral("containers"));
     if (!containersValue.isUndefined() && !containersValue.isArray())
@@ -2019,6 +2105,8 @@ LoadOutcome ProjectSerializer::load(const QString &projectPath) {
          QStringLiteral("containers"), QStringLiteral("nodes"),
          QStringLiteral("connectors"), QStringLiteral("notes"),
          QStringLiteral("noteAttachments"), QStringLiteral("sequence")});
+    if (diagram.type == DiagramType::Activity)
+      diagram.extra.remove(QStringLiteral("activity"));
     project.diagrams.append(diagram);
   }
 
@@ -2583,7 +2671,7 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
       diagnostics.append(error(QStringLiteral("validation"),
                                QStringLiteral("A diagram has an empty name"),
                                diagram.id));
-    if (diagram.type == DiagramType::Class &&
+    if (diagram.type != DiagramType::Sequence &&
         (!diagram.sequenceExecutionContexts.isEmpty() ||
          !diagram.sequenceParticipants.isEmpty() ||
          !diagram.sequenceMessages.isEmpty() ||
@@ -2591,17 +2679,64 @@ QList<Diagnostic> ProjectSerializer::validate(const ProjectData &project) {
          !diagram.sequenceCombinedFragments.isEmpty())) {
       diagnostics.append(
           error(QStringLiteral("validation"),
-                QStringLiteral("A class diagram contains sequence-only data"),
+                QStringLiteral("A non-sequence diagram contains sequence data"),
                 diagram.id));
     }
-    if (diagram.type == DiagramType::Sequence &&
+    if (diagram.type != DiagramType::Class &&
         (!diagram.containers.isEmpty() || !diagram.nodes.isEmpty() ||
          !diagram.connectors.isEmpty())) {
       diagnostics.append(
           error(QStringLiteral("validation"),
                 QStringLiteral(
-                    "A sequence diagram contains class-diagram presentations"),
+                    "A non-class diagram contains class-diagram presentations"),
                 diagram.id));
+    }
+    if (diagram.type != DiagramType::Activity &&
+        (!diagram.activity.nodes.isEmpty() ||
+         !diagram.activity.flows.isEmpty()))
+      diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral("A non-activity diagram contains activity data"),
+                diagram.id));
+    if (diagram.type == DiagramType::Activity &&
+        (!diagram.notes.isEmpty() || !diagram.noteAttachments.isEmpty()))
+      diagnostics.append(
+          error(QStringLiteral("validation"),
+                QStringLiteral("Activity diagrams do not support notes yet"),
+                diagram.id));
+
+    QHash<QString, ActivityNodeType> activityNodeTypes;
+    for (const auto &node : diagram.activity.nodes) {
+      checkId(node.id, QStringLiteral("activity node"));
+      activityNodeTypes.insert(node.id, node.type);
+      if (toString(node.type).isEmpty() || !std::isfinite(node.center.x()) ||
+          !std::isfinite(node.center.y()) ||
+          (node.type == ActivityNodeType::Action &&
+           node.name.trimmed().isEmpty()))
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral(
+                      "Activity node has an invalid type, position or name"),
+                  node.id));
+    }
+    for (const auto &flow : diagram.activity.flows) {
+      checkId(flow.id, QStringLiteral("activity flow"));
+      const auto source = activityNodeTypes.constFind(flow.sourceId);
+      const auto target = activityNodeTypes.constFind(flow.targetId);
+      if (source == activityNodeTypes.cend() ||
+          target == activityNodeTypes.cend())
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral(
+                      "Control flow %1 references missing endpoints %2 → %3")
+                      .arg(flow.id, flow.sourceId, flow.targetId),
+                  flow.id));
+      else if (!isValidActivityFlow(source.value(), target.value()))
+        diagnostics.append(
+            error(QStringLiteral("validation"),
+                  QStringLiteral("Control flow cannot leave an activity final "
+                                 "or enter an initial node"),
+                  flow.id));
     }
 
     QSet<QString> sequenceContextIds;

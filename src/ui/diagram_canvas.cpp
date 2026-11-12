@@ -1,4 +1,5 @@
 #include "ui/diagram_canvas.h"
+#include "ui/activity_diagram_layout.h"
 
 #include "core/application_settings.h"
 #include "core/connector_port_layout.h"
@@ -244,6 +245,10 @@ struct SceneSnapshot {
   QVector<RenderSequenceMessage> sequenceMessages;
   QVector<RenderSequenceActivation> sequenceActivations;
   QVector<RenderSequenceCombinedFragment> sequenceCombinedFragments;
+  ui::ActivityDiagramLayout activity;
+  QSet<QString> selectedActivityItems;
+  QList<QPointF> activityFlowPreview;
+  bool activityFlowTargetValid = false;
   QVector<QPointF> sequenceMessagePreview;
   SequenceMessageType sequenceMessagePreviewType =
       SequenceMessageType::Synchronous;
@@ -1167,6 +1172,8 @@ struct AtlasPlacement {
 
 struct AtlasPaintCommand {
   QRect rect;
+  // The allocated tile starts here in the entry's full raster coordinates.
+  QPoint rasterOrigin;
   int entryIndex = -1;
 };
 
@@ -1181,6 +1188,70 @@ struct AtlasPageData {
 
   AtlasPageData() { image.fill(Qt::transparent); }
 };
+
+struct AtlasTile {
+  int pageIndex;
+  QRectF textureRegion;
+  QRectF entryRegion;
+};
+
+QRectF normalizedAtlasRect(const QRect &rect, int width, int height) {
+  return {static_cast<qreal>(rect.x()) / width,
+          static_cast<qreal>(rect.y()) / height,
+          static_cast<qreal>(rect.width()) / width,
+          static_cast<qreal>(rect.height()) / height};
+}
+
+QVector<AtlasTile> allocateAtlasTiles(QVector<AtlasPageData> &pages,
+                                      int entryIndex, int width, int height) {
+  constexpr int usableSize = kTextAtlasSize - 2 * kTextAtlasPadding;
+  // Overlapping samples at a split keep linear filtering continuous across
+  // tile boundaries, even when glyphs cross the boundary at a fractional zoom.
+  constexpr int splitSize = usableSize - 2;
+  const int horizontalStep = width > usableSize ? splitSize : width;
+  const int verticalStep = height > usableSize ? splitSize : height;
+  QVector<AtlasTile> tiles;
+  for (int y = 0; y < height; y += verticalStep) {
+    const int tileHeight = qMin(verticalStep, height - y);
+    const int topOverlap = y > 0 ? 1 : 0;
+    const int bottomOverlap = tileHeight < height - y ? 1 : 0;
+    const int allocationHeight = tileHeight + topOverlap + bottomOverlap;
+    for (int x = 0; x < width; x += horizontalStep) {
+      const int tileWidth = qMin(horizontalStep, width - x);
+      const int leftOverlap = x > 0 ? 1 : 0;
+      const int rightOverlap = tileWidth < width - x ? 1 : 0;
+      const int allocationWidth = tileWidth + leftOverlap + rightOverlap;
+      if (pages.isEmpty())
+        pages.append(AtlasPageData());
+      AtlasPageData *page = &pages.last();
+      if (page->cursorX + allocationWidth + kTextAtlasPadding >
+          kTextAtlasSize) {
+        page->cursorX = kTextAtlasPadding;
+        page->cursorY += page->rowHeight + kTextAtlasPadding;
+        page->rowHeight = 0;
+      }
+      if (page->cursorY + allocationHeight + kTextAtlasPadding >
+          kTextAtlasSize) {
+        pages.append(AtlasPageData());
+        page = &pages.last();
+      }
+      const QRect allocation(page->cursorX, page->cursorY, allocationWidth,
+                             allocationHeight);
+      page->paintCommands.append(
+          {allocation, {x - leftOverlap, y - topOverlap}, entryIndex});
+      page->cursorX += allocationWidth + kTextAtlasPadding;
+      page->rowHeight = qMax(page->rowHeight, allocationHeight);
+
+      const QRect sampled(allocation.x() + leftOverlap,
+                          allocation.y() + topOverlap, tileWidth, tileHeight);
+      tiles.append(
+          {static_cast<int>(pages.size() - 1),
+           normalizedAtlasRect(sampled, kTextAtlasSize, kTextAtlasSize),
+           normalizedAtlasRect({x, y, tileWidth, tileHeight}, width, height)});
+    }
+  }
+  return tiles;
+}
 
 class OwnedTextureMaterial final : public QSGTextureMaterial {
 public:
@@ -1266,7 +1337,7 @@ public:
       m_signatures.append(textLayoutSignature(entry));
 
     QVector<AtlasPageData> pages;
-    QHash<QString, QPair<int, QRectF>> sources;
+    QHash<QString, QVector<AtlasTile>> sources;
     for (int entryIndex = 0; entryIndex < entries.size(); ++entryIndex) {
       const auto &entry = entries.at(entryIndex);
       // Occlusion changes only the visible geometry. Reuse the same rasterized
@@ -1277,48 +1348,37 @@ public:
         const int width = qMax(1, qCeil(entry.target.width() * m_rasterScale));
         const int height =
             qMax(1, qCeil(entry.target.height() * m_rasterScale));
-        if (pages.isEmpty())
-          pages.append(AtlasPageData());
-        AtlasPageData *page = &pages.last();
-        if (page->cursorX + width + kTextAtlasPadding > kTextAtlasSize) {
-          page->cursorX = kTextAtlasPadding;
-          page->cursorY += page->rowHeight + kTextAtlasPadding;
-          page->rowHeight = 0;
-        }
-        if (page->cursorY + height + kTextAtlasPadding > kTextAtlasSize) {
-          pages.append(AtlasPageData());
-          page = &pages.last();
-        }
-        const QRect pixelRect(page->cursorX, page->cursorY, width, height);
-        const QRectF normalized(
-            static_cast<qreal>(pixelRect.x()) / kTextAtlasSize,
-            static_cast<qreal>(pixelRect.y()) / kTextAtlasSize,
-            static_cast<qreal>(pixelRect.width()) / kTextAtlasSize,
-            static_cast<qreal>(pixelRect.height()) / kTextAtlasSize);
-        const int pageIndex = pages.size() - 1;
-        sources.insert(contentSignature, qMakePair(pageIndex, normalized));
-        pages[pageIndex].paintCommands.append({pixelRect, entryIndex});
-        page->cursorX += width + kTextAtlasPadding;
-        page->rowHeight = qMax(page->rowHeight, height);
-        source = sources.constFind(contentSignature);
+        source = sources.insert(
+            contentSignature,
+            allocateAtlasTiles(pages, entryIndex, width, height));
       }
       for (const QRectF &fragment : entry.visibleFragments) {
-        const qreal leftRatio =
-            (fragment.left() - entry.target.left()) / entry.target.width();
-        const qreal topRatio =
-            (fragment.top() - entry.target.top()) / entry.target.height();
-        const qreal widthRatio = fragment.width() / entry.target.width();
-        const qreal heightRatio = fragment.height() / entry.target.height();
-        const QRectF visibleSource(
-            source->second.left() + source->second.width() * leftRatio,
-            source->second.top() + source->second.height() * topRatio,
-            source->second.width() * widthRatio,
-            source->second.height() * heightRatio);
-        const QRectF relativeTarget(fragment.left() - entry.target.left(),
-                                    fragment.top() - entry.target.top(),
-                                    fragment.width(), fragment.height());
-        pages[source->first].placements.append(
-            {entryIndex, visibleSource, relativeTarget});
+        const qreal width = entry.target.width();
+        const qreal height = entry.target.height();
+        const QRectF fraction((fragment.left() - entry.target.left()) / width,
+                              (fragment.top() - entry.target.top()) / height,
+                              fragment.width() / width,
+                              fragment.height() / height);
+        for (const auto &tile : *source) {
+          const QRectF visible = tile.entryRegion.intersected(fraction);
+          if (visible.isEmpty())
+            continue;
+          const qreal sx =
+              tile.textureRegion.width() / tile.entryRegion.width();
+          const qreal sy =
+              tile.textureRegion.height() / tile.entryRegion.height();
+          const QRectF visibleSource(
+              tile.textureRegion.left() +
+                  (visible.left() - tile.entryRegion.left()) * sx,
+              tile.textureRegion.top() +
+                  (visible.top() - tile.entryRegion.top()) * sy,
+              visible.width() * sx, visible.height() * sy);
+          const QRectF relativeTarget(
+              visible.left() * width, visible.top() * height,
+              visible.width() * width, visible.height() * height);
+          pages[tile.pageIndex].placements.append(
+              {entryIndex, visibleSource, relativeTarget});
+        }
       }
     }
 
@@ -1328,7 +1388,8 @@ public:
       for (const auto &command : page.paintCommands) {
         const auto &entry = entries.at(command.entryIndex);
         painter.save();
-        painter.translate(command.rect.topLeft());
+        painter.setClipRect(command.rect);
+        painter.translate(command.rect.topLeft() - command.rasterOrigin);
         painter.scale(m_rasterScale, m_rasterScale);
         if (!entry.imageSource.isEmpty()) {
           // Ask the SVG image plugin to rasterize at the atlas pixel size.
@@ -1356,7 +1417,8 @@ public:
                                    QTextDocument::MarkdownDialectGitHub |
                                    QTextDocument::MarkdownNoHTML));
           painter.setClipRect(
-              QRectF(0, 0, entry.target.width(), entry.target.height()));
+              QRectF(0, 0, entry.target.width(), entry.target.height()),
+              Qt::IntersectClip);
           QAbstractTextDocumentLayout::PaintContext context;
           context.palette.setColor(QPalette::Text, entry.color);
           context.palette.setColor(QPalette::Link, entry.color);
@@ -1558,6 +1620,50 @@ QSGNode *buildSceneGeometry(const SceneSnapshot &snapshot, qreal zoom,
   // frame remains as visible as one started on the root canvas.
   if (snapshot.lassoVisible)
     appendRect(vertices, snapshot.lassoRect, palette.selectionOverlay);
+
+  const auto appendActivityFlow = [&](const QList<QPointF> &points,
+                                      const QColor &color, qreal width) {
+    for (qsizetype index = 1; index < points.size(); ++index)
+      appendAntialiasedLine(vertices, points.at(index - 1), points.at(index),
+                            width / zoom, 1.0 / zoom, color);
+    if (points.size() >= 2)
+      appendSequenceArrow(vertices, points.constLast(),
+                          points.at(points.size() - 2), false, zoom, color);
+  };
+  for (const auto &flow : snapshot.activity.flows) {
+    const bool selected = snapshot.selectedActivityItems.contains(flow.id);
+    appendActivityFlow(flow.points,
+                       selected ? palette.accent : palette.connector,
+                       selected ? 2.6 : 1.5);
+  }
+  appendActivityFlow(snapshot.activityFlowPreview,
+                     snapshot.activityFlowTargetValid ? palette.accent
+                                                      : palette.mutedText,
+                     1.6);
+  for (const auto &node : snapshot.activity.nodes) {
+    const bool selected = snapshot.selectedActivityItems.contains(node.id);
+    const QColor stroke = selected ? palette.accent : palette.connector;
+    const bool solid = node.type == ActivityNodeType::Initial ||
+                       node.type == ActivityNodeType::Fork ||
+                       node.type == ActivityNodeType::Join;
+    const QColor fill = solid ? stroke
+                        : node.type == ActivityNodeType::Action
+                            ? palette.classFill
+                            : palette.surface;
+    const QPointF center = node.bounds.center();
+    for (qsizetype index = 1; index < node.outline.size(); ++index) {
+      const QPointF a = node.outline.at(index - 1);
+      const QPointF b = node.outline.at(index);
+      appendTriangle(vertices, center, a, b, fill);
+      if (node.type == ActivityNodeType::Final)
+        appendTriangle(vertices, center, center + (a - center) * 0.58,
+                       center + (b - center) * 0.58, stroke);
+    }
+    for (qsizetype index = 1; index < node.outline.size(); ++index)
+      appendAntialiasedLine(vertices, node.outline.at(index - 1),
+                            node.outline.at(index),
+                            (selected ? 2.4 : 1.4) / zoom, 1.0 / zoom, stroke);
+  }
 
   // Sequence diagrams use the same batched scene graph as structural
   // diagrams. Lifelines are deliberately drawn first so activations,
@@ -1966,6 +2072,33 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
                                           std::floor(width));
   };
 
+  QFont activityFont = base;
+  activityFont.setPixelSize(13);
+  QList<QRectF> activityOccluders;
+  for (const auto &node : snapshot.activity.nodes)
+    activityOccluders.append(node.bounds);
+  for (const auto &flow : snapshot.activity.flows) {
+    if (flow.guard.isEmpty() ||
+        (coverage.isValid() && !coverage.intersects(flow.labelBounds)))
+      continue;
+    const QString label = QStringLiteral("[%1]").arg(flow.guard);
+    appendVisibleText(flow.labelBounds, flow.labelBounds,
+                      elided(label, activityFont, flow.labelBounds.width()),
+                      activityFont, palette.nodeTitleText, Qt::AlignCenter,
+                      activityOccluders);
+  }
+  for (const auto &node : snapshot.activity.nodes) {
+    activityOccluders.removeFirst();
+    if (node.type != ActivityNodeType::Action ||
+        (coverage.isValid() && !coverage.intersects(node.bounds)))
+      continue;
+    const QRectF label = node.bounds.adjusted(8.0, 0.0, -8.0, 0.0);
+    appendVisibleText(label, label,
+                      elided(node.name, activityFont, label.width()),
+                      activityFont, palette.nodeTitleText, Qt::AlignCenter,
+                      activityOccluders);
+  }
+
   QList<QRectF> allNodeRects;
   allNodeRects.reserve(snapshot.nodes.size());
   for (const auto &node : snapshot.nodes) {
@@ -2034,8 +2167,7 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
     const QString firstOperand =
         firstGuard.isEmpty() ? kind
                              : QStringLiteral("%1 [%2]").arg(kind, firstGuard);
-    const QRectF topTarget(item.rect.left() + 8.0, item.rect.top() + 1.0,
-                           item.rect.width() - 16.0, kLineHeight);
+    const QRectF &topTarget = item.headingRect;
     if (!coverage.isValid() || coverage.intersects(topTarget))
       entries.append({topTarget,
                       elided(firstOperand, header, topTarget.width()),
@@ -2061,8 +2193,6 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
     }
   }
 
-  QFont inferredMessageFont = base;
-  inferredMessageFont.setItalic(true);
   for (const auto &message : snapshot.sequenceMessages) {
     const auto &item = message.layout;
     if (item.text.isEmpty() ||
@@ -2070,10 +2200,10 @@ QVector<RenderText> buildTextEntries(const SceneSnapshot &snapshot, int detail,
       continue;
     const bool inferred =
         item.confidence == SequenceEvidenceConfidence::Inferred;
+    auto label = ui::sequenceMessageLabelForDisplay(item, base);
     entries.append({item.labelRect,
-                    elided(item.text, inferred ? inferredMessageFont : base,
-                           item.labelRect.width()),
-                    inferred ? inferredMessageFont : base,
+                    std::move(label.text),
+                    std::move(label.font),
                     inferred ? palette.mutedText : palette.bodyText,
                     Qt::AlignCenter,
                     {item.labelRect}});
@@ -2291,6 +2421,7 @@ void DiagramCanvas::setProject(ProjectController *project) {
   if (m_project == project)
     return;
   cancelAutomaticLayoutPreview();
+  cancelConnectionDestination();
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
   clearConnectorToolboxCandidate(true);
@@ -2301,6 +2432,7 @@ void DiagramCanvas::setProject(ProjectController *project) {
   if (m_project) {
     connect(m_project, &ProjectController::stateChanged, this, [this] {
       clearRelationshipToolboxCandidate();
+      pruneActivitySelection();
       refreshArrangementToolboxAnchor();
       refreshConnectorToolboxAnchor();
       refreshPresentationToolboxAnchor();
@@ -2344,6 +2476,8 @@ void DiagramCanvas::setDiagramId(const QString &diagramId) {
   if (m_diagramId == diagramId)
     return;
   cancelAutomaticLayoutPreview();
+  cancelConnectionDestination();
+  cancelActivityGesture();
   m_diagramId = diagramId;
   clearCanvasSelection();
   m_sceneDirty = true;
@@ -2359,6 +2493,14 @@ QRectF DiagramCanvas::diagramContentBounds(qreal margin) const {
   const auto *currentDiagram = diagram();
   if (!currentDiagram || !m_project)
     return {};
+
+  if (currentDiagram->type == DiagramType::Activity) {
+    const QRectF bounds = activityLayout().contentBounds;
+    const qreal safeMargin = std::max(0.0, margin);
+    return bounds.isValid() ? bounds.adjusted(-safeMargin, -safeMargin,
+                                              safeMargin, safeMargin)
+                            : QRectF{};
+  }
 
   if (currentDiagram->type == DiagramType::Sequence) {
     QRectF bounds =
@@ -2824,6 +2966,8 @@ QString DiagramCanvas::connectorInteractionPrompt() const {
   if (m_interaction == Interaction::CreateNoteAttachment)
     return QStringLiteral(
         "Click an element or container to attach the note; Esc cancels");
+  if (m_toolboxRelationshipArmed)
+    return tr("Click a destination or empty canvas; Esc cancels");
   if (!m_connectorGestureType.isEmpty())
     return QStringLiteral("Drag to a target element; release to create %1")
         .arg(m_connectorGestureType);
@@ -3161,6 +3305,14 @@ QRectF DiagramCanvas::toView(const QRectF &rect) const {
   return {toView(rect.topLeft()), rect.size() * m_zoom};
 }
 
+const ui::SequenceMessageLayout *DiagramCanvas::hitSequenceMessageAt(
+    const ui::SequenceDiagramLayout &layout, const QPointF &scenePoint) const {
+  constexpr qreal arrowToleranceViewPixels = 8.0;
+  return ui::hitSequenceMessage(layout, scenePoint,
+                                arrowToleranceViewPixels / m_zoom,
+                                m_exportMode || detailLevel(m_zoom) > 0);
+}
+
 QRectF DiagramCanvas::textLineRect(const QRectF &nodeRect, int line,
                                    qreal headerHeight) const {
   return {nodeRect.left() + kPadding,
@@ -3467,7 +3619,8 @@ void DiagramCanvas::cancelAnnotationPreview() {
 
 QString
 DiagramCanvas::relationshipTypeForGestureKey(const QKeyEvent &event) const {
-  if (event.modifiers() != Qt::NoModifier)
+  if (event.modifiers() != Qt::NoModifier &&
+      !(m_leftButtonPressed && event.modifiers() == Qt::ShiftModifier))
     return {};
   QString key = event.text().trimmed().toUpper();
   if (key.isEmpty() && event.key() >= Qt::Key_0 && event.key() <= Qt::Key_Z)
@@ -3482,7 +3635,8 @@ DiagramCanvas::relationshipTypeForGestureKey(const QKeyEvent &event) const {
   return {};
 }
 
-bool DiagramCanvas::startConnectorGesture(const QString &relationshipType) {
+bool DiagramCanvas::startConnectorGesture(const QString &relationshipType,
+                                          bool allowNodeBody) {
   const auto *currentDiagram = diagram();
   if (!m_leftButtonPressed || relationshipType.isEmpty() || !currentDiagram ||
       currentDiagram->type != DiagramType::Class ||
@@ -3494,16 +3648,20 @@ bool DiagramCanvas::startConnectorGesture(const QString &relationshipType) {
     return false;
   const QRectF sourceRect = nodeGeometry(*sourceNode);
   constexpr qreal kEdgeHitTolerance = 9.0;
-  if (!nearRectanglePerimeter(sourceRect, m_pressScene,
-                              kEdgeHitTolerance / m_zoom))
+  const bool fromEdge = nearRectanglePerimeter(sourceRect, m_pressScene,
+                                               kEdgeHitTolerance / m_zoom);
+  if (!fromEdge && !allowNodeBody)
     return false;
+
+  const QPointF sourcePoint =
+      fromEdge ? m_pressScene : edgePointToward(sourceRect, m_lastPointerScene);
 
   m_connectorGestureSourceNode = sourceNode->id;
   const bool suppressSnapping = m_pressModifiers.testFlag(Qt::AltModifier);
   m_connectorGestureSourceAnchor =
       suppressSnapping
-          ? anchorAtPerimeterPoint(sourceRect, m_pressScene)
-          : snappedAnchorAtPerimeterPoint(*sourceNode, sourceRect, m_pressScene,
+          ? anchorAtPerimeterPoint(sourceRect, sourcePoint)
+          : snappedAnchorAtPerimeterPoint(*sourceNode, sourceRect, sourcePoint,
                                           kPortSnapToleranceViewPixels / m_zoom,
                                           &m_connectorGestureSourceSnapped);
   if (suppressSnapping)
@@ -3523,7 +3681,9 @@ bool DiagramCanvas::startConnectorGesture(const QString &relationshipType) {
 bool DiagramCanvas::beginToolboxRelationship(const QString &relationshipType,
                                              const QString &sourceNodeId,
                                              qreal sourceSceneX,
-                                             qreal sourceSceneY) {
+                                             qreal sourceSceneY,
+                                             qreal pressViewX,
+                                             qreal pressViewY) {
   bool typeValid = false;
   relationshipTypeFromString(relationshipType, &typeValid);
   const auto *currentDiagram = diagram();
@@ -3546,6 +3706,9 @@ bool DiagramCanvas::beginToolboxRelationship(const QString &relationshipType,
       kPortSnapToleranceViewPixels / m_zoom, &m_connectorGestureSourceSnapped);
   m_connectorGestureType = relationshipType;
   m_interaction = Interaction::CreateConnector;
+  m_toolboxRelationshipPressView = {pressViewX, pressViewY};
+  m_toolboxRelationshipDragged = false;
+  m_toolboxRelationshipArmed = false;
   m_originalGeometry.clear();
   m_previewGeometry.clear();
   m_alignmentGuides.clear();
@@ -3562,7 +3725,10 @@ void DiagramCanvas::updateToolboxRelationship(qreal viewX, qreal viewY,
   if (m_interaction != Interaction::CreateConnector ||
       m_connectorGestureSourceNode.isEmpty())
     return;
-  updateConnectorGesture(toScene({viewX, viewY}), suppressSnapping);
+  const QPointF position(viewX, viewY);
+  m_toolboxRelationshipDragged |=
+      QLineF(m_toolboxRelationshipPressView, position).length() >= 4.0;
+  updateConnectorGesture(toScene(position), suppressSnapping);
 }
 
 void DiagramCanvas::finishToolboxRelationship(qreal viewX, qreal viewY,
@@ -3570,6 +3736,14 @@ void DiagramCanvas::finishToolboxRelationship(qreal viewX, qreal viewY,
   if (m_interaction != Interaction::CreateConnector ||
       m_connectorGestureSourceNode.isEmpty())
     return;
+  updateToolboxRelationship(viewX, viewY, suppressSnapping);
+  if (!m_toolboxRelationshipDragged) {
+    // The first release belongs to the toolbox button. The canvas only
+    // receives a destination after a subsequent click or an actual drag.
+    m_toolboxRelationshipArmed = true;
+    emit canvasSelectionChanged();
+    return;
+  }
   commitConnectorGesture(toScene({viewX, viewY}), suppressSnapping);
 }
 
@@ -3651,22 +3825,39 @@ void DiagramCanvas::clearRelationshipToolboxCandidate() {
 
 void DiagramCanvas::updateArrangementToolboxCandidate(
     const QPointF &viewPoint) {
-  if (m_interaction != Interaction::None || m_selectedNodes.size() < 2) {
-    clearArrangementToolboxCandidate(m_selectedNodes.size() < 2);
+  const bool activity = isActivityDiagram();
+  const int count =
+      activity ? selectedActivityNodeCount() : selectedNodeCount();
+  if (m_interaction != Interaction::None || count < 2) {
+    clearArrangementToolboxCandidate(count < 2);
     return;
   }
 
-  const auto *node = hitNode(toScene(viewPoint));
-  if (!node || !m_selectedNodes.contains(node->id)) {
+  const QPointF point = toScene(viewPoint);
+  QString nodeId;
+  if (activity) {
+    const auto &nodes = diagram()->activity.nodes;
+    for (auto it = nodes.crbegin(); it != nodes.crend(); ++it) {
+      if (activityNodeGeometry(*it).contains(point)) {
+        if (m_selectedActivityItems.contains(it->id))
+          nodeId = it->id;
+        break;
+      }
+    }
+  } else if (const auto *node = hitNode(point);
+             node && m_selectedNodes.contains(node->id)) {
+    nodeId = node->id;
+  }
+  if (nodeId.isEmpty()) {
     clearArrangementToolboxCandidate();
     return;
   }
 
   const bool becameCandidate = !m_arrangementToolboxCandidate;
-  const bool targetChanged = m_arrangementToolboxNodeId != node->id;
+  const bool targetChanged = m_arrangementToolboxNodeId != nodeId;
   const QPointF previousAnchor = m_arrangementToolboxViewAnchor;
   m_arrangementToolboxCandidate = true;
-  m_arrangementToolboxNodeId = node->id;
+  m_arrangementToolboxNodeId = nodeId;
   refreshArrangementToolboxAnchor();
   if ((becameCandidate || targetChanged) && m_arrangementToolboxCandidate &&
       previousAnchor == m_arrangementToolboxViewAnchor)
@@ -3675,14 +3866,21 @@ void DiagramCanvas::updateArrangementToolboxCandidate(
 
 void DiagramCanvas::refreshArrangementToolboxAnchor() {
   const auto *d = diagram();
-  if (!d || m_selectedNodes.size() < 2 ||
-      !m_selectedNodes.contains(m_arrangementToolboxNodeId)) {
-    clearArrangementToolboxCandidate(true);
-    return;
+  QRectF visibleGeometry;
+  if (d && d->type == DiagramType::Activity &&
+      selectedActivityNodeCount() >= 2 &&
+      m_selectedActivityItems.contains(m_arrangementToolboxNodeId)) {
+    for (const auto &node : d->activity.nodes) {
+      if (node.id == m_arrangementToolboxNodeId) {
+        visibleGeometry = activityNodeGeometry(node);
+        break;
+      }
+    }
+  } else if (d && m_selectedNodes.size() >= 2 &&
+             m_selectedNodes.contains(m_arrangementToolboxNodeId)) {
+    if (const auto *node = findNode(*d, m_arrangementToolboxNodeId))
+      visibleGeometry = visibleNodeGeometry(*node);
   }
-
-  const auto *node = findNode(*d, m_arrangementToolboxNodeId);
-  const QRectF visibleGeometry = node ? visibleNodeGeometry(*node) : QRectF{};
   if (visibleGeometry.isEmpty()) {
     clearArrangementToolboxCandidate(true);
     return;
@@ -3918,12 +4116,16 @@ void DiagramCanvas::commitConnectorGesture(const QPointF &scenePoint,
   const auto *d = diagram();
   const auto *targetNode =
       d ? findNode(*d, m_connectorGestureTargetNode) : nullptr;
+  markManuallyPositioned(m_connectorGestureSourceAnchor);
   if (!targetNode) {
+    const PendingConnectionDestination destination{
+        m_connectorGestureSourceNode, scenePoint, m_connectorGestureType,
+        m_connectorGestureSourceAnchor, m_defaultConnectorRouting};
     cancelConnectorGesture();
+    requestConnectionDestination(destination);
     return;
   }
 
-  markManuallyPositioned(m_connectorGestureSourceAnchor);
   markManuallyPositioned(m_connectorGestureTargetAnchor);
 
   const QString connectorId = m_project->createRelationshipAtAnchors(
@@ -3935,6 +4137,7 @@ void DiagramCanvas::commitConnectorGesture(const QPointF &scenePoint,
   m_connectorGestureType.clear();
   m_connectorGestureSourceSnapped = false;
   m_connectorGestureTargetSnapped = false;
+  m_toolboxRelationshipArmed = false;
   m_interaction = Interaction::None;
   m_sceneDirty = true;
   if (!connectorId.isEmpty())
@@ -3951,6 +4154,7 @@ void DiagramCanvas::cancelConnectorGesture() {
   m_connectorGestureType.clear();
   m_connectorGestureSourceSnapped = false;
   m_connectorGestureTargetSnapped = false;
+  m_toolboxRelationshipArmed = false;
   m_originalGeometry.clear();
   m_previewGeometry.clear();
   m_alignmentGuides.clear();
@@ -3958,6 +4162,55 @@ void DiagramCanvas::cancelConnectorGesture() {
   m_sceneDirty = true;
   emit canvasSelectionChanged();
   update();
+}
+
+void DiagramCanvas::requestConnectionDestination(
+    PendingConnectionDestination destination) {
+  const QPointF viewPoint = toView(destination.scenePoint);
+  if (!contains(viewPoint))
+    return;
+  m_connectionDestination = std::move(destination);
+  m_sceneDirty = true;
+  update();
+  emit connectionDestinationRequested(
+      viewPoint.x(), viewPoint.y(), m_connectionDestination->relationshipType);
+}
+
+void DiagramCanvas::cancelConnectionDestination() {
+  if (!m_connectionDestination)
+    return;
+  m_connectionDestination.reset();
+  m_sceneDirty = true;
+  update();
+}
+
+void DiagramCanvas::createConnectionDestination(
+    const QString &type, const QString &relationshipType) {
+  if (!m_connectionDestination || !m_project || !diagram())
+    return;
+  const auto destination = *m_connectionDestination;
+  cancelConnectionDestination();
+  forceActiveFocus();
+  if (isActivityDiagram()) {
+    const auto nodeType = activityNodeTypeFromString(type);
+    if (!nodeType)
+      return;
+    const QString id = m_project->addActivityNode(
+        m_diagramId, *nodeType, snapActivityPoint(destination.scenePoint),
+        destination.sourceId);
+    if (!id.isEmpty()) {
+      m_selectedActivityItems = {id};
+      refreshActivityCanvas();
+    }
+  } else if (diagram()->type == DiagramType::Class) {
+    const QString id = m_project->addConnectedElement(
+        type, m_diagramId, destination.scenePoint, destination.sourceId,
+        relationshipType.isEmpty() ? destination.relationshipType
+                                   : relationshipType,
+        destination.routing, destination.sourceAnchor);
+    if (!id.isEmpty())
+      selectConnector(id, false);
+  }
 }
 
 void DiagramCanvas::updateNoteAttachmentGesture(const QPointF &scenePoint) {
@@ -4031,7 +4284,40 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
   if (geometryDirty || textDirty) {
     SceneSnapshot snapshot;
     const auto *d = diagram();
-    if (d && m_project) {
+    if (d && d->type == DiagramType::Activity) {
+      snapshot.activity = activityLayout();
+      snapshot.selectedActivityItems = QSet<QString>(
+          m_selectedActivityItems.cbegin(), m_selectedActivityItems.cend());
+      const bool dragging = m_interaction == Interaction::CreateActivityFlow &&
+                            m_activityGestureMoved;
+      if (dragging || m_connectionDestination) {
+        const QString &sourceId = dragging ? m_activityGestureNode
+                                           : m_connectionDestination->sourceId;
+        const QPointF pointer =
+            dragging ? m_lastPointerScene : m_connectionDestination->scenePoint;
+        const auto &nodes = snapshot.activity.nodes;
+        const auto source =
+            std::find_if(nodes.cbegin(), nodes.cend(),
+                         [&](const auto &node) { return node.id == sourceId; });
+        if (source != nodes.cend()) {
+          const auto *target =
+              dragging ? ui::hitActivityNode(snapshot.activity, pointer)
+                       : nullptr;
+          const QPointF from = source->bounds.center();
+          const QPointF to = target && target->id != source->id
+                                 ? target->bounds.center()
+                                 : pointer;
+          snapshot.activityFlowPreview = {
+              ui::activityBoundaryPoint(*source, to),
+              target && target->id != source->id
+                  ? ui::activityBoundaryPoint(*target, from)
+                  : to};
+          snapshot.activityFlowTargetValid =
+              !dragging ||
+              (target && isValidActivityFlow(source->type, target->type));
+        }
+      }
+    } else if (d && m_project) {
       const auto &projectData = m_project->data();
       if (d->type == DiagramType::Sequence) {
         Diagram renderedDiagram = *d;
@@ -4376,18 +4662,26 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
              m_selectedConnectors.contains(connector.id),
              connector.id == m_selectedConnector ? m_selectedBendPoint : -1});
       }
-      if (m_interaction == Interaction::CreateConnector &&
-          !m_connectorGestureSourceNode.isEmpty()) {
-        const auto sourceNode =
-            std::find_if(d->nodes.cbegin(), d->nodes.cend(),
-                         [this](const NodePresentation &candidate) {
-                           return candidate.id == m_connectorGestureSourceNode;
-                         });
-        if (sourceNode != d->nodes.cend()) {
+      const bool draggingConnector =
+          m_interaction == Interaction::CreateConnector;
+      if (draggingConnector ||
+          (d->type == DiagramType::Class && m_connectionDestination)) {
+        const QString &sourceId = draggingConnector
+                                      ? m_connectorGestureSourceNode
+                                      : m_connectionDestination->sourceId;
+        const auto *sourceNode = findNode(*d, sourceId);
+        if (sourceNode) {
+          const auto &sourceAnchor =
+              draggingConnector ? m_connectorGestureSourceAnchor
+                                : m_connectionDestination->sourceAnchor;
           const QRectF sourceRect = nodeGeometry(*sourceNode);
-          QPointF targetPoint = m_connectorGestureTargetPoint;
+          QPointF targetPoint = draggingConnector
+                                    ? m_connectorGestureTargetPoint
+                                    : m_connectionDestination->scenePoint;
           ConnectorSide targetSide = ConnectorSide::Automatic;
-          const auto *targetNode = findNode(*d, m_connectorGestureTargetNode);
+          const auto *targetNode =
+              draggingConnector ? findNode(*d, m_connectorGestureTargetNode)
+                                : nullptr;
           if (targetNode) {
             const QRectF targetRect = nodeGeometry(*targetNode);
             targetSide = m_connectorGestureTargetAnchor.side;
@@ -4395,15 +4689,19 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
                 connectorAnchorPoint(targetRect, m_connectorGestureTargetAnchor,
                                      sourceRect.center());
           }
-          const QPointF sourcePoint = connectorAnchorPoint(
-              sourceRect, m_connectorGestureSourceAnchor, targetPoint);
+          const QPointF sourcePoint =
+              connectorAnchorPoint(sourceRect, sourceAnchor, targetPoint);
           bool typeOk = false;
-          const RelationshipType type =
-              relationshipTypeFromString(m_connectorGestureType, &typeOk);
+          const RelationshipType type = relationshipTypeFromString(
+              draggingConnector ? m_connectorGestureType
+                                : m_connectionDestination->relationshipType,
+              &typeOk);
           if (typeOk) {
             const ui::ConnectorRoute route = ui::buildConnectorRoute(
-                sourcePoint, {}, targetPoint, m_defaultConnectorRouting,
-                m_connectorGestureSourceAnchor.side, targetSide);
+                sourcePoint, {}, targetPoint,
+                draggingConnector ? m_defaultConnectorRouting
+                                  : m_connectionDestination->routing,
+                sourceAnchor.side, targetSide);
             snapshot.connectors.append({route.points,
                                         route.bendPointRouteIndices,
                                         {},
@@ -4417,14 +4715,16 @@ DiagramCanvas::updatePaintNode(QSGNode *oldNode,
                                         true});
           }
 
-          const ui::PresentationClip sourceClip =
-              clipLayout.clipFor(sourceNode->id);
-          appendPortSnapPoints(snapshot, *sourceNode, sourceRect,
-                               m_connectorGestureSourceSnapped
-                                   ? std::optional<ConnectorAnchor>(
-                                         m_connectorGestureSourceAnchor)
-                                   : std::nullopt,
-                               sourceClip.rect, sourceClip.active);
+          if (draggingConnector) {
+            const ui::PresentationClip sourceClip =
+                clipLayout.clipFor(sourceNode->id);
+            appendPortSnapPoints(
+                snapshot, *sourceNode, sourceRect,
+                m_connectorGestureSourceSnapped
+                    ? std::optional<ConnectorAnchor>(sourceAnchor)
+                    : std::nullopt,
+                sourceClip.rect, sourceClip.active);
+          }
           if (targetNode) {
             const ui::PresentationClip targetClip =
                 clipLayout.clipFor(targetNode->id);
@@ -4796,6 +5096,19 @@ void DiagramCanvas::captureSelectedGeometry() {
 
 void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
   forceActiveFocus();
+  if (m_toolboxRelationshipArmed &&
+      m_interaction == Interaction::CreateConnector) {
+    if (event->button() == Qt::LeftButton) {
+      m_leftButtonPressed = true;
+      updateConnectorGesture(toScene(event->position()),
+                             event->modifiers().testFlag(Qt::AltModifier));
+    } else {
+      cancelConnectorGesture();
+    }
+    event->accept();
+    return;
+  }
+  cancelConnectionDestination();
   emit contextToolboxesDismissRequested();
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
@@ -4808,9 +5121,14 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
   m_pressModifiers = event->modifiers();
   m_resizeHandle = ResizeHandle::None;
   if (event->button() == Qt::MiddleButton) {
+    cancelActivityGesture();
     m_interaction = Interaction::Pan;
     m_originalPan = m_pan;
     event->accept();
+    return;
+  }
+  if (isActivityDiagram()) {
+    activityMousePress(*event);
     return;
   }
   const auto *currentDiagram = diagram();
@@ -4832,7 +5150,7 @@ void DiagramCanvas::mousePressEvent(QMouseEvent *event) {
         participant ||
                 activationResizeEdge != SequenceActivationResizeEdge::None
             ? nullptr
-            : ui::hitSequenceMessage(layout, m_pressScene, 8.0 / m_zoom);
+            : hitSequenceMessageAt(layout, m_pressScene);
     const auto *activation =
         participant || message ? nullptr
         : resizeActivation
@@ -5231,6 +5549,19 @@ void DiagramCanvas::mouseMoveEvent(QMouseEvent *event) {
     update();
     return;
   }
+  if (isActivityDiagram()) {
+    activityMouseMove(*event);
+    return;
+  }
+  // Delay the Shift gesture until the pointer actually moves. This leaves
+  // click selection and the Shift-lasso on empty space intact.
+  if (m_pressModifiers.testFlag(Qt::ShiftModifier) &&
+      !m_pressModifiers.testFlag(Qt::ControlModifier) &&
+      QLineF(m_pressView, event->position()).length() >= 4.0 &&
+      startConnectorGesture(QStringLiteral("dependency"), true)) {
+    event->accept();
+    return;
+  }
   if (m_interaction == Interaction::ResizeSequenceActivationStart ||
       m_interaction == Interaction::ResizeSequenceActivationEnd) {
     updateSequenceActivationResize(
@@ -5444,6 +5775,10 @@ void DiagramCanvas::mouseReleaseEvent(QMouseEvent *event) {
   m_lastPointerScene = toScene(event->position());
   if (event->button() == Qt::LeftButton)
     m_leftButtonPressed = false;
+  if (isActivityDiagram() && m_interaction != Interaction::Pan) {
+    activityMouseRelease(*event);
+    return;
+  }
   if (m_interaction == Interaction::ResizeSequenceActivationStart ||
       m_interaction == Interaction::ResizeSequenceActivationEnd) {
     commitSequenceActivationResize();
@@ -5577,6 +5912,12 @@ void DiagramCanvas::mouseReleaseEvent(QMouseEvent *event) {
 
 void DiagramCanvas::mouseDoubleClickEvent(QMouseEvent *event) {
   const QPointF scenePoint = toScene(event->position());
+  if (isActivityDiagram() && event->button() == Qt::LeftButton) {
+    selectActivityItemAt(scenePoint);
+    editSelectedActivityItem();
+    event->accept();
+    return;
+  }
   if (const auto *currentDiagram = diagram();
       currentDiagram && currentDiagram->type == DiagramType::Sequence) {
     const ui::SequenceDiagramLayout layout =
@@ -5589,7 +5930,7 @@ void DiagramCanvas::mouseDoubleClickEvent(QMouseEvent *event) {
       return;
     }
     if (const auto *message =
-            ui::hitSequenceMessage(layout, scenePoint, 8.0 / m_zoom)) {
+            hitSequenceMessageAt(layout, scenePoint)) {
       selectSequenceMessage(message->id, false);
       editSelectedSequenceItem();
       event->accept();
@@ -5664,8 +6005,25 @@ void DiagramCanvas::mouseDoubleClickEvent(QMouseEvent *event) {
   }
 }
 
+void DiagramCanvas::mouseUngrabEvent() {
+  cancelActivityGesture();
+  QQuickItem::mouseUngrabEvent();
+}
+
 void DiagramCanvas::hoverMoveEvent(QHoverEvent *event) {
   m_lastPointerScene = toScene(event->position());
+  if (m_toolboxRelationshipArmed &&
+      m_interaction == Interaction::CreateConnector) {
+    updateConnectorGesture(m_lastPointerScene,
+                           event->modifiers().testFlag(Qt::AltModifier));
+    event->accept();
+    return;
+  }
+  if (isActivityDiagram()) {
+    setCursor(Qt::ArrowCursor);
+    updateArrangementToolboxCandidate(event->position());
+    return;
+  }
   if (const auto *currentDiagram = diagram();
       currentDiagram && currentDiagram->type == DiagramType::Sequence) {
     const ui::SequenceDiagramLayout layout =
@@ -5681,7 +6039,7 @@ void DiagramCanvas::hoverMoveEvent(QHoverEvent *event) {
       setCursor(Qt::SizeVerCursor);
     else if (ui::hitSequenceParticipant(layout, m_lastPointerScene))
       setCursor(Qt::SizeHorCursor);
-    else if (ui::hitSequenceMessage(layout, m_lastPointerScene, 8.0 / m_zoom))
+    else if (hitSequenceMessageAt(layout, m_lastPointerScene))
       setCursor(Qt::SizeVerCursor);
     else
       unsetCursor();
@@ -5830,6 +6188,38 @@ void DiagramCanvas::commitGeometryPreview() {
     return;
   m_project->movePresentationsToContainer(
       m_diagramId, values, movedPresentationIds, targetId, description);
+}
+
+void DiagramCanvas::updateActivityLassoSelection(const QPointF &scenePoint) {
+  m_lassoRect = QRectF(m_lassoOrigin, scenePoint).normalized();
+  const bool toggle = m_lassoModifiers.testFlag(Qt::ControlModifier);
+  const bool additive = m_lassoModifiers.testFlag(Qt::ShiftModifier);
+  QStringList selection =
+      (toggle || additive) ? m_activityLassoBase : QStringList{};
+  QSet<QString> selected(selection.cbegin(), selection.cend());
+  QSet<QString> deselected;
+  const auto addHit = [&](const QString &id) {
+    if (!selected.contains(id)) {
+      selected.insert(id);
+      selection.append(id);
+    } else if (toggle) {
+      deselected.insert(id);
+    }
+  };
+  const auto layout = activityLayout();
+  for (const auto &node : layout.nodes)
+    if (m_lassoRect.intersects(node.bounds))
+      addHit(node.id);
+  for (const auto &flow : layout.flows)
+    if (polylineIntersectsRect(flow.points, m_lassoRect) ||
+        (!flow.guard.isEmpty() && m_lassoRect.intersects(flow.labelBounds)))
+      addHit(flow.id);
+  selection.removeIf(
+      [&](const QString &id) { return deselected.contains(id); });
+  if (m_selectedActivityItems != selection) {
+    m_selectedActivityItems = std::move(selection);
+    emit canvasSelectionChanged();
+  }
 }
 
 void DiagramCanvas::updateLassoSelection(const QPointF &scenePoint) {
@@ -8140,11 +8530,30 @@ void DiagramCanvas::assignStyleToSelection(const QString &styleId) {
 }
 
 void DiagramCanvas::arrangeSelection(const QString &operation) {
-  if (!m_project || m_selectedNodes.size() < 2)
+  if (!m_project)
     return;
   const auto parsedOperation = ui::arrangementOperationFromKey(operation);
   const auto *d = diagram();
   if (!parsedOperation || !d)
+    return;
+
+  if (d->type == DiagramType::Activity) {
+    using ui::ArrangementOperation;
+    if (*parsedOperation == ArrangementOperation::MatchWidth ||
+        *parsedOperation == ArrangementOperation::MatchHeight ||
+        *parsedOperation == ArrangementOperation::MatchSize)
+      return;
+    const auto arranged =
+        ui::arrangeDiagramNodes(activityNodeGeometries(true), *parsedOperation,
+                                m_defaultDistributionGap);
+    QHash<QString, QRectF> positions;
+    for (const auto &node : arranged)
+      positions.insert(node.id, node.geometry);
+    commitActivityPositions(positions,
+                            ui::arrangementDescription(*parsedOperation));
+    return;
+  }
+  if (m_selectedNodes.size() < 2)
     return;
 
   QList<ui::DiagramNodeGeometry> selected;
@@ -8211,6 +8620,8 @@ bool DiagramCanvas::previewAutomaticLayoutWithOptions(
   options.componentGap = std::clamp(
       optionValues.value(QStringLiteral("componentGap"), 80).toDouble(), 0.0,
       2000.0);
+  if (currentDiagram->type == DiagramType::Activity)
+    return previewActivityLayout(scope, options);
   const bool recursive =
       optionValues.value(QStringLiteral("recursive"), false).toBool();
   const bool resizeContainers =
@@ -8519,6 +8930,13 @@ void DiagramCanvas::applyAutomaticLayoutPreviewWithConnectorHandling(
     cancelAutomaticLayoutPreview();
     return;
   }
+  if (currentDiagram->type == DiagramType::Activity) {
+    const auto positions = std::move(m_previewGeometry);
+    cancelAutomaticLayoutPreview();
+    commitActivityPositions(positions,
+                            tr("Automatically arrange activity nodes"));
+    return;
+  }
 
   const int arrangedRootCount = m_automaticLayoutPreviewCount;
   const QStringList connectorIds = m_automaticLayoutConnectorIds;
@@ -8612,6 +9030,13 @@ void DiagramCanvas::cancelAutomaticLayoutPreview() {
 }
 
 void DiagramCanvas::nudgeSelection(qreal deltaX, qreal deltaY) {
+  if (isActivityDiagram()) {
+    QHash<QString, QRectF> positions;
+    for (const auto &node : activityNodeGeometries(true))
+      positions.insert(node.id, node.geometry.translated(deltaX, deltaY));
+    commitActivityPositions(positions, tr("Nudge activity selection"));
+    return;
+  }
   if (!m_project ||
       (m_selectedNodes.isEmpty() && m_selectedContainers.isEmpty() &&
        m_selectedNotes.isEmpty()) ||
@@ -8742,6 +9167,7 @@ void DiagramCanvas::selectOnlyContainer(const QString &containerId) {
 }
 
 void DiagramCanvas::clearCanvasSelection() {
+  cancelConnectionDestination();
   const bool hadSelection =
       !m_selectedNodes.isEmpty() || !m_selectedContainers.isEmpty() ||
       !m_selectedConnectors.isEmpty() || !m_selectedNotes.isEmpty() ||
@@ -8749,6 +9175,7 @@ void DiagramCanvas::clearCanvasSelection() {
       !m_selectedSequenceMessages.isEmpty() ||
       !m_selectedSequenceActivations.isEmpty() ||
       !m_selectedSequenceCombinedFragments.isEmpty() ||
+      !m_selectedActivityItems.isEmpty() ||
       !m_connectorGestureSourceNode.isEmpty() || m_endpointDragActive;
   resetLassoState();
   if (!hadSelection)
@@ -8764,6 +9191,7 @@ void DiagramCanvas::clearCanvasSelection() {
   m_selectedConnector.clear();
   m_selectedNotes.clear();
   m_selectedNote.clear();
+  m_selectedActivityItems.clear();
   clearSequenceSelection();
   m_selectedBendPoint = -1;
   m_endpointDragTargetNode.clear();
@@ -8781,6 +9209,7 @@ void DiagramCanvas::clearCanvasSelection() {
   m_connectorGestureType.clear();
   m_connectorGestureSourceSnapped = false;
   m_connectorGestureTargetSnapped = false;
+  m_toolboxRelationshipArmed = false;
   m_noteAttachmentSourceNote.clear();
   m_noteAttachmentTargetPresentation.clear();
   m_interactionSequenceItem.clear();
@@ -9202,6 +9631,11 @@ void DiagramCanvas::editSelectedSequenceItem() {
 }
 
 void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
+  if (isActivityDiagram()) {
+    if (!handleActivityKey(*event))
+      QQuickItem::keyPressEvent(event);
+    return;
+  }
   if (const auto *currentDiagram = diagram();
       currentDiagram && currentDiagram->type == DiagramType::Sequence) {
     if (m_leftButtonPressed &&
@@ -9308,9 +9742,20 @@ void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
     return;
   }
   const QString gestureType = relationshipTypeForGestureKey(*event);
-  if (!gestureType.isEmpty() && startConnectorGesture(gestureType)) {
-    event->accept();
-    return;
+  if (!gestureType.isEmpty()) {
+    if (m_interaction == Interaction::CreateConnector &&
+        (m_leftButtonPressed || m_toolboxRelationshipArmed)) {
+      m_connectorGestureType = gestureType;
+      m_sceneDirty = true;
+      emit canvasSelectionChanged();
+      update();
+      event->accept();
+      return;
+    }
+    if (startConnectorGesture(gestureType)) {
+      event->accept();
+      return;
+    }
   }
   if (event->key() == Qt::Key_Escape &&
       m_interaction == Interaction::MoveBendPoint) {

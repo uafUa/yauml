@@ -2,6 +2,7 @@
 
 #include "core/project_data.h"
 
+#include <QFont>
 #include <QRectF>
 #include <QVector>
 
@@ -37,6 +38,11 @@ struct SequenceMessageLayout {
   QRectF labelRect;
 };
 
+struct SequenceMessageLabel {
+  QString text;
+  QFont font;
+};
+
 struct SequenceActivationLayout {
   QString id;
   QString participantId;
@@ -55,6 +61,7 @@ struct SequenceCombinedFragmentLayout {
   QString id;
   SequenceCombinedFragmentType type = SequenceCombinedFragmentType::Optional;
   QRectF rect;
+  QRectF headingRect;
   QVector<SequenceCombinedFragmentOperandLayout> operands;
 };
 
@@ -68,6 +75,8 @@ struct SequenceDiagramLayout {
 
 SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
                                                  const Diagram &diagram);
+SequenceMessageLabel sequenceMessageLabelForDisplay(
+    const SequenceMessageLayout &message, QFont font);
 const SequenceParticipantLayout *
 hitSequenceParticipant(const SequenceDiagramLayout &layout,
                        const QPointF &scenePoint);
@@ -76,7 +85,8 @@ hitSequenceLifeline(const SequenceDiagramLayout &layout,
                     const QPointF &scenePoint, qreal tolerance);
 const SequenceMessageLayout *
 hitSequenceMessage(const SequenceDiagramLayout &layout,
-                   const QPointF &scenePoint, qreal tolerance);
+                   const QPointF &scenePoint, qreal tolerance,
+                   bool labelsVisible = true);
 const SequenceActivationLayout *
 hitSequenceActivation(const SequenceDiagramLayout &layout,
                       const QPointF &scenePoint, qreal tolerance);

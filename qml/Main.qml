@@ -1703,6 +1703,7 @@ ApplicationWindow {
         CatalogMenuItem {
             catalogId: "diagram.displayOptions"
             visible: treeContextMenu.targetKind === "diagram"
+                     && treeContextMenu.targetType !== "activity diagram"
             height: visible ? implicitHeight : 0
             text: qsTr("Display options…")
             onTriggered: diagramDisplayOptionsDialog.openForDiagram(
@@ -1907,7 +1908,9 @@ ApplicationWindow {
 
         onOpened: newDiagramType.currentIndex = 0
         onAccepted: {
-            const id = newDiagramType.currentValue === "sequence"
+            const id = newDiagramType.currentValue === "activity"
+                    ? projectController.addActivityDiagram()
+                    : newDiagramType.currentValue === "sequence"
                     ? projectController.addSequenceDiagram()
                     : projectController.addDiagram()
             if (id.length > 0)
@@ -1920,19 +1923,23 @@ ApplicationWindow {
             Label { text: qsTr("Diagram type") }
             ComboBox {
                 id: newDiagramType
+                objectName: "newDiagramType"
                 Layout.fillWidth: true
                 textRole: "label"
                 valueRole: "value"
                 model: [
                     { label: qsTr("Class diagram"), value: "class" },
-                    { label: qsTr("Sequence diagram"), value: "sequence" }
+                    { label: qsTr("Sequence diagram"), value: "sequence" },
+                    { label: qsTr("Activity diagram"), value: "activity" }
                 ]
             }
             Label {
                 Layout.fillWidth: true
                 wrapMode: Text.Wrap
                 color: uiTheme.mutedText
-                text: newDiagramType.currentValue === "sequence"
+                text: newDiagramType.currentValue === "activity"
+                      ? qsTr("Creates a workflow diagram with an initial node.")
+                      : newDiagramType.currentValue === "sequence"
                       ? qsTr("Creates a lifeline-based interaction diagram with one editable participant.")
                       : qsTr("Creates a UML class diagram for types and relationships.")
             }

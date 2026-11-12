@@ -176,6 +176,34 @@ int main(int argc, char *argv[]) {
           // and layout errors in the settings page during the UI smoke test.
           const auto roots = engine.rootObjects();
           QObject *rootObject = roots.isEmpty() ? nullptr : roots.first();
+          auto *newDiagramDialog = rootObject
+                                       ? rootObject->findChild<QObject *>(
+                                             QStringLiteral("newDiagramDialog"))
+                                       : nullptr;
+          auto *newDiagramType = rootObject
+                                     ? rootObject->findChild<QObject *>(
+                                           QStringLiteral("newDiagramType"))
+                                     : nullptr;
+          if (!newDiagramDialog || !newDiagramType ||
+              !QMetaObject::invokeMethod(newDiagramDialog, "open") ||
+              !newDiagramType->setProperty("currentIndex", 2) ||
+              newDiagramType->property("currentValue").toString() !=
+                  QStringLiteral("activity") ||
+              !QMetaObject::invokeMethod(newDiagramDialog, "accept")) {
+            std::fprintf(stderr,
+                         "UI smoke could not choose Activity diagram\n");
+            QCoreApplication::exit(1);
+            return;
+          }
+          const auto *activity =
+              yauml::findDiagram(project.data(), workspace.activeDiagramId());
+          if (!activity || activity->type != yauml::DiagramType::Activity ||
+              activity->activity.nodes.size() != 1) {
+            std::fprintf(stderr,
+                         "UI smoke could not create Activity diagram\n");
+            QCoreApplication::exit(1);
+            return;
+          }
           auto *preferences = rootObject
                                   ? rootObject->findChild<QObject *>(
                                         QStringLiteral("preferencesDialog"))
