@@ -160,19 +160,29 @@ CreateElementCommand::CreateElementCommand(
     ProjectController *controller, const ProjectData &project,
     ModelElement element, QString diagramId,
     std::optional<NodePresentation> nodePresentation,
-    std::optional<ContainerPresentation> containerPresentation)
-    : ProjectCommand(controller,
-                     QStringLiteral("Create %1").arg(toString(element.type))),
+    std::optional<ContainerPresentation> containerPresentation,
+    std::optional<NewElementConnection> connection)
+    : ProjectCommand(
+          controller,
+          connection ? QStringLiteral("Create connected %1")
+                           .arg(toString(element.type))
+                     : QStringLiteral("Create %1").arg(toString(element.type))),
       m_element(std::move(element)), m_elementIndex(project.elements.size()),
       m_diagramId(std::move(diagramId)),
       m_nodePresentation(std::move(nodePresentation)),
-      m_containerPresentation(std::move(containerPresentation)) {
+      m_containerPresentation(std::move(containerPresentation)),
+      m_connection(std::move(connection)) {
   if (m_nodePresentation || m_containerPresentation) {
     const auto *diagram = findDiagram(project, m_diagramId);
     Q_ASSERT(diagram);
     m_presentationIndex = !diagram             ? -1
                           : m_nodePresentation ? diagram->nodes.size()
                                                : diagram->containers.size();
+    if (m_connection && diagram) {
+      Q_ASSERT(m_nodePresentation);
+      m_relationshipIndex = project.relationships.size();
+      m_connectorIndex = diagram->connectors.size();
+    }
   }
 }
 
@@ -185,11 +195,23 @@ void CreateElementCommand::execute(ProjectData &project) {
     else if (m_containerPresentation)
       insertAtRecordedPosition(diagram->containers, m_presentationIndex,
                                *m_containerPresentation);
+    if (m_connection) {
+      insertAtRecordedPosition(project.relationships, m_relationshipIndex,
+                               m_connection->relationship);
+      insertAtRecordedPosition(diagram->connectors, m_connectorIndex,
+                               m_connection->connector);
+    }
   }
 }
 
 void CreateElementCommand::revert(ProjectData &project) {
   if (auto *diagram = findDiagram(project, m_diagramId)) {
+    if (m_connection) {
+      removeRecordedValue(diagram->connectors, m_connectorIndex,
+                          m_connection->connector.id);
+      removeRecordedValue(project.relationships, m_relationshipIndex,
+                          m_connection->relationship.id);
+    }
     if (m_nodePresentation)
       removeRecordedValue(diagram->nodes, m_presentationIndex,
                           m_nodePresentation->id);

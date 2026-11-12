@@ -158,11 +158,34 @@ public:
                                    const QString &diagramId, qreal x, qreal y);
   QString addElementCenteredAt(const QString &type, const QString &diagramId,
                                qreal centerX, qreal centerY);
+  QString addConnectedElement(const QString &type, const QString &diagramId,
+                              const QPointF &center,
+                              const QString &sourceNodeId,
+                              const QString &relationshipType,
+                              ConnectorRouting routing,
+                              const ConnectorAnchor &sourceAnchor);
   Q_INVOKABLE QString addDiagram();
   // Creates an immediately valid, empty sequence diagram. Sequence diagrams
   // require a participant, so the first free participant is created together
   // with the diagram as one undoable project operation.
   Q_INVOKABLE QString addSequenceDiagram();
+  Q_INVOKABLE QString addActivityDiagram();
+  QString addActivityNode(const QString &diagramId, ActivityNodeType type,
+                          const QPointF &center,
+                          const QString &flowSourceId = {});
+  QString addActivityFlow(const QString &diagramId, const QString &sourceId,
+                          const QString &targetId);
+  bool moveActivityNode(const QString &diagramId, const QString &nodeId,
+                        const QPointF &center);
+  bool moveActivityNodes(const QString &diagramId,
+                         const QHash<QString, QPointF> &centers,
+                         const QString &description);
+  Q_INVOKABLE bool editActivityItemText(const QString &diagramId,
+                                        const QString &itemId,
+                                        const QString &text);
+  bool deleteActivityItem(const QString &diagramId, const QString &itemId);
+  bool deleteActivityItems(const QString &diagramId,
+                           const QStringList &itemIds);
   // Imports the public sequence interchange format as one undoable diagram
   // creation command. QML passes the selected local file URL directly.
   Q_INVOKABLE QString importSequenceDiagram(const QUrl &fileUrl);
@@ -524,8 +547,20 @@ private:
                                  const QString &sourceNodeId,
                                  const QString &targetNodeId,
                                  const QString &type, ConnectorRouting routing);
-  QString addElementAtImpl(const QString &type, const QString &diagramId,
-                           qreal x, qreal y, bool coordinatesAreCenter);
+  struct ElementCreationOrigin {
+    QString nodeId;
+    RelationshipType type;
+    ConnectorRouting routing;
+    ConnectorAnchor anchor;
+  };
+  struct CreatedElement {
+    QString elementId;
+    QString connectorId;
+  };
+  CreatedElement
+  addElementAtImpl(const QString &type, const QString &diagramId, qreal x,
+                   qreal y, bool coordinatesAreCenter,
+                   const ElementCreationOrigin *origin = nullptr);
   void
   commitPresentationChanges(const QString &diagramId,
                             const QVariantList &geometries,

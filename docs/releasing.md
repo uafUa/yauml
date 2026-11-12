@@ -1,5 +1,9 @@
 # Building and publishing releases
 
+For complete local configure/build/install/launch commands, required values
+obtained outside Git, expected success evidence, and common setup failures, see
+the [`platform runbook`](platform-runbook.md).
+
 The repository's `Windows CI and Release` GitHub Actions workflow is the
 authoritative Windows build. It uses the same MSVC Release configuration and
 complete CTest suite as local acceptance testing.
@@ -63,9 +67,11 @@ After a local MSVC Release build with libclang:
 ```
 
 The script creates `out/packages/yauml-<version>-windows-x64.zip` plus a
-checksum. It stages only runtime files in a temporary directory, invokes
-`windeployqt`, requires `libclang.dll`, and runs validation and UI smoke tests
-against the packaged executable before creating the archive.
+checksum. It stages the runtime, README, and sequence authoring resources in a
+temporary directory, invokes `windeployqt`, and requires `libclang.dll`. With
+`-Verify`, it runs validation and UI smoke tests before creating the archive.
+It checks the ZIP for the Codex skill, format specification, and standalone
+example at the same relative paths as in the source tree.
 
 To create the hybrid Windows installer and a locally inspectable update site
 from that verified archive:
@@ -83,10 +89,10 @@ This requires Qt Installer Framework 4.11 or newer. The script finds
 `binarycreator.exe` through `QIFW_ROOT`, `PATH`, the GitHub Actions Qt tools
 directory, or a standard `C:\Qt\Tools\QtInstallerFramework` installation. It
 verifies the portable archive's checksum, builds a hybrid installer and update
-repository, and then exercises the complete lifecycle in a temporary location:
-initial
-installation, Windows uninstall registration, replacement by the same
-installer, application validation, and removal.
+repository, and then exercises the complete lifecycle in a temporary location.
+It checks Windows uninstall registration, verifies the installed sequence
+authoring files, validates the installed example using the installed CLI, and
+tests replacement and removal.
 
 The interactive installer installs to the 64-bit Windows applications
 directory by default. The application component creates a Start-menu shortcut
@@ -122,7 +128,13 @@ used. Never publish two different application packages under the same project
 version.
 
 The installer is currently unsigned, so Windows may show an unknown-publisher
-warning until release code signing is introduced.
+warning. No signing configuration is present in Git or CI. Introducing signing
+requires an organization-owned Windows code-signing certificate and its unlock
+secret to be supplied through the GitHub secret store, plus an explicit
+`signtool` step before checksums are generated. The certificate, private key,
+password, and exported signing bundle must never be committed. Until that
+separate release-security slice is implemented, the warning is expected rather
+than a local configuration error.
 
 When testing an undeployed Windows build tree manually, use `ctest` rather than
 starting the test executables directly. CTest supplies the configured Qt kit's

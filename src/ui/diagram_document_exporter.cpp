@@ -1097,10 +1097,7 @@ void writeSvgSequence(QXmlStreamWriter &xml, const ExportScene &scene,
                               ? toString(fragment.type)
                               : QStringLiteral("%1 [%2]").arg(
                                     toString(fragment.type), firstGuard);
-    writeSvgText(xml,
-                 {fragment.rect.left() + 8.0, fragment.rect.top() + 1.0,
-                  fragment.rect.width() - 16.0, kLineHeight},
-                 title, header, palette.bodyText,
+    writeSvgText(xml, fragment.headingRect, title, header, palette.bodyText,
                  Qt::AlignLeft | Qt::AlignVCenter);
     for (qsizetype index = 1; index < fragment.operands.size(); ++index) {
       const auto &operand = fragment.operands.at(index);
@@ -1635,8 +1632,7 @@ void writeDrawioSequence(DrawioWriter &writer, const ExportScene &scene) {
     writer.vertex(
         htmlLine(title),
         transparentTextStyle(palette.bodyText, QStringLiteral("left")),
-        {fragment.rect.left() + 8.0, fragment.rect.top() + 1.0,
-         fragment.rect.width() - 16.0, kLineHeight});
+        fragment.headingRect);
     for (qsizetype index = 1; index < fragment.operands.size(); ++index) {
       const auto &operand = fragment.operands.at(index);
       if (operand.dividerY < 0.0)
@@ -1877,6 +1873,11 @@ exportDiagramDocument(const ProjectData &project, const Diagram &diagram,
                       const QString &path, DiagramDocumentFormat format,
                       const DiagramDocumentExportOptions &options) {
   DiagramDocumentExportResult result;
+  if (diagram.type == DiagramType::Activity) {
+    result.error = QStringLiteral(
+        "Activity diagrams currently support PNG and PDF export.");
+    return result;
+  }
   if (path.trimmed().isEmpty()) {
     result.error = QStringLiteral("A local export path is required.");
     return result;

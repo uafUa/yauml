@@ -17,6 +17,11 @@ namespace yauml {
 
 namespace ui {
 class DiagramClipLayout;
+struct ActivityDiagramLayout;
+struct AutomaticLayoutOptions;
+struct DiagramNodeGeometry;
+struct SequenceDiagramLayout;
+struct SequenceMessageLayout;
 }
 
 struct ConnectorPresentation;
@@ -34,6 +39,12 @@ class DiagramCanvas : public QQuickItem {
   Q_PROPERTY(QString diagramId READ diagramId WRITE setDiagramId NOTIFY
                  diagramIdChanged)
   Q_PROPERTY(QString diagramType READ diagramType NOTIFY diagramIdChanged)
+  Q_PROPERTY(bool activitySelectionEditable READ activitySelectionEditable
+                 NOTIFY canvasSelectionChanged)
+  Q_PROPERTY(int selectedActivityItemCount READ selectedActivityItemCount NOTIFY
+                 canvasSelectionChanged)
+  Q_PROPERTY(int selectedActivityNodeCount READ selectedActivityNodeCount NOTIFY
+                 canvasSelectionChanged)
   Q_PROPERTY(qreal zoom READ zoom NOTIFY viewportChanged)
   Q_PROPERTY(bool filterActive READ filterActive NOTIFY diagramFilterChanged)
   Q_PROPERTY(
@@ -289,6 +300,16 @@ public:
                                   const QString &subjectsJson, qreal x,
                                   qreal y);
   Q_INVOKABLE void createElementAtContextPosition(const QString &type);
+  Q_INVOKABLE void
+  createConnectionDestination(const QString &type,
+                              const QString &relationshipType = {});
+  Q_INVOKABLE void cancelConnectionDestination();
+  Q_INVOKABLE void addActivityNode(const QString &type, bool atViewportCenter);
+  Q_INVOKABLE void editSelectedActivityItem();
+  Q_INVOKABLE void deleteSelectedActivityItems();
+  bool activitySelectionEditable() const;
+  int selectedActivityItemCount() const;
+  int selectedActivityNodeCount() const;
   Q_INVOKABLE void createElementAtViewportCenter(const QString &type);
   Q_INVOKABLE QString createNoteAtContextPosition();
   Q_INVOKABLE QString createNoteAtViewportCenter();
@@ -397,7 +418,8 @@ public:
   Q_INVOKABLE bool beginToolboxRelationship(const QString &relationshipType,
                                             const QString &sourceNodeId,
                                             qreal sourceSceneX,
-                                            qreal sourceSceneY);
+                                            qreal sourceSceneY,
+                                            qreal pressViewX, qreal pressViewY);
   Q_INVOKABLE void updateToolboxRelationship(qreal viewX, qreal viewY,
                                              bool suppressSnapping = false);
   Q_INVOKABLE void finishToolboxRelationship(qreal viewX, qreal viewY,
@@ -430,6 +452,8 @@ signals:
   // sequence of compact commands while the selection stays unchanged.
   void contextToolboxesDismissRequested();
   void contextMenuRequested(const QString &target, qreal x, qreal y);
+  void connectionDestinationRequested(qreal x, qreal y,
+                                      const QString &relationshipType);
   void editRequested(const QString &objectId, const QString &field, int index,
                      const QString &text, qreal x, qreal y, qreal width,
                      qreal height, qreal fontPixelSize, bool fontBold);
@@ -451,6 +475,7 @@ protected:
   void geometryChange(const QRectF &newGeometry,
                       const QRectF &oldGeometry) override;
   void mousePressEvent(QMouseEvent *event) override;
+  void mouseUngrabEvent() override;
   void mouseMoveEvent(QMouseEvent *event) override;
   void mouseReleaseEvent(QMouseEvent *event) override;
   void mouseDoubleClickEvent(QMouseEvent *event) override;
@@ -483,7 +508,10 @@ private:
     ResizeSequenceActivationStart,
     ResizeSequenceActivationEnd,
     PendingSequenceMessage,
-    CreateSequenceMessage
+    CreateSequenceMessage,
+    MoveActivityNode,
+    CreateActivityFlow,
+    LassoActivity
   };
   enum class ResizeHandle { None, TopLeft, TopRight, BottomLeft, BottomRight };
   enum class SequenceActivationResizeEdge { None, Start, End };
@@ -495,6 +523,13 @@ private:
     ConnectorSide sourceSide = ConnectorSide::Automatic;
     ConnectorSide targetSide = ConnectorSide::Automatic;
     bool valid = false;
+  };
+  struct PendingConnectionDestination {
+    QString sourceId;
+    QPointF scenePoint;
+    QString relationshipType;
+    ConnectorAnchor sourceAnchor;
+    ConnectorRouting routing = ConnectorRouting::Straight;
   };
   struct TextHit {
     QString objectId;
@@ -512,6 +547,26 @@ private:
   };
 
   const Diagram *diagram() const;
+  bool isActivityDiagram() const;
+  ui::ActivityDiagramLayout activityLayout() const;
+  void activityMousePress(QMouseEvent &event);
+  void activityMouseMove(QMouseEvent &event);
+  void activityMouseRelease(QMouseEvent &event);
+  void selectActivityItemAt(const QPointF &scenePoint);
+  void selectAllActivityItems();
+  void pruneActivitySelection();
+  void updateActivityLassoSelection(const QPointF &scenePoint);
+  bool handleActivityKey(QKeyEvent &event);
+  QRectF activityNodeGeometry(const ActivityNode &node) const;
+  QList<ui::DiagramNodeGeometry>
+  activityNodeGeometries(bool selectionOnly) const;
+  bool previewActivityLayout(const QString &scope,
+                             const ui::AutomaticLayoutOptions &options);
+  void commitActivityPositions(const QHash<QString, QRectF> &geometries,
+                               const QString &description);
+  void refreshActivityCanvas();
+  void cancelActivityGesture(bool restoreLassoSelection = true);
+  QPointF snapActivityPoint(QPointF point) const;
   bool nodePassesFilter(const NodePresentation &node) const;
   bool connectorPassesFilter(const ConnectorPresentation &connector) const;
   bool connectorPassesFilter(const ConnectorPresentation &connector,
@@ -531,6 +586,9 @@ private:
   QPointF toScene(const QPointF &point) const;
   QPointF toView(const QPointF &point) const;
   QRectF toView(const QRectF &rect) const;
+  const ui::SequenceMessageLayout *
+  hitSequenceMessageAt(const ui::SequenceDiagramLayout &layout,
+                       const QPointF &scenePoint) const;
   const NodePresentation *hitNode(const QPointF &scenePoint) const;
   const ContainerPresentation *hitContainer(const QPointF &scenePoint) const;
   const ContainerPresentation *
@@ -561,7 +619,9 @@ private:
   void updateAnnotationPreview(const QPointF &scenePoint);
   void commitAnnotationPreview();
   void cancelAnnotationPreview();
-  bool startConnectorGesture(const QString &relationshipType);
+  bool startConnectorGesture(const QString &relationshipType,
+                             bool allowNodeBody = false);
+  void requestConnectionDestination(PendingConnectionDestination destination);
   void updateRelationshipToolboxCandidate(const QPointF &viewPoint);
   void clearRelationshipToolboxCandidate();
   void updateArrangementToolboxCandidate(const QPointF &viewPoint);
@@ -670,6 +730,10 @@ private:
   QString m_selectedSequenceActivation;
   QSet<QString> m_selectedSequenceCombinedFragments;
   QString m_selectedSequenceCombinedFragment;
+  QStringList m_selectedActivityItems;
+  QStringList m_activityLassoBase;
+  QString m_activityGestureNode;
+  bool m_activityGestureMoved = false;
   Interaction m_interaction = Interaction::None;
   QPointF m_pressView;
   QPointF m_pressScene;
@@ -748,6 +812,10 @@ private:
   QPointF m_connectorGestureTargetPoint;
   bool m_connectorGestureSourceSnapped = false;
   bool m_connectorGestureTargetSnapped = false;
+  QPointF m_toolboxRelationshipPressView;
+  bool m_toolboxRelationshipDragged = false;
+  bool m_toolboxRelationshipArmed = false;
+  std::optional<PendingConnectionDestination> m_connectionDestination;
   QString m_noteAttachmentSourceNote;
   QString m_noteAttachmentTargetPresentation;
   QPointF m_noteAttachmentTargetPoint;

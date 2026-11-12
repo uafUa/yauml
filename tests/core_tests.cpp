@@ -8,6 +8,7 @@
 #include "core/model_operation.h"
 #include "core/presentation_layout.h"
 #include "core/project_controller.h"
+#include "core/project_schema.h"
 #include "core/project_serializer.h"
 #include "core/project_serializer_test_support.h"
 #include "core/project_style.h"
@@ -94,6 +95,7 @@ private slots:
   void json5SerializationUsesReadableKeys();
   void actionIconCatalogIsValid();
   void deterministicRoundTrip();
+  void activityGraphEditsRoundTripAndUndo();
   void sequenceImportValidatesResolvesAndPersists();
   void sequenceImportRejectsBrokenReferences();
   void sequenceGuiImportIsUndoable();
@@ -644,6 +646,86 @@ void CoreTests::sequenceGuiImportIsUndoable() {
   controller.redo();
   QCOMPARE(controller.data().diagrams.size(), 2);
   QVERIFY(findDiagram(controller.data(), diagramId));
+}
+
+void CoreTests::activityGraphEditsRoundTripAndUndo() {
+  ProjectController controller;
+  const QString id = controller.addActivityDiagram();
+  const auto graph = [&]() -> const ActivityDiagramData & {
+    return findDiagram(controller.data(), id)->activity;
+  };
+  QVERIFY(!id.isEmpty());
+  QVERIFY(findDiagram(controller.data(), id)->type == DiagramType::Activity);
+  QCOMPARE(graph().nodes.size(), 1);
+  const QString start = graph().nodes.first().id;
+  controller.undo();
+  QVERIFY(!findDiagram(controller.data(), id));
+  controller.redo();
+  QCOMPARE(graph().nodes.first().id, start);
+
+  const auto decision = controller.addActivityNode(
+      id, ActivityNodeType::Decision, {160.0, 220.0});
+  const auto action =
+      controller.addActivityNode(id, ActivityNodeType::Action, {320.0, 320.0});
+  const auto finish =
+      controller.addActivityNode(id, ActivityNodeType::Final, {160.0, 440.0});
+  QVERIFY(controller.editActivityItemText(id, action, QStringLiteral("Retry")));
+  QVERIFY(controller.moveActivityNode(id, action, {360.0, 320.0}));
+  QVERIFY(!controller.addActivityFlow(id, start, decision).isEmpty());
+  const auto retry = controller.addActivityFlow(id, decision, action);
+  QVERIFY(!controller.addActivityFlow(id, decision, finish).isEmpty());
+  QVERIFY(!controller.addActivityFlow(id, action, finish).isEmpty());
+  QVERIFY(controller.editActivityItemText(id, retry, QStringLiteral("failed")));
+  QVERIFY(controller.addActivityFlow(id, finish, action).isEmpty());
+  QVERIFY(controller.addActivityFlow(id, action, start).isEmpty());
+  QCOMPARE(controller.addElementsToDiagram(id, {action}, 0.0, 0.0), 0);
+
+  const ActivityDiagramData original = graph();
+  QVERIFY(controller.deleteActivityItem(id, action));
+  QCOMPARE(graph().nodes.size(), 3);
+  QCOMPARE(graph().flows.size(), 2);
+  controller.undo();
+  QVERIFY(graph() == original);
+  controller.redo();
+  QCOMPARE(graph().flows.size(), 2);
+  controller.undo();
+  QVERIFY(graph() == original);
+
+  QTemporaryDir temporary;
+  QVERIFY(temporary.isValid());
+  ProjectData persisted = controller.data();
+  auto *activity = &findDiagram(persisted, id)->activity;
+  activity->extra.insert(QStringLiteral("future"), true);
+  activity->nodes.first().extra.insert(QStringLiteral("futureNode"), 42);
+  activity->flows.first().extra.insert(QStringLiteral("futureFlow"), 21);
+  QVERIFY(ProjectSerializer::save(temporary.path(), persisted).ok);
+  const auto reloaded = ProjectSerializer::load(temporary.path());
+  QVERIFY(reloaded.ok);
+  const auto *diagram = findDiagram(reloaded.project, id);
+  QVERIFY(diagram);
+  QVERIFY(diagram->activity == *activity);
+
+  activity->flows.first().targetId = QStringLiteral("missing-activity-node");
+  const auto diagnostics = ProjectSerializer::validate(persisted);
+  QVERIFY(std::any_of(diagnostics.cbegin(), diagnostics.cend(),
+                      [](const auto &diagnostic) {
+                        return diagnostic.message.contains(
+                            QStringLiteral("missing-activity-node"));
+                      }));
+
+  ProjectJsonDocuments previous;
+  previous.manifest.insert(QStringLiteral("schemaVersion"), 12);
+  previous.diagrams.insert(
+      QStringLiteral("diagrams"),
+      QJsonArray{
+          QJsonObject{{QStringLiteral("type"), QStringLiteral("sequence")}}});
+  const auto migration = ProjectSchemaMigrator::migrate(previous);
+  QVERIFY(migration.ok);
+  QVERIFY(migration.migrated);
+  QCOMPARE(migration.documents.manifest.value(QStringLiteral("schemaVersion"))
+               .toInt(),
+           kCurrentProjectSchemaVersion);
+  QCOMPARE(migration.documents.diagrams, previous.diagrams);
 }
 
 void CoreTests::sequenceDiagramCanBeCreatedFromUiApi() {

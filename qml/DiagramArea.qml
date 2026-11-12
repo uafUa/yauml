@@ -60,7 +60,7 @@ Rectangle {
                            ? drop.getDataAsString(root.diagramSubjectsMimeType) : "[]"
         const diagramIndex = root.diagramIds.indexOf(root.currentDiagramId)
         const view = diagramIndex >= 0 ? diagramViews.itemAt(diagramIndex) : null
-        if (!view)
+        if (!view || view.diagramCanvas.diagramType === "activity")
             return
         const point = view.mapFromItem(root, drop.x, drop.y)
         view.addTreeItemsAt(elementIds, subjectsJson, point.x, point.y)

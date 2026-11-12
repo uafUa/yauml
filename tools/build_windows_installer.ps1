@@ -205,16 +205,24 @@ function Invoke-InstallerVerificationInstall {
         [switch]$ReplaceExisting
     )
 
-    & $InstallerPath `
-        --root $InstallationRoot `
-        --accept-messages `
-        --accept-licenses `
-        --confirm-command `
-        install io.github.uafua.yauml `
-        YaumlSkipShellIntegration=true
-    if ($LASTEXITCODE -ne 0) {
-        $action = $ReplaceExisting ? "replacement" : "installation"
-        throw "The generated installer's headless $action failed."
+    # The IFW controller can run before --root and installer values are set.
+    # Pass its verification target through the child process environment.
+    $previousVerificationRoot = $env:YAUML_IFW_VERIFICATION_ROOT
+    $env:YAUML_IFW_VERIFICATION_ROOT = $InstallationRoot
+    try {
+        & $InstallerPath `
+            --root $InstallationRoot `
+            --accept-messages `
+            --accept-licenses `
+            --confirm-command `
+            install io.github.uafua.yauml `
+            YaumlSkipShellIntegration=true
+        if ($LASTEXITCODE -ne 0) {
+            $action = $ReplaceExisting ? "replacement" : "installation"
+            throw "The generated installer's headless $action failed."
+        }
+    } finally {
+        $env:YAUML_IFW_VERIFICATION_ROOT = $previousVerificationRoot
     }
 }
 
@@ -410,7 +418,6 @@ try {
         Invoke-InstallerVerificationInstall `
             -InstallerPath $installerPath `
             -InstallationRoot $verificationRoot
-        Assert-WindowsUninstallEntry -InstallationRoot $verificationRoot
 
         $installedGuiExecutable = Join-Path $verificationRoot "yauml.exe"
         $installedCliExecutable =
@@ -420,6 +427,20 @@ try {
         if ($LASTEXITCODE -ne 0) {
             throw "The installed CLI validation check failed."
         }
+        foreach ($relativePath in Get-YaumlSequenceAuthoringFiles) {
+            if (-not (Test-Path -LiteralPath `
+                    (Join-Path $verificationRoot $relativePath) -PathType Leaf)) {
+                throw "Sequence authoring file is missing after install: $relativePath"
+            }
+        }
+        & $installedCliExecutable sequence-validate `
+            (Join-Path $repositoryRoot "examples\sample.yauml") `
+            (Join-Path $verificationRoot `
+                "examples\sequence-import\standalone-demo.sequence.json5")
+        if ($LASTEXITCODE -ne 0) {
+            throw "The installed sequence example failed validation."
+        }
+        Assert-WindowsUninstallEntry -InstallationRoot $verificationRoot
 
         # Also test installing the downloaded installer over an existing copy.
         # A marker distinguishes a real replacement from an unsafe file overlay.

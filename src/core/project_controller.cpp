@@ -2221,25 +2221,40 @@ QString ProjectController::addElement(const QString &type,
                                       const QString &diagramId) {
   return addElementAtImpl(type, diagramId,
                           std::numeric_limits<qreal>::quiet_NaN(),
-                          std::numeric_limits<qreal>::quiet_NaN(), false);
+                          std::numeric_limits<qreal>::quiet_NaN(), false)
+      .elementId;
 }
 
 QString ProjectController::addElementAt(const QString &type,
                                         const QString &diagramId, qreal x,
                                         qreal y) {
-  return addElementAtImpl(type, diagramId, x, y, false);
+  return addElementAtImpl(type, diagramId, x, y, false).elementId;
 }
 
 QString ProjectController::addElementCenteredAt(const QString &type,
                                                 const QString &diagramId,
                                                 qreal centerX, qreal centerY) {
-  return addElementAtImpl(type, diagramId, centerX, centerY, true);
+  return addElementAtImpl(type, diagramId, centerX, centerY, true).elementId;
 }
 
-QString ProjectController::addElementAtImpl(const QString &type,
-                                            const QString &diagramId, qreal x,
-                                            qreal y,
-                                            bool coordinatesAreCenter) {
+QString ProjectController::addConnectedElement(
+    const QString &type, const QString &diagramId, const QPointF &center,
+    const QString &sourceNodeId, const QString &relationshipType,
+    ConnectorRouting routing, const ConnectorAnchor &sourceAnchor) {
+  bool valid = false;
+  const auto parsedType = relationshipTypeFromString(relationshipType, &valid);
+  if (!valid || !std::isfinite(center.x()) || !std::isfinite(center.y()))
+    return {};
+  const ElementCreationOrigin origin{sourceNodeId, parsedType, routing,
+                                     sourceAnchor};
+  return addElementAtImpl(type, diagramId, center.x(), center.y(), true,
+                          &origin)
+      .connectorId;
+}
+
+ProjectController::CreatedElement ProjectController::addElementAtImpl(
+    const QString &type, const QString &diagramId, qreal x, qreal y,
+    bool coordinatesAreCenter, const ElementCreationOrigin *origin) {
   bool ok = false;
   const ElementType elementType = elementTypeFromString(type, &ok);
   if (!ok) {
@@ -2248,6 +2263,13 @@ QString ProjectController::addElementAtImpl(const QString &type,
         QStringLiteral("Unknown element type: %1").arg(type));
     return {};
   }
+  const auto *diagram = findDiagram(m_data, diagramId);
+  const auto *sourceNode =
+      origin && diagram && diagram->type == DiagramType::Class
+          ? findNode(*diagram, origin->nodeId)
+          : nullptr;
+  if (origin && (!sourceNode || elementType == ElementType::Package))
+    return {};
   ModelElement element;
   element.id = newId();
   element.type = elementType;
@@ -2272,7 +2294,7 @@ QString ProjectController::addElementAtImpl(const QString &type,
 
   std::optional<NodePresentation> nodePresentation;
   std::optional<ContainerPresentation> containerPresentation;
-  if (const auto *diagram = findDiagram(m_data, diagramId)) {
+  if (diagram && diagram->type == DiagramType::Class) {
     if (elementType == ElementType::Package) {
       ContainerPresentation container;
       container.id = newId();
@@ -2305,11 +2327,34 @@ QString ProjectController::addElementAtImpl(const QString &type,
       nodePresentation = std::move(node);
     }
   }
+  std::optional<NewElementConnection> connection;
+  if (origin && sourceNode && nodePresentation) {
+    connection.emplace();
+    auto &[relationship, connector] = *connection;
+    relationship.id = newId();
+    relationship.type = origin->type;
+    relationship.sourceId = sourceNode->elementId;
+    relationship.targetId = element.id;
+    connector.id = newId();
+    connector.relationshipId = relationship.id;
+    connector.routing = origin->routing;
+    connector.sourceAnchor = origin->anchor;
+    connector.targetAnchor =
+        edgeAnchorToward(nodePresentation->geometry,
+                         anchorPoint(sourceNode->geometry, origin->anchor));
+  }
+  const CreatedElement result{element.id, connection ? connection->connector.id
+                                                     : QString{}};
+  const QString relationshipId =
+      connection ? connection->relationship.id : QString{};
   pushCommand(std::make_unique<CreateElementCommand>(
       this, m_data, element, diagramId, std::move(nodePresentation),
-      std::move(containerPresentation)));
-  selectObject(element.id, QStringLiteral("element"));
-  return element.id;
+      std::move(containerPresentation), std::move(connection)));
+  if (relationshipId.isEmpty())
+    selectObject(result.elementId, QStringLiteral("element"));
+  else
+    selectObject(relationshipId, QStringLiteral("relationship"));
+  return result;
 }
 
 QString ProjectController::addDiagram() {
@@ -2379,7 +2424,7 @@ QVariantList ProjectController::diagramTransferTargets(
       {QStringLiteral("id"), QString{}},
       {QStringLiteral("name"), QStringLiteral("New diagram\u2026")}});
   for (const auto &diagram : m_data.diagrams) {
-    if (diagram.id == sourceDiagramId)
+    if (diagram.id == sourceDiagramId || diagram.type == DiagramType::Activity)
       continue;
     targets.append(QVariantMap{{QStringLiteral("id"), diagram.id},
                                {QStringLiteral("name"), diagram.name}});
@@ -2935,7 +2980,8 @@ int ProjectController::addElementsToDiagram(const QString &diagramId,
                                             qreal x, qreal y,
                                             const QString &sizingMode) {
   const auto *diagram = findDiagram(m_data, diagramId);
-  if (!diagram || elementIds.isEmpty())
+  if (!diagram || diagram->type == DiagramType::Activity ||
+      elementIds.isEmpty())
     return 0;
   if (diagram->type == DiagramType::Sequence)
     return addElementsToSequenceDiagram(diagramId, elementIds, x);
@@ -3099,7 +3145,7 @@ int ProjectController::addTreeItemsToDiagram(const QString &diagramId,
                                              qreal x, qreal y,
                                              const QString &sizingMode) {
   const auto *diagram = findDiagram(m_data, diagramId);
-  if (!diagram)
+  if (!diagram || diagram->type == DiagramType::Activity)
     return 0;
   // Sequence diagrams deliberately have no package/folder presentations.
   // An explicitly selected type maps to exactly one participant; only an
@@ -3521,7 +3567,8 @@ int ProjectController::addEmptyPackageToDiagram(const QString &diagramId,
                                                 const QString &packageId) {
   const auto *diagram = findDiagram(m_data, diagramId);
   const auto *package = findElement(m_data, packageId);
-  if (!diagram || !package || package->type != ElementType::Package)
+  if (!diagram || diagram->type != DiagramType::Class || !package ||
+      package->type != ElementType::Package)
     return 0;
   if (packageContainerFor(*diagram, packageId)) {
     m_diagnostics.addInfo(
@@ -3681,7 +3728,8 @@ bool ProjectController::wrapPresentationInPackage(
 
 QString ProjectController::addNote(const QString &diagramId, qreal centerX,
                                    qreal centerY) {
-  if (!findDiagram(m_data, diagramId))
+  const auto *diagram = findDiagram(m_data, diagramId);
+  if (!diagram || diagram->type == DiagramType::Activity)
     return {};
   constexpr qreal width = 180.0;
   constexpr qreal height = 140.0;
@@ -3854,7 +3902,7 @@ QString ProjectController::transferDiagramPresentations(
   const bool createTarget = requestedTargetDiagramId.isEmpty();
   if (!createTarget) {
     const auto *target = findDiagram(m_data, requestedTargetDiagramId);
-    if (!target)
+    if (!target || target->type == DiagramType::Activity)
       return {};
     if (!targetAcceptsSelection(*target)) {
       m_diagnostics.addWarning(
@@ -5111,7 +5159,7 @@ ProjectController::diagramDisplayOptions(const QString &diagramId,
 void ProjectController::setDiagramDisplayOptions(const QString &diagramId,
                                                  const QVariantMap &values) {
   const auto *diagram = findDiagram(m_data, diagramId);
-  if (!diagram)
+  if (!diagram || diagram->type == DiagramType::Activity)
     return;
 
   const DiagramDisplayOptions before = displayOptions(*diagram);

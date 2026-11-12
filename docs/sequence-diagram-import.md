@@ -241,7 +241,8 @@ sequence layout. SVG is a vector illustration; Draw.io preserves the layout as
 editable drawing objects rather than as a round-trip yauml project.
 
 Participant headers can be moved horizontally and messages vertically without
-changing their order. Drag from a lifeline or activation to another lifeline,
+changing their order. Grab the message arrow or its visible label to move it.
+Drag from a lifeline or activation to another lifeline,
 activation, or participant header to create a message at that interaction row.
 If the chosen row has insufficient space, later messages move down as part of
 the same undo operation. Self-messages use the same gesture. While holding the
@@ -291,10 +292,13 @@ message text support in-place editing.
 Select one or more lifelines, then use **New combined fragment…** from the
 diagram context menu to add an `opt`, `loop`, `alt`, `par`, or `critical` frame.
 Frames are edited through their border context menu and use message boundaries,
-not free pixel coordinates. The UI can additionally create free-positioned
-activation bars when no suitable boundary messages exist. Type and container
-drops from the project tree create participants; class-diagram node,
-relationship, and note creation remain disabled on sequence diagrams.
+not free pixel coordinates. The frame fits the complete self-message loops in
+its scope and places its heading on a separate row above the first message
+label without changing the selected message range. The UI can additionally
+create free-positioned activation bars when no suitable boundary messages
+exist. Type and container drops from the project tree create participants;
+class-diagram node, relationship, and note creation remain disabled on
+sequence diagrams.
 
 A selected activation shows resize handles at both ends. Dragging a handle
 snaps to nearby messages on the same participant and retains stable message-ID

@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/activity_diagram.h"
 #include "core/project_schema_version.h"
 
 #include <QHash>
@@ -14,7 +15,7 @@
 namespace yauml {
 
 enum class ElementType { Package, Class, Struct, Enumeration };
-enum class DiagramType { Class, Sequence };
+enum class DiagramType { Class, Sequence, Activity };
 enum class RelationshipType {
   Dependency,
   Generalization,
@@ -485,6 +486,7 @@ struct Diagram {
   // previous hidden behavior explicitly for existing projects.
   bool showSequenceMessageStereotypes = true;
   QJsonObject sequenceExtra;
+  ActivityDiagramData activity;
   QJsonObject extra;
 
   bool operator==(const Diagram &) const = default;

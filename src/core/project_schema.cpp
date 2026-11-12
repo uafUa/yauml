@@ -301,6 +301,11 @@ void migrateVersionElevenToTwelve(ProjectJsonDocuments &documents) {
   documents.manifest.insert(QStringLiteral("schemaVersion"), 12);
 }
 
+// Schema 13 adds a new diagram kind. Existing diagrams retain their records.
+void migrateVersionTwelveToThirteen(ProjectJsonDocuments &documents) {
+  documents.manifest.insert(QStringLiteral("schemaVersion"), 13);
+}
+
 } // namespace
 
 SchemaMigrationOutcome
@@ -371,6 +376,10 @@ ProjectSchemaMigrator::migrate(ProjectJsonDocuments documents) {
     case 11:
       migrateVersionElevenToTwelve(outcome.documents);
       version = 12;
+      break;
+    case 12:
+      migrateVersionTwelveToThirteen(outcome.documents);
+      version = 13;
       break;
     default:
       outcome.diagnostics.append(schemaError(

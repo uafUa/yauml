@@ -3,6 +3,8 @@
 #include "core/model_operation.h"
 #include "core/presentation_layout.h"
 
+#include <QFontMetricsF>
+#include <QGuiApplication>
 #include <QHash>
 #include <QLineF>
 #include <algorithm>
@@ -22,8 +24,11 @@ constexpr qreal kActivationWidth = 14.0;
 constexpr qreal kMinimumActivationHeight = 24.0;
 constexpr qreal kSiblingActivationGap = 4.0;
 constexpr qreal kFragmentHorizontalMargin = 16.0;
-constexpr qreal kFragmentTopPadding = 20.0;
+constexpr qreal kFragmentHeadingInsetX = 8.0;
+constexpr qreal kFragmentHeadingInsetY = 1.0;
+constexpr qreal kFragmentHeadingGap = 6.0;
 constexpr qreal kFragmentBottomPadding = 18.0;
+constexpr qreal kFragmentLoopClearance = 6.0;
 constexpr qreal kParticipantPrimaryHeight = 28.0;
 constexpr qreal kParticipantSecondaryHeight = 18.0;
 
@@ -125,6 +130,85 @@ QRectF pointsBounds(const QVector<QPointF> &points) {
     bottom = std::max(bottom, point.y());
   }
   return QRectF(QPointF(left, top), QPointF(right, bottom)).normalized();
+}
+
+struct SelfMessageExtent {
+  qreal row;
+  QRectF bounds;
+};
+
+void layoutCombinedFragments(
+    SequenceDiagramLayout &layout, const Diagram &diagram,
+    const QHash<QString, qreal> &messageYById,
+    const QHash<QString, QVector<SelfMessageExtent>> &selfMessagesByParticipant,
+    bool &hasBounds) {
+  for (const SequenceCombinedFragment &fragment :
+       diagram.sequenceCombinedFragments) {
+    const auto start = messageYById.constFind(fragment.startMessageId);
+    const auto end = messageYById.constFind(fragment.endMessageId);
+    if (start == messageYById.cend() || end == messageYById.cend())
+      continue;
+
+    qreal left = std::numeric_limits<qreal>::infinity();
+    qreal right = -std::numeric_limits<qreal>::infinity();
+    qreal bottom = *end + kFragmentBottomPadding;
+    for (const QString &participantId : fragment.participantIds) {
+      const auto participant = std::find_if(
+          layout.participants.cbegin(), layout.participants.cend(),
+          [&participantId](const SequenceParticipantLayout &candidate) {
+            return candidate.id == participantId;
+          });
+      if (participant == layout.participants.cend())
+        continue;
+      left = std::min(left, participant->headerRect.left());
+      right = std::max(right, participant->headerRect.right());
+
+      // The declared lifelines still define the scope. A self-message on one
+      // of those lifelines can protrude to the right and below its own row.
+      const auto selfMessages =
+          selfMessagesByParticipant.constFind(participantId);
+      if (selfMessages == selfMessagesByParticipant.cend())
+        continue;
+      for (const SelfMessageExtent &message : *selfMessages) {
+        if (message.row < *start || message.row > *end)
+          continue;
+        left = std::min(left, message.bounds.left());
+        right = std::max(right, message.bounds.right());
+        bottom =
+            std::max(bottom, message.bounds.bottom() + kFragmentLoopClearance);
+      }
+    }
+    if (!std::isfinite(left) || !std::isfinite(right))
+      continue;
+
+    // Reserve a full heading row before the first message's label row. The
+    // frame grows around the messages; their stored positions are unchanged.
+    const qreal headingHeight = presentation_layout::kNodeLineHeight;
+    const qreal top = *start - kMessageLabelHeight - kFragmentHeadingGap -
+                      headingHeight - kFragmentHeadingInsetY;
+    SequenceCombinedFragmentLayout visual;
+    visual.id = fragment.id;
+    visual.type = fragment.type;
+    visual.rect = QRectF(left - kFragmentHorizontalMargin, top,
+                         right - left + kFragmentHorizontalMargin * 2.0,
+                         std::max(1.0, bottom - top));
+    visual.headingRect = {visual.rect.left() + kFragmentHeadingInsetX,
+                          top + kFragmentHeadingInsetY,
+                          visual.rect.width() - kFragmentHeadingInsetX * 2.0,
+                          headingHeight};
+    for (qsizetype operandIndex = 0; operandIndex < fragment.operands.size();
+         ++operandIndex) {
+      const auto &operand = fragment.operands.at(operandIndex);
+      SequenceCombinedFragmentOperandLayout operandLayout;
+      operandLayout.guard = operand.guard;
+      if (operandIndex > 0 && messageYById.contains(operand.startMessageId))
+        operandLayout.dividerY =
+            messageYById.value(operand.startMessageId) - 12.0;
+      visual.operands.append(std::move(operandLayout));
+    }
+    includeRect(layout.contentBounds, hasBounds, visual.rect);
+    layout.fragments.append(std::move(visual));
+  }
 }
 
 // A message belongs to the innermost activation that is active at its row.
@@ -386,53 +470,7 @@ SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
     }
   }
 
-  // Combined fragments are computed before messages so the renderer can paint
-  // their frames behind lifelines, bars, and arrows. Scope follows the
-  // explicitly selected lifelines rather than incidental message endpoints.
-  for (const SequenceCombinedFragment &fragment :
-       diagram.sequenceCombinedFragments) {
-    if (!messageYById.contains(fragment.startMessageId) ||
-        !messageYById.contains(fragment.endMessageId))
-      continue;
-    qreal left = std::numeric_limits<qreal>::infinity();
-    qreal right = -std::numeric_limits<qreal>::infinity();
-    for (const QString &participantId : fragment.participantIds) {
-      const auto participant = std::find_if(
-          layout.participants.cbegin(), layout.participants.cend(),
-          [&participantId](const SequenceParticipantLayout &candidate) {
-            return candidate.id == participantId;
-          });
-      if (participant == layout.participants.cend())
-        continue;
-      left = std::min(left, participant->headerRect.left());
-      right = std::max(right, participant->headerRect.right());
-    }
-    if (!std::isfinite(left) || !std::isfinite(right))
-      continue;
-    const qreal top =
-        messageYById.value(fragment.startMessageId) - kFragmentTopPadding;
-    const qreal bottom =
-        messageYById.value(fragment.endMessageId) + kFragmentBottomPadding;
-    SequenceCombinedFragmentLayout visual;
-    visual.id = fragment.id;
-    visual.type = fragment.type;
-    visual.rect = QRectF(left - kFragmentHorizontalMargin, top,
-                         right - left + kFragmentHorizontalMargin * 2.0,
-                         std::max(1.0, bottom - top));
-    for (qsizetype operandIndex = 0; operandIndex < fragment.operands.size();
-         ++operandIndex) {
-      const auto &operand = fragment.operands.at(operandIndex);
-      SequenceCombinedFragmentOperandLayout operandLayout;
-      operandLayout.guard = operand.guard;
-      if (operandIndex > 0 && messageYById.contains(operand.startMessageId))
-        operandLayout.dividerY =
-            messageYById.value(operand.startMessageId) - 12.0;
-      visual.operands.append(std::move(operandLayout));
-    }
-    includeRect(layout.contentBounds, hasBounds, visual.rect);
-    layout.fragments.append(std::move(visual));
-  }
-
+  QHash<QString, QVector<SelfMessageExtent>> selfMessagesByParticipant;
   for (const SequenceMessage &message : diagram.sequenceMessages) {
     if (!lifelineXByParticipant.contains(message.sourceParticipantId) ||
         !lifelineXByParticipant.contains(message.targetParticipantId))
@@ -454,7 +492,9 @@ SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
         activationLayoutById(layout, message.sourceActivationId);
     const auto *sourceActivation =
         closingActivation ? closingActivation : explicitSourceActivation;
-    if (message.sourceParticipantId == message.targetParticipantId) {
+    const bool selfMessage =
+        message.sourceParticipantId == message.targetParticipantId;
+    if (selfMessage) {
       const qreal startX =
           sourceActivation
               ? sourceActivation->rect.right()
@@ -506,12 +546,22 @@ SequenceDiagramLayout buildSequenceDiagramLayout(const ProjectData &project,
       visual.labelRect = QRectF(left + 8.0, message.y - kMessageLabelHeight,
                                 width, kMessageLabelHeight);
     }
+    const QRectF pathBounds = pointsBounds(visual.points);
+    if (selfMessage && !diagram.sequenceCombinedFragments.isEmpty()) {
+      const QRectF extent = visual.text.isEmpty()
+                                ? pathBounds
+                                : pathBounds.united(visual.labelRect);
+      selfMessagesByParticipant[message.sourceParticipantId].append(
+          SelfMessageExtent{message.y, extent});
+    }
     includeRect(layout.contentBounds, hasBounds,
-                pointsBounds(visual.points).adjusted(-8.0, -8.0, 8.0, 8.0));
+                pathBounds.adjusted(-8.0, -8.0, 8.0, 8.0));
     includeRect(layout.contentBounds, hasBounds, visual.labelRect);
     layout.messages.append(std::move(visual));
   }
 
+  layoutCombinedFragments(layout, diagram, messageYById,
+                          selfMessagesByParticipant, hasBounds);
   if (hasBounds)
     layout.contentBounds.adjust(-24.0, -24.0, 24.0, 24.0);
   return layout;
@@ -543,19 +593,43 @@ hitSequenceLifeline(const SequenceDiagramLayout &layout,
 
 const SequenceMessageLayout *
 hitSequenceMessage(const SequenceDiagramLayout &layout,
-                   const QPointF &scenePoint, qreal tolerance) {
+                   const QPointF &scenePoint, qreal tolerance,
+                   bool labelsVisible) {
+  // Prefer an actual arrow over a nearby label from another message.
   for (auto message = layout.messages.crbegin();
        message != layout.messages.crend(); ++message) {
-    if (message->labelRect
-            .adjusted(-tolerance, -tolerance, tolerance, tolerance)
-            .contains(scenePoint))
-      return &*message;
     for (qsizetype index = 1; index < message->points.size(); ++index)
       if (distanceToSegment(scenePoint, message->points.at(index - 1),
                             message->points.at(index)) <= tolerance)
         return &*message;
   }
+  if (!labelsVisible)
+    return nullptr;
+
+  // labelRect is the space available to lay out the text, often almost the
+  // entire span between lifelines. Only the displayed label is interactive.
+  for (auto message = layout.messages.crbegin();
+       message != layout.messages.crend(); ++message) {
+    if (message->text.isEmpty() || !message->labelRect.contains(scenePoint))
+      continue;
+    const auto label =
+        sequenceMessageLabelForDisplay(*message, QGuiApplication::font());
+    if (!label.text.isEmpty() &&
+        QFontMetricsF(label.font)
+            .boundingRect(message->labelRect, Qt::AlignCenter, label.text)
+            .contains(scenePoint))
+      return &*message;
+  }
   return nullptr;
+}
+
+SequenceMessageLabel sequenceMessageLabelForDisplay(
+    const SequenceMessageLayout &message, QFont font) {
+  if (message.confidence == SequenceEvidenceConfidence::Inferred)
+    font.setItalic(true);
+  QString text = QFontMetricsF(font).elidedText(
+      message.text, Qt::ElideRight, std::floor(message.labelRect.width()));
+  return {std::move(text), std::move(font)};
 }
 
 const SequenceActivationLayout *

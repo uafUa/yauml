@@ -38,6 +38,7 @@ Its main advantages are:
 - Keeping explanatory UML diagrams synchronized with evolving source code.
 - Documenting runtime interactions, asynchronous hand-offs, and execution
   contexts with sequence diagrams.
+- Describing workflows, decisions, and parallel steps with activity diagrams.
 
 The source model and its diagrams are separate. A type can appear on several
 diagrams, each with a different layout, level of detail, filter, or visual
@@ -100,6 +101,15 @@ folders.
 - A documented JSON5 interchange format for creating source-evidenced
   sequence diagrams with tools such as Codex.
 
+The installer and portable ZIP include the
+[Codex sequence authoring skill](.agents/skills/create-yauml-sequence-diagram/SKILL.md),
+the [format specification](docs/sequence-diagram-import.md), and a
+[standalone import example](examples/sequence-import/standalone-demo.sequence.json5).
+Open the `README.md` next to `yauml.exe` to find them. Give Codex the full path
+to `SKILL.md`, the target `.yauml` project, and the scenario to trace. For
+validation, use `yauml-cli.exe` from the same installation directory. You can
+try the bundled example through **File > Import Sequence Diagram…**.
+
 ### Local and safe
 
 - Projects are ordinary local directories containing readable JSON5 files.
@@ -124,13 +134,21 @@ Development builds are also available from successful
 
 ## Current focus
 
-`yauml` currently concentrates on class, architecture, and sequence diagrams
-for understanding existing C++ systems. It is not intended to be a complete
-implementation of every UML diagram type or a code generator.
+`yauml` currently concentrates on class, architecture, sequence, and activity
+diagrams for understanding existing C++ systems. It is not intended to be a
+complete implementation of every UML diagram type or a code generator.
 
 The product direction and completed feature slices are tracked in
 [the productization plan](docs/productization-plan.md). Release and packaging
 instructions are in [the release guide](docs/releasing.md).
+
+The repository is designed to carry development context between independent
+Codex sessions without depending on chat history. A fresh session starts with
+[`AGENTS.md`](AGENTS.md), then reads the
+stable [development context](docs/development-context.md) and the rolling
+[current handover](docs/current-handover.md). Every submitted slice updates the
+handover in the same commit. Reproducible setup, packaging, and cross-OS Git
+checks are in the [platform runbook](docs/platform-runbook.md).
 
 ## Credits
 

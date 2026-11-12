@@ -58,6 +58,7 @@ history memory grow with total project size rather than the size of each edit.
   diagram commands.
 - Canvas and tab diagram menus now share one component, so filtering, element
   creation, diagram compartment defaults, and fit-to-diagram remain identical.
+  Creation entries come first, before display and filtering options.
   Tab-originated element creation uses the visible viewport center because a
   tab has no scene pointer position. Double-clicking a tab selects the diagram
   in the property inspector and expands that panel when necessary.
@@ -147,8 +148,8 @@ history memory grow with total project size rather than the size of each edit.
   and containment/nesting. Each type has distinct persisted semantics, default
   text, line style, endpoint decoration, creation actions, and undo/redo.
   Aggregation, composition, and containment use the source as the whole/owner
-  end; the other directed types point toward the target. Behavioral-diagram
-  connectors remain outside the current product direction.
+  end; the other directed types point toward the target. Activity control
+  flows are separate diagram-local records.
 - Edge-gesture connector creation is implemented. While the pointer button is
   held on a node edge, pressing the relationship hotkey enters a live
   drag-to-connect preview using the configured default routing. Defaults are
@@ -157,8 +158,13 @@ history memory grow with total project size rather than the size of each edit.
   containment. The initial press and final drop positions become exact
   persisted perimeter attachments. Releasing over any node—including the
   originating node—commits one relationship command; self-connections receive
-  a persisted outside loop. Escape or a drop on empty space discards the
-  candidate without changing the model or undo history.
+  a persisted outside loop. Shift-drag from the body or edge starts a
+  dependency, and a relationship hotkey can switch its type while dragging.
+  Releasing on empty canvas opens a panel with a relationship-type selector
+  and Class, Struct, or Enumeration destinations. The new type, presentation,
+  and relationship are one undo step. Escape or panel dismissal discards the
+  candidate. A click in the edge toolbox arms the chosen relationship for a
+  second click on the canvas. Dragging the toolbox button places it directly.
 - Direct endpoint manipulation is implemented and replaces the modal
   **Reconnect source…** and **Reconnect target…** actions. A selected connector
   exposes fully visible draggable endpoint handles. Starting a drag
@@ -679,12 +685,15 @@ history memory grow with total project size rather than the size of each edit.
 - A project-scoped Codex skill documents a source-evidenced workflow for
   generating, validating, and importing scenarios without direct edits to
   canonical project JSON5. Confirmed and inferred runtime behavior remain
-  explicit.
+  explicit. The installer and portable ZIP include the skill, the interchange
+  specification, and a standalone import example.
 - The first Qt Quick scene-graph rendering slice is implemented: participant
   headers and lifelines, sync/async/return/create/destroy/self messages,
   activation bars, execution-context labels, evidence styling, hit testing,
   fit-to-content, and PNG/PDF/SVG/Draw.io export all share one deterministic
-  layout.
+  layout. Combined fragments fit complete self-message loops and reserve a
+  separate heading row without changing message boundaries. Message picking
+  uses the arrow or the measured label, not the empty space around it.
 - Participant horizontal movement, message vertical movement with strict order,
   participant/message selection, Ctrl+A, and in-place text editing use focused
   polymorphic commands with undo/redo coverage. Bound participant headers use a
@@ -746,6 +755,21 @@ history memory grow with total project size rather than the size of each edit.
   shortcuts for participants, messages, activations, fragments, editing, and
   deletion. Each shortcut delegates to the same dialog or focused command used
   by pointer interaction.
+
+## Phase 8: activity diagrams — manual authoring baseline
+
+The first slice adds a diagram-local control-flow graph with UML actions,
+initial and activity-final nodes, decisions and merges, and fork/join nodes.
+The editor supports direct placement, Shift-drag transitions, creation of a
+destination from an empty drop, editable guards, undo/redo, project validation,
+and PNG/PDF export. Lasso and Ctrl selection include nodes and flows. The
+selected nodes can move, align, distribute, or use the shared automatic layout
+preview. See the
+[activity diagram guide](activity-diagrams.md) for interaction and compatibility.
+
+Follow-up scope includes partitions, object flows, source-operation links,
+interchange import, and vector export. Define each against real workflow
+examples before expanding the schema or editor.
 
 ## Release gates for every tranche
 

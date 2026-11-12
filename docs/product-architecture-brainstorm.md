@@ -1,9 +1,14 @@
 # yauml: Product and Architecture Brainstorm
 
-Status: historical product and architecture framing; MVP accepted on 2026-07-21
-in the archived [`mvp-scope.md`](archive/mvp-scope.md). Current priorities and
-completed slices are tracked in the
-[productization plan](productization-plan.md).
+Status: **Historical** product and architecture framing. It is superseded as a
+description of the current implementation by
+[`development-context.md`](development-context.md) and the
+[`productization plan`](productization-plan.md). The MVP was accepted on
+2026-07-21 and its original boundary is retained in the archived
+[`mvp-scope.md`](archive/mvp-scope.md).
+
+Sections below that say “proposed”, “future”, or “suggested next step” record
+the design process; they do not constrain the current implementation path.
 
 ## 1. Working vision
 
