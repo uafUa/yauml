@@ -543,6 +543,11 @@ history memory grow with total project size rather than the size of each edit.
   duplicate validation and a restore-defaults action. Reclassification keeps
   stable bindings and therefore uses the normal user-authoritative conflict
   rules.
+- Template uses also connect to the imported primary template declaration for
+  type, numeric, mixed, defaulted, and empty-pack arguments. Aliases and partial
+  specializations resolve through Clang identity. Template-argument relations
+  and their wrapper policies remain separate, and numeric arguments do not
+  implicitly become the multiplicity of the template-object relationship.
 - C++ implementation-file declarations receive the project catalog's `local`
   stereotype. The binding tracks only that derived assignment as source-owned:
   moving the declaration to a header removes it, while manual `private`, `api`,

@@ -69,7 +69,7 @@ data merely to satisfy the command.
 After the complete Release test pass:
 
 ```powershell
-$YaumlVersion = '0.14.0'
+$YaumlVersion = '0.14.1'
 $env:QIFW_ROOT = 'C:\Qt\Tools\QtInstallerFramework\4.11'
 
 .\tools\package_windows.ps1 `

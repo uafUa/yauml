@@ -1430,6 +1430,46 @@ QStringList templateArgumentSpellings(const QString &spelling) {
   return arguments;
 }
 
+CXCursor primaryRecordDeclaration(CXCursor declaration) {
+  // The model imports the template declaration, not every implicit A<...>
+  // specialization. Follow Clang identity rather than matching type spelling;
+  // this also covers aliases and specializations originating from a partial.
+  for (int depth = 0; depth < 12 && !clang_Cursor_isNull(declaration);
+       ++depth) {
+    const CXCursor primary = clang_getSpecializedCursorTemplate(declaration);
+    if (clang_Cursor_isNull(primary) ||
+        clang_equalCursors(primary, declaration))
+      break;
+    declaration = primary;
+  }
+  return declaration;
+}
+
+void appendRecordTypeTarget(CXCursor declaration,
+                            const TypeTraversal &traversal,
+                            QList<TypeTarget> &targets) {
+  declaration = primaryRecordDeclaration(declaration);
+  if (clang_Cursor_isNull(declaration))
+    return;
+  const CXCursorKind kind = clang_getCursorKind(declaration);
+  if (kind != CXCursor_ClassDecl && kind != CXCursor_StructDecl &&
+      kind != CXCursor_ClassTemplate &&
+      kind != CXCursor_ClassTemplatePartialSpecialization)
+    return;
+  const QString symbolId = takeString(clang_getCursorUSR(declaration));
+  if (symbolId.isEmpty())
+    return;
+  TypeTarget target;
+  target.symbolId = symbolId;
+  target.wrapperTypes = traversal.wrapperTypes;
+  target.wrapperArguments = traversal.wrapperArguments;
+  target.templateArgumentPath = traversal.templateArgumentPath;
+  target.structuralMultiplicities = traversal.structuralMultiplicities;
+  target.rawPointer = traversal.rawPointer;
+  target.reference = traversal.reference;
+  targets.append(std::move(target));
+}
+
 void collectTypeTargets(CXType type, TypeTraversal traversal,
                         QList<TypeTarget> &targets, int depth = 0) {
   if (depth > 12 || type.kind == CXType_Invalid)
@@ -1471,6 +1511,11 @@ void collectTypeTargets(CXType type, TypeTraversal traversal,
     templateArgumentCount = clang_Type_getNumTemplateArguments(templateType);
   }
   if (templateArgumentCount >= 0) {
+    // A field owns one A<N> object, independently of what N denotes. Record
+    // the template itself before descending into its arguments, so its own
+    // pointer/container policy cannot be mistaken for ownership of A itself.
+    appendRecordTypeTarget(clang_getTypeDeclaration(canonical), traversal,
+                            targets);
     const QString wrapper = templateName(templateType);
     const QStringList argumentSpellings =
         templateArgumentSpellings(typeSpelling(templateType));
@@ -1488,28 +1533,7 @@ void collectTypeTargets(CXType type, TypeTraversal traversal,
     return;
   }
 
-  const CXCursor declaration = clang_getTypeDeclaration(canonical);
-  if (clang_Cursor_isNull(declaration))
-    return;
-  const CXCursorKind declarationKind = clang_getCursorKind(declaration);
-  if (declarationKind != CXCursor_ClassDecl &&
-      declarationKind != CXCursor_StructDecl &&
-      declarationKind != CXCursor_ClassTemplate &&
-      declarationKind != CXCursor_ClassTemplatePartialSpecialization)
-    return;
-  const QString symbolId = takeString(clang_getCursorUSR(declaration));
-  if (symbolId.isEmpty())
-    return;
-  TypeTarget target;
-  target.symbolId = symbolId;
-  target.wrapperTypes = std::move(traversal.wrapperTypes);
-  target.wrapperArguments = std::move(traversal.wrapperArguments);
-  target.templateArgumentPath = std::move(traversal.templateArgumentPath);
-  target.structuralMultiplicities =
-      std::move(traversal.structuralMultiplicities);
-  target.rawPointer = traversal.rawPointer;
-  target.reference = traversal.reference;
-  targets.append(std::move(target));
+  appendRecordTypeTarget(clang_getTypeDeclaration(canonical), traversal, targets);
 }
 
 void appendTypeUses(CXCursor declaration, CXType type,
@@ -1636,7 +1660,8 @@ CXChildVisitResult visitRecordMember(CXCursor cursor, CXCursor,
     if (clang_Cursor_isNull(declaration))
       declaration = clang_getTypeDeclaration(
           clang_getCanonicalType(clang_getCursorType(cursor)));
-    const QString baseSymbolId = takeString(clang_getCursorUSR(declaration));
+    const QString baseSymbolId =
+        takeString(clang_getCursorUSR(primaryRecordDeclaration(declaration)));
     if (!baseSymbolId.isEmpty() &&
         !context.symbol->baseSymbolIds.contains(baseSymbolId))
       context.symbol->baseSymbolIds.append(baseSymbolId);
