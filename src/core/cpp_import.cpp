@@ -941,7 +941,8 @@ CppImportPreview planImport(const CppImportPreview &discovery,
     const QString kind = binding.value(QStringLiteral("kind")).toString();
     if (kind != QStringLiteral("inheritance") &&
         kind != QStringLiteral("containment") &&
-        kind != QStringLiteral("member") && kind != QStringLiteral("signature"))
+        kind != QStringLiteral("member") &&
+        kind != QStringLiteral("signature") && kind != QStringLiteral("body"))
       continue;
     const QString symbolId =
         binding.value(QStringLiteral("symbolId")).toString();
@@ -1161,7 +1162,8 @@ CppImportPreview planImport(const CppImportPreview &discovery,
     const QString kind = binding.value(QStringLiteral("kind")).toString();
     if (kind != QStringLiteral("inheritance") &&
         kind != QStringLiteral("containment") &&
-        kind != QStringLiteral("member") && kind != QStringLiteral("signature"))
+        kind != QStringLiteral("member") &&
+        kind != QStringLiteral("signature") && kind != QStringLiteral("body"))
       continue;
     const QString symbolId =
         binding.value(QStringLiteral("symbolId")).toString();
@@ -1329,6 +1331,7 @@ QString namespacePath(CXCursor cursor) {
 enum class TypeUseContext {
   Member,
   Signature,
+  Body,
 };
 
 struct DiscoveredTypeUse {
@@ -1712,7 +1715,82 @@ struct AstVisitorContext {
   QList<DiscoveredTypeUse> *typeUses;
   QList<Diagnostic> *diagnostics;
   QSet<QString> *declarationFiles;
+  QSet<QString> bodyEndpointPairs;
 };
+
+bool isRecordCursor(CXCursor cursor) {
+  const auto kind = clang_getCursorKind(cursor);
+  return kind == CXCursor_ClassDecl || kind == CXCursor_StructDecl ||
+         kind == CXCursor_ClassTemplate ||
+         kind == CXCursor_ClassTemplatePartialSpecialization;
+}
+
+struct BodyVisitorContext {
+  CppSourceSymbol owner;
+  AstVisitorContext *ast;
+};
+
+void appendBodyTypeUse(CXCursor evidence, CXType type,
+                       BodyVisitorContext &context) {
+  QList<DiscoveredTypeUse> uses;
+  appendTypeUses(evidence, type, TypeUseContext::Body, {}, context.owner, uses);
+  for (auto &use : uses) {
+    if (use.sourceSymbolId == use.targetSymbolId)
+      continue;
+    const QString pair = use.sourceSymbolId + u'\x1f' + use.targetSymbolId;
+    // Retain the first real use as source evidence, not one entry per AST
+    // expression or per method. A large body can reference the same type often.
+    if (!context.ast->bodyEndpointPairs.contains(pair)) {
+      context.ast->bodyEndpointPairs.insert(pair);
+      context.ast->typeUses->append(std::move(use));
+    }
+  }
+}
+
+CXChildVisitResult visitMethodBody(CXCursor cursor, CXCursor,
+                                   CXClientData clientData) {
+  auto &context = *static_cast<BodyVisitorContext *>(clientData);
+  const auto kind = clang_getCursorKind(cursor);
+  // A local class has its own methods. Do not attribute those bodies to the
+  // enclosing method's class. Lambda expressions still recurse normally.
+  if (isRecordCursor(cursor))
+    return CXChildVisit_Continue;
+  if (kind == CXCursor_VarDecl || kind == CXCursor_TypeRef ||
+      kind == CXCursor_TemplateRef || clang_isExpression(kind))
+    appendBodyTypeUse(cursor, clang_getCursorType(cursor), context);
+
+  if (kind == CXCursor_CallExpr || kind == CXCursor_DeclRefExpr ||
+      kind == CXCursor_MemberRefExpr) {
+    const CXCursor referenced = clang_getCursorReferenced(cursor);
+    const CXCursor owner = clang_Cursor_isNull(referenced)
+                               ? clang_getNullCursor()
+                               : clang_getCursorSemanticParent(referenced);
+    // Static calls and void-returning member calls still use their owner type.
+    if (isRecordCursor(owner))
+      appendBodyTypeUse(cursor, clang_getCursorType(owner), context);
+  }
+  return CXChildVisit_Recurse;
+}
+
+void discoverMethodBody(CXCursor cursor, AstVisitorContext &context) {
+  const CXCursor owner = clang_getCursorSemanticParent(cursor);
+  if (!clang_isCursorDefinition(cursor) || !isRecordCursor(owner) ||
+      !supportedSemanticScope(owner) ||
+      clang_Location_isInSystemHeader(clang_getCursorLocation(cursor)))
+    return;
+  const QString file = cursorFilePath(cursor);
+  if (file.isEmpty() || !pathIsWithinAny(file, context.sourceRoots))
+    return;
+
+  BodyVisitorContext body;
+  body.ast = &context;
+  body.owner.symbolId = takeString(clang_getCursorUSR(owner));
+  if (body.owner.symbolId.isEmpty())
+    return;
+  // Semantic ownership also works for Class::method definitions in .cpp files
+  // and for constructors, destructors, operators, and member templates.
+  clang_visitChildren(cursor, visitMethodBody, &body);
+}
 
 bool isPrivateNestedType(CXCursor cursor) {
   const CXCursor parent = clang_getCursorSemanticParent(cursor);
@@ -1741,6 +1819,16 @@ CXChildVisitResult visitAst(CXCursor cursor, CXCursor,
                             CXClientData clientData) {
   auto &context = *static_cast<AstVisitorContext *>(clientData);
   CXCursorKind kind = clang_getCursorKind(cursor);
+  // Free-function bodies have no class to own a dependency. Avoid a second
+  // recursive walk through their expressions after enabling body parsing.
+  if (kind == CXCursor_FunctionDecl)
+    return CXChildVisit_Continue;
+  if (kind == CXCursor_CXXMethod || kind == CXCursor_Constructor ||
+      kind == CXCursor_Destructor || kind == CXCursor_ConversionFunction ||
+      kind == CXCursor_FunctionTemplate) {
+    discoverMethodBody(cursor, context);
+    return CXChildVisit_Continue;
+  }
   if (kind != CXCursor_ClassDecl && kind != CXCursor_StructDecl &&
       kind != CXCursor_ClassTemplate)
     return CXChildVisit_Recurse;
@@ -2245,8 +2333,7 @@ CppImportPreview discover(const QStringList &searchPaths,
     const CXErrorCode error = clang_parseTranslationUnit2FullArgv(
         index, sourceFile.constData(), argumentPointers.constData(),
         static_cast<int>(argumentPointers.size()), nullptr, 0,
-        CXTranslationUnit_SkipFunctionBodies | CXTranslationUnit_KeepGoing,
-        &translationUnit);
+        CXTranslationUnit_KeepGoing, &translationUnit);
     if (error != CXError_Success || !translationUnit) {
       preview.discoveryDiagnostics.append(
           importDiagnostic(command.bestEffort ? DiagnosticSeverity::Warning
@@ -2487,7 +2574,7 @@ CppImportPreview discover(const QStringList &searchPaths,
     int strength = 0;
   };
   QHash<QString, InferredRelationship> memberRelationships;
-  QHash<QString, InferredRelationship> signatureRelationships;
+  QHash<QString, InferredRelationship> dependencyRelationships;
   QSet<QString> memberPairs;
   QSet<QString> inheritedPairs;
   for (const auto &relationship : std::as_const(preview.relationships)) {
@@ -2508,12 +2595,21 @@ CppImportPreview discover(const QStringList &searchPaths,
 
     InferredRelationship candidate;
     candidate.use = use;
-    if (use.context == TypeUseContext::Signature) {
+    if (use.context != TypeUseContext::Member) {
       candidate.type = RelationshipType::Dependency;
       candidate.strength = 1;
       candidate.reason =
-          QStringLiteral("Referenced by an operation parameter or return type");
-      signatureRelationships.tryInsert(endpointPair, std::move(candidate));
+          use.context == TypeUseContext::Body
+              ? QStringLiteral("Referenced in a method body")
+              : QStringLiteral(
+                    "Referenced by an operation parameter or return type");
+      const auto previous = dependencyRelationships.constFind(endpointPair);
+      // Prefer public signature evidence when both kinds exist. The stable
+      // endpoint-pair identity is shared, so changing evidence is an update.
+      if (previous == dependencyRelationships.cend() ||
+          (previous->use.context == TypeUseContext::Body &&
+           use.context == TypeUseContext::Signature))
+        dependencyRelationships.insert(endpointPair, std::move(candidate));
       continue;
     }
 
@@ -2642,12 +2738,15 @@ CppImportPreview discover(const QStringList &searchPaths,
        iterator != memberRelationships.cend(); ++iterator) {
     appendInferred(iterator.value(), QStringLiteral("member"));
   }
-  for (auto iterator = signatureRelationships.cbegin();
-       iterator != signatureRelationships.cend(); ++iterator) {
+  for (auto iterator = dependencyRelationships.cbegin();
+       iterator != dependencyRelationships.cend(); ++iterator) {
     // A structural member relationship conveys more information than a
     // signature-only dependency between the same pair.
     if (!memberPairs.contains(iterator.key()))
-      appendInferred(iterator.value(), QStringLiteral("signature"));
+      appendInferred(iterator.value(),
+                     iterator->use.context == TypeUseContext::Body
+                         ? QStringLiteral("body")
+                         : QStringLiteral("signature"));
   }
 
   std::sort(preview.relationships.begin(), preview.relationships.end(),

@@ -1183,7 +1183,7 @@ class UpdateConnectorRoutesCommand final : public ProjectCommand {
 public:
   UpdateConnectorRoutesCommand(ProjectController *controller, QString diagramId,
                                QList<ConnectorRouteChange> changes,
-                               bool selectionWide);
+                               bool selectionWide, QString description = {});
 
 private:
   void execute(ProjectData &project) override;

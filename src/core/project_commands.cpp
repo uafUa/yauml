@@ -2191,9 +2191,11 @@ void SetConnectorsRoutingCommand::revert(ProjectData &project) {
 
 UpdateConnectorRoutesCommand::UpdateConnectorRoutesCommand(
     ProjectController *controller, QString diagramId,
-    QList<ConnectorRouteChange> changes, bool selectionWide)
+    QList<ConnectorRouteChange> changes, bool selectionWide,
+    QString description)
     : ProjectCommand(controller,
-                     selectionWide
+                     !description.isEmpty() ? std::move(description)
+                     : selectionWide
                          ? QStringLiteral("Route connectors around obstacles")
                          : QStringLiteral("Route connector around obstacles")),
       m_diagramId(std::move(diagramId)), m_changes(std::move(changes)) {}

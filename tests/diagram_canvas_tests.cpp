@@ -103,6 +103,15 @@ void configureCanvas(TestDiagramCanvas &canvas, ProjectController &controller) {
   canvas.setAlignmentGuidesEnabled(false);
 }
 
+void acceptSelectAllDialog(TestDiagramCanvas &canvas) {
+  QObject::connect(&canvas, &DiagramCanvas::selectAllRequested, &canvas,
+                   [&canvas](const QString &scopeId, const QString &) {
+                     canvas.selectItemsByType(QStringLiteral("all"),
+                                              QStringLiteral("all"), false,
+                                              scopeId);
+                   });
+}
+
 void useStandardInteractionGeometry(ProjectController &controller) {
   const QString diagramId = controller.data().diagrams.first().id;
   const auto nodes = controller.data().diagrams.first().nodes;
@@ -146,6 +155,8 @@ private slots:
   void automaticLayoutOptionsArrangeContainerAndRouteInOneUndoStep();
   void lassoStartsOnEmptyContainerBody();
   void contextualSelectAllUsesContainerScope();
+  void typedSelectionIsScopedAndDoesNotEditTheModel();
+  void clearingBendPointsWorksForMultipleConnectors();
   void diagramFiltersHideInteractionAndSelection();
   void diagramTypeIconVisibilityOverridesTheApplicationDefault();
   void clippedChildIsOnlyInteractiveInsideContainer();
@@ -2627,9 +2638,23 @@ void DiagramCanvasTests::contextualSelectAllUsesContainerScope() {
                diagramId, {first, second, fourth},
                itemJson(QStringLiteral("folder"), folder), 180.0, 120.0),
            5);
+  const auto nodeFor = [&](const QString &elementId) {
+    const auto &nodes = controller.data().diagrams.first().nodes;
+    return std::find_if(
+               nodes.cbegin(), nodes.cend(),
+               [&](const auto &node) { return node.elementId == elementId; })
+        ->id;
+  };
+  controller.createRelationship(diagramId, nodeFor(first), nodeFor(fourth),
+                                QStringLiteral("dependency"));
+  controller.createRelationship(diagramId, nodeFor(first), nodeFor(second),
+                                QStringLiteral("association"));
+  controller.createRelationship(diagramId, nodeFor(diagramRoot), nodeFor(first),
+                                QStringLiteral("dependency"));
 
   TestDiagramCanvas canvas;
   configureCanvas(canvas, controller);
+  acceptSelectAllDialog(canvas);
   const Diagram &diagram = controller.data().diagrams.first();
   QCOMPARE(diagram.nodes.size(), 4);
   QCOMPARE(diagram.containers.size(), 2);
@@ -2642,6 +2667,35 @@ void DiagramCanvasTests::contextualSelectAllUsesContainerScope() {
   const QPointF viewPan(30.0, 30.0);
   const QPointF frameHeader =
       rootFrame->geometry.topLeft() + QPointF(10.0, 10.0) + viewPan;
+  canvas.selectItemsByType(QStringLiteral("entities"), QStringLiteral("folder"),
+                           false, {});
+  QCOMPARE(canvas.selectedContainerCount(), 1);
+  QVERIFY(canvas.containerSelected());
+  QVERIFY(canvas.selectedContainerChildPresentationCount() > 0);
+  canvas.selectItemsByType(QStringLiteral("entities"), QStringLiteral("all"),
+                           false, rootFrame->id);
+  QCOMPARE(canvas.selectedNodeCount(), 2);
+  QCOMPARE(canvas.selectedContainerCount(), 1);
+  canvas.selectItemsByType(QStringLiteral("entities"), QStringLiteral("struct"),
+                           false, rootFrame->id);
+  QCOMPARE(canvas.selectedNodeCount(), 0);
+  canvas.selectItemsByType(QStringLiteral("entities"), QStringLiteral("struct"),
+                           true, rootFrame->id);
+  QCOMPARE(canvas.selectedNodeCount(), 1);
+  QCOMPARE(controller.selectedId(), second);
+  canvas.selectItemsByType(QStringLiteral("relations"), QStringLiteral("all"),
+                           false, rootFrame->id);
+  QCOMPARE(canvas.selectedConnectorCount(), 1);
+  canvas.selectItemsByType(QStringLiteral("relations"), QStringLiteral("all"),
+                           true, rootFrame->id);
+  QCOMPARE(canvas.selectedConnectorCount(), 2);
+  canvas.selectItemsByType(QStringLiteral("relations"), QStringLiteral("all"),
+                           false, {});
+  QCOMPARE(canvas.selectedConnectorCount(), 0);
+  canvas.selectItemsByType(QStringLiteral("relations"),
+                           QStringLiteral("dependency"), true, {});
+  QCOMPARE(canvas.selectedConnectorCount(), 2);
+  canvas.clearCanvasSelection();
   canvas.press(frameHeader);
   canvas.release(frameHeader);
   QVERIFY(canvas.containerSelected());
@@ -2693,6 +2747,114 @@ void DiagramCanvasTests::contextualSelectAllUsesContainerScope() {
   QCOMPARE(controller.data().diagrams.first(), beforeRemoval);
 }
 
+void DiagramCanvasTests::typedSelectionIsScopedAndDoesNotEditTheModel() {
+  ProjectController controller;
+  const QString id = controller.data().diagrams.first().id;
+  controller.addElement(QStringLiteral("class"), id);
+  const QString structure = controller.addElement(QStringLiteral("struct"), id);
+  controller.addElement(QStringLiteral("enumeration"), id);
+  useStandardInteractionGeometry(controller);
+  const auto nodes = controller.data().diagrams.first().nodes;
+  const QString dependency = controller.createRelationship(
+      id, nodes[0].id, nodes[1].id, QStringLiteral("dependency"));
+  controller.createRelationship(id, nodes[1].id, nodes[2].id,
+                                QStringLiteral("association"));
+  const ProjectData before = controller.data();
+  const QString undoBefore = controller.undoText();
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  QSignalSpy requests(&canvas, &DiagramCanvas::selectAllRequested);
+  canvas.key(Qt::Key_A, Qt::ControlModifier);
+  QCOMPARE(requests.size(), 1);
+  QCOMPARE(canvas.selectedNodeCount(), 0);
+  QCOMPARE(canvas.selectedConnectorCount(), 0);
+  QVERIFY(requests.first().first().toString().isEmpty());
+
+  canvas.selectItemsByType(QStringLiteral("entities"), QStringLiteral("struct"),
+                           false, {});
+  QCOMPARE(canvas.selectedNodeCount(), 1);
+  QCOMPARE(canvas.selectedConnectorCount(), 0);
+  QCOMPARE(controller.selectedId(), structure);
+  canvas.selectItemsByType(QStringLiteral("relations"),
+                           QStringLiteral("dependency"), false, {});
+  QCOMPARE(canvas.selectedNodeCount(), 0);
+  QCOMPARE(canvas.selectedConnectorCount(), 1);
+  QCOMPARE(controller.selectedId(),
+           findConnector(before.diagrams.first(), dependency)->relationshipId);
+  canvas.selectItemsByType(QStringLiteral("relations"), QStringLiteral("all"),
+                           false, {});
+  QCOMPARE(canvas.selectedConnectorCount(), 2);
+  canvas.selectItemsByType(QStringLiteral("all"), QStringLiteral("all"), false,
+                           {});
+  QCOMPARE(canvas.selectedNodeCount(), 3);
+  QCOMPARE(canvas.selectedConnectorCount(), 2);
+  canvas.selectItemsByType(QStringLiteral("entities"),
+                           QStringLiteral("package"), false, {});
+  QCOMPARE(canvas.selectedNodeCount(), 0);
+  QCOMPARE(canvas.selectedConnectorCount(), 0);
+
+  canvas.setDiagramFilter({{QStringLiteral("excludedElementTypes"),
+                            QStringList{QStringLiteral("struct")}}});
+  const ProjectData filtered = controller.data();
+  canvas.selectItemsByType(QStringLiteral("relations"), QStringLiteral("all"),
+                           true, {});
+  QCOMPARE(canvas.selectedConnectorCount(), 0);
+  QCOMPARE(controller.data(), filtered);
+  canvas.clearDiagramFilter();
+  QCOMPARE(controller.data(), before);
+  // Filter edits themselves are commands; selection has not added any.
+  controller.undo();
+  controller.undo();
+  QCOMPARE(controller.data(), before);
+  QCOMPARE(controller.undoText(), undoBefore);
+}
+
+void DiagramCanvasTests::clearingBendPointsWorksForMultipleConnectors() {
+  ProjectController controller;
+  populate(controller, 4);
+  useStandardInteractionGeometry(controller);
+  const QString id = controller.data().diagrams.first().id;
+  const auto nodes = controller.data().diagrams.first().nodes;
+  QStringList connectors;
+  for (int i = 0; i < 3; ++i) {
+    const QString connector = controller.createRelationship(
+        id, nodes[i].id, nodes[i + 1].id, QStringLiteral("dependency"));
+    connectors.append(connector);
+    controller.setConnectorRouting(id, connector,
+                                   i == 0 ? QStringLiteral("straight")
+                                          : QStringLiteral("orthogonal"));
+    if (i != 1)
+      controller.insertConnectorBendPoint(id, connector, 0, 300.0 + 250.0 * i,
+                                          250.0);
+  }
+  const ProjectData before = controller.data();
+  TestDiagramCanvas canvas;
+  configureCanvas(canvas, controller);
+  canvas.selectItemsByType(QStringLiteral("relations"), QStringLiteral("all"),
+                           false, {});
+  QCOMPARE(canvas.selectedConnectorCount(), 3);
+  QVERIFY(canvas.selectedConnectorHasBendPoints());
+  canvas.clearSelectedConnectorBendPoints();
+  QVERIFY(!canvas.selectedConnectorHasBendPoints());
+  const ProjectData cleared = controller.data();
+  for (const auto &connector : cleared.diagrams.first().connectors) {
+    QVERIFY(connector.bendPoints.isEmpty());
+    const auto *original = findConnector(before.diagrams.first(), connector.id);
+    QVERIFY(original);
+    QVERIFY(connector.routing == original->routing);
+    QCOMPARE(connector.sourceAnchor, original->sourceAnchor);
+    QCOMPARE(connector.targetAnchor, original->targetAnchor);
+  }
+  QCOMPARE(cleared.relationships, before.relationships);
+  controller.undo();
+  QCOMPARE(controller.data(), before);
+  controller.redo();
+  QCOMPARE(controller.data(), cleared);
+  const QString undo = controller.undoText();
+  canvas.clearSelectedConnectorBendPoints();
+  QCOMPARE(controller.undoText(), undo);
+}
+
 void DiagramCanvasTests::diagramFiltersHideInteractionAndSelection() {
   ProjectController controller;
   const QString diagramId = controller.data().diagrams.first().id;
@@ -2702,6 +2864,7 @@ void DiagramCanvasTests::diagramFiltersHideInteractionAndSelection() {
 
   TestDiagramCanvas canvas;
   configureCanvas(canvas, controller);
+  acceptSelectAllDialog(canvas);
   QCOMPARE(canvas.totalNodeCount(), 2);
   QCOMPARE(canvas.visibleNodeCount(), 2);
   QVERIFY(!canvas.filterActive());

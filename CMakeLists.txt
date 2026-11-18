@@ -1,6 +1,6 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(yauml VERSION 0.13.0 LANGUAGES CXX)
+project(yauml VERSION 0.14.0 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 20)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -281,6 +281,7 @@ qt_add_qml_module(yauml
         qml/DiagramNodeMenu.qml
         qml/DiagramDisplayOptionsDialog.qml
         qml/DiagramFilterDialog.qml
+        qml/DiagramSelectionDialog.qml
         qml/DiagramView.qml
         qml/DiagramWindow.qml
         qml/Main.qml

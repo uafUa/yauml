@@ -300,6 +300,10 @@ public:
                                   const QString &subjectsJson, qreal x,
                                   qreal y);
   Q_INVOKABLE void createElementAtContextPosition(const QString &type);
+  Q_INVOKABLE void requestSelectAll();
+  Q_INVOKABLE void selectItemsByType(const QString &category,
+                                     const QString &type, bool includeNested,
+                                     const QString &scopeContainerId);
   Q_INVOKABLE void
   createConnectionDestination(const QString &type,
                               const QString &relationshipType = {});
@@ -452,6 +456,8 @@ signals:
   // sequence of compact commands while the selection stays unchanged.
   void contextToolboxesDismissRequested();
   void contextMenuRequested(const QString &target, qreal x, qreal y);
+  void selectAllRequested(const QString &scopeContainerId,
+                          const QString &scopeName);
   void connectionDestinationRequested(qreal x, qreal y,
                                       const QString &relationshipType);
   void editRequested(const QString &objectId, const QString &field, int index,
@@ -645,7 +651,7 @@ private:
   void finishLassoSelection();
   void cancelLassoSelection();
   void resetLassoState();
-  void selectAllInContext();
+  QString selectionScopeContainerId() const;
   void synchronizeProjectSelection();
   QStringList selectedConnectorIdsInDiagramOrder() const;
   QStringList visibleConnectorIdsInDiagramOrder() const;

@@ -54,6 +54,12 @@ history memory grow with total project size rather than the size of each edit.
 
 ### 3.2 Diagram context menus and command routing — implemented
 
+- Class-diagram **Ctrl+A** and **Select all by type…** open a scoped selector:
+  everything, entities (all or a classifier/container/note kind), or
+  relationships (all or a UML relationship kind). The default selects only
+  the current hierarchy level. **Include nested contents** extends that scope
+  to descendants. Relationships require both endpoints in scope and visible
+  under the diagram filter; selection does not modify project data.
 - Canvas, element, connector, and tab context menus own their applicable
   diagram commands.
 - Canvas and tab diagram menus now share one component, so filtering, element
@@ -75,6 +81,8 @@ history memory grow with total project size rather than the size of each edit.
   unknown fields for forward-compatible files.
 - Context menus and connector double-click add bend points; selected bend
   handles support direct drag, Delete, individual removal, and route clearing.
+  **Clear bend points** applies to all selected connectors in one undo step,
+  preserving endpoints and straight/orthogonal routing choices.
 - Polyline-aware rendering, arrowheads, labels, hit testing, and fit-to-content
   follow edited routes.
 - Endpoint and bend-point state is preserved through node move/resize,
@@ -493,9 +501,10 @@ history memory grow with total project size rather than the size of each edit.
 ## Phase 4: C++ import and synchronization — complete
 
 - Multi-folder-first libclang AST indexing is implemented for classes, structs,
-  fields, methods, base relationships, member types, and operation-signature
-  types. A user selects one or more source folders: the Windows picker supports
-  standard multi-selection, overlapping parent/child roots are deduplicated,
+  fields, methods, base relationships, member types, operation-signature types,
+  and method-body dependencies. A user selects one or more source folders: the
+  Windows picker supports standard multi-selection, overlapping parent/child
+  roots are deduplicated,
   and unrelated sibling roots remain independently scoped. The importer
   recursively discovers C++ files, infers common include roots, tolerates
   missing external dependencies, and avoids build or vendored trees. If a
@@ -522,11 +531,13 @@ history memory grow with total project size rather than the size of each edit.
   owner to nested type. The relationship uses conventional circle-plus nesting
   notation and appears on a diagram whenever both endpoint presentations are
   present.
-- Member ownership and signature-use relationships are implemented.
+- Member ownership, signature-use, and method-body relationships are implemented.
   By-value members and configured owning pointer templates produce composition;
   configured shared pointer templates and raw pointer/reference members produce
   aggregation; unknown wrappers remain association; and parameter/return-only
-  use produces dependency. Wrapper and container mappings are editable in a
+  or method-body-only use produces dependency. Stronger structural evidence
+  suppresses redundant dependencies, and body/signature changes reuse the same
+  relationship identity. Wrapper and container mappings are editable in a
   dedicated **C++ Relationships** preferences page, including relationship
   type, source-end multiplicity, and target template argument. The table has
   duplicate validation and a restore-defaults action. Reclassification keeps
