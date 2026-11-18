@@ -497,6 +497,10 @@ Item {
             menu.open()
         }
 
+        onSelectAllRequested: function(scopeContainerId, scopeName) {
+            diagramSelectionDialog.openFor(scopeContainerId, scopeName)
+        }
+
         onConnectionDestinationRequested: function(menuX, menuY, relationshipType) {
             if (relationshipType.length > 0) {
                 classDestinationPanel.openFor(menuX, menuY, relationshipType)
@@ -510,6 +514,7 @@ Item {
         onDiagramIdChanged: {
             connectionDestinationMenu.close()
             classDestinationPanel.close()
+            diagramSelectionDialog.close()
         }
 
         onActiveFocusChanged: {
@@ -645,6 +650,7 @@ Item {
         if (!visible) {
             connectionDestinationMenu.close()
             classDestinationPanel.close()
+            diagramSelectionDialog.close()
         }
     }
 
@@ -1250,6 +1256,14 @@ Item {
 
     ProjectStereotypeDialog {
         id: diagramStereotypeDialog
+    }
+
+    DiagramSelectionDialog {
+        id: diagramSelectionDialog
+        onSelectionRequested: function(category, type, includeNested, scopeContainerId) {
+            canvas.selectItemsByType(category, type, includeNested, scopeContainerId)
+        }
+        onClosed: { if (root.visible) canvas.forceActiveFocus() }
     }
 
     DiagramFilterDialog {
@@ -2510,7 +2524,7 @@ Item {
         CatalogMenuItem {
             catalogId: "connector.clearBendPoints"
             text: qsTr("Clear bend points")
-            enabled: canvas.selectedConnectorCount === 1
+            enabled: canvas.selectedConnectorCount > 0
                      && canvas.selectedConnectorHasBendPoints
             onTriggered: canvas.clearSelectedConnectorBendPoints()
         }

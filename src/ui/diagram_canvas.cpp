@@ -2681,8 +2681,12 @@ bool DiagramCanvas::bendPointSelected() const {
 
 bool DiagramCanvas::selectedConnectorHasBendPoints() const {
   const auto *d = diagram();
-  const auto *connector = d ? findConnector(*d, m_selectedConnector) : nullptr;
-  return connector && !connector->bendPoints.isEmpty();
+  return d &&
+         std::any_of(d->connectors.cbegin(), d->connectors.cend(),
+                     [this](const ConnectorPresentation &connector) {
+                       return m_selectedConnectors.contains(connector.id) &&
+                              !connector.bendPoints.isEmpty();
+                     });
 }
 
 bool DiagramCanvas::selectedConnectorHasManualAnnotationPositions() const {
@@ -6368,10 +6372,10 @@ void DiagramCanvas::resetLassoState() {
   update();
 }
 
-void DiagramCanvas::selectAllInContext() {
+QString DiagramCanvas::selectionScopeContainerId() const {
   const auto *d = diagram();
   if (!d)
-    return;
+    return {};
 
   const auto ownerContainerId = [&](const QString &presentationId) {
     const auto owner = std::find_if(
@@ -6389,6 +6393,15 @@ void DiagramCanvas::selectAllInContext() {
     // the same one-level scope even when that level contains frames.
     QStringList selectedPresentationIds = m_selectedNodeOrder;
     selectedPresentationIds.append(m_selectedContainers.values());
+    if (selectedPresentationIds.isEmpty()) {
+      for (const auto &connector : d->connectors) {
+        if (!m_selectedConnectors.contains(connector.id))
+          continue;
+        for (const bool source : {true, false})
+          if (const auto *node = endpointNode(connector, source))
+            selectedPresentationIds.append(node->id);
+      }
+    }
     if (!selectedPresentationIds.isEmpty()) {
       scopeContainerId = ownerContainerId(selectedPresentationIds.constFirst());
       for (const QString &presentationId : selectedPresentationIds) {
@@ -6401,6 +6414,42 @@ void DiagramCanvas::selectAllInContext() {
       }
     }
   }
+  return scopeContainerId;
+}
+
+void DiagramCanvas::requestSelectAll() {
+  const auto *d = diagram();
+  if (!d || d->type != DiagramType::Class)
+    return;
+  const QString scopeId = selectionScopeContainerId();
+  const auto *scope = findContainer(*d, scopeId);
+  emit selectAllRequested(scopeId,
+                          scope ? presentation_layout::containerDisplayName(
+                                      m_project->data(), *scope)
+                                : d->name);
+}
+
+void DiagramCanvas::selectItemsByType(const QString &category,
+                                      const QString &type, bool includeNested,
+                                      const QString &scopeContainerId) {
+  const auto *d = diagram();
+  if (!d || d->type != DiagramType::Class || !m_project ||
+      (category != QStringLiteral("all") &&
+       category != QStringLiteral("entities") &&
+       category != QStringLiteral("relations")))
+    return;
+  const bool allTypes = type == QStringLiteral("all");
+  bool validType = allTypes || category == QStringLiteral("all");
+  if (!validType && category == QStringLiteral("entities")) {
+    elementTypeFromString(type, &validType);
+    validType = validType || type == QStringLiteral("folder") ||
+                type == QStringLiteral("note");
+  } else if (!validType && category == QStringLiteral("relations")) {
+    relationshipTypeFromString(type, &validType);
+  }
+  if (!validType ||
+      (!scopeContainerId.isEmpty() && !findContainer(*d, scopeContainerId)))
+    return;
 
   QSet<QString> scopedNodeIds;
   QSet<QString> scopedContainerIds;
@@ -6433,10 +6482,76 @@ void DiagramCanvas::selectAllInContext() {
       scopedNoteIds.insert(note.id);
   }
 
-  // Keep an empty selected frame active; Ctrl+A in it is a harmless no-op.
-  if (scopedNodeIds.isEmpty() && scopedContainerIds.isEmpty() &&
-      scopedNoteIds.isEmpty())
-    return;
+  if (includeNested) {
+    // Descend only inside the captured scope. A dialog opened for a selected
+    // frame must not drift to the diagram root when its selection changes.
+    QStringList pending = scopedContainerIds.values();
+    QSet<QString> visited;
+    while (!pending.isEmpty()) {
+      const QString id = pending.takeLast();
+      if (visited.contains(id))
+        continue;
+      visited.insert(id);
+      if (const auto *container = findContainer(*d, id)) {
+        for (const QString &childId : container->childPresentationIds) {
+          if (const auto *node = findNode(*d, childId)) {
+            if (nodePassesFilter(*node))
+              scopedNodeIds.insert(childId);
+          } else if (findContainer(*d, childId)) {
+            scopedContainerIds.insert(childId);
+            pending.append(childId);
+          }
+        }
+      }
+    }
+  }
+
+  QSet<QString> connectors;
+  if (category != QStringLiteral("entities")) {
+    const ui::DiagramClipLayout clipLayout(*d, m_previewGeometry);
+    for (const auto &connector : d->connectors) {
+      const auto *source = endpointNode(connector, true);
+      const auto *target = endpointNode(connector, false);
+      const auto *relationship =
+          findRelationship(m_project->data(), connector.relationshipId);
+      if (source && target && relationship &&
+          scopedNodeIds.contains(source->id) &&
+          scopedNodeIds.contains(target->id) &&
+          connectorPassesFilter(connector, clipLayout) &&
+          (category == QStringLiteral("all") || allTypes ||
+           toString(relationship->type) == type))
+        connectors.insert(connector.id);
+    }
+  }
+  if (category == QStringLiteral("relations")) {
+    scopedNodeIds.clear();
+    scopedContainerIds.clear();
+    scopedNoteIds.clear();
+  } else if (category == QStringLiteral("entities") && !allTypes) {
+    for (auto id = scopedNodeIds.begin(); id != scopedNodeIds.end();) {
+      const auto *node = findNode(*d, *id);
+      const auto *element =
+          node ? findElement(m_project->data(), node->elementId) : nullptr;
+      if (!element || toString(element->type) != type)
+        id = scopedNodeIds.erase(id);
+      else
+        ++id;
+    }
+    for (auto id = scopedContainerIds.begin();
+         id != scopedContainerIds.end();) {
+      const auto *container = findContainer(*d, *id);
+      const QString containerType =
+          container && container->subjectKind == QStringLiteral("package")
+              ? QStringLiteral("package")
+              : QStringLiteral("folder");
+      if (containerType != type)
+        id = scopedContainerIds.erase(id);
+      else
+        ++id;
+    }
+    if (type != QStringLiteral("note"))
+      scopedNoteIds.clear();
+  }
 
   clearRelationshipToolboxCandidate();
   clearArrangementToolboxCandidate(true);
@@ -6452,11 +6567,17 @@ void DiagramCanvas::selectAllInContext() {
       m_selectedNodeOrder.append(node.id);
   m_selectedContainers = std::move(scopedContainerIds);
   m_selectedContainer.clear();
-  m_selectedConnectors.clear();
+  m_selectedConnectors = std::move(connectors);
   m_selectedConnector.clear();
+  for (const auto &connector : d->connectors)
+    if (m_selectedConnectors.contains(connector.id))
+      m_selectedConnector = connector.id;
   m_selectedNotes = std::move(scopedNoteIds);
   m_selectedNote =
       m_selectedNotes.isEmpty() ? QString{} : *m_selectedNotes.constBegin();
+  if (m_selectedContainers.size() == 1 && m_selectedNodes.isEmpty() &&
+      m_selectedConnectors.isEmpty() && m_selectedNotes.isEmpty())
+    m_selectedContainer = *m_selectedContainers.constBegin();
   m_selectedBendPoint = -1;
   m_endpointDragTargetNode.clear();
   m_endpointDragActive = false;
@@ -7128,9 +7249,10 @@ void DiagramCanvas::removeSelectedBendPoint() {
 }
 
 void DiagramCanvas::clearSelectedConnectorBendPoints() {
-  if (!m_project || m_selectedConnector.isEmpty())
+  if (!m_project || m_selectedConnectors.isEmpty())
     return;
-  m_project->clearConnectorBendPoints(m_diagramId, m_selectedConnector);
+  m_project->clearConnectorsBendPoints(m_diagramId,
+                                       m_selectedConnectors.values());
   m_selectedBendPoint = -1;
   m_sceneDirty = true;
   m_textDirty = true;
@@ -9737,7 +9859,7 @@ void DiagramCanvas::keyPressEvent(QKeyEvent *event) {
     return;
   }
   if (event->matches(QKeySequence::SelectAll)) {
-    selectAllInContext();
+    requestSelectAll();
     event->accept();
     return;
   }

@@ -118,6 +118,8 @@ private slots:
   void cppImportAssignsLocalStereotypeToImplementationTypes();
   void cppInterfacePatternClassifiesRealization();
   void cppImportClassifiesMemberOwnershipAndDependencies();
+  void cppImportDiscoversMethodBodyDependencies_data();
+  void cppImportDiscoversMethodBodyDependencies();
   void cppImportCreatesNestedTypeContainment();
   void cppImportScansSourceFolderWithoutBuildMetadata();
   void cppImportDisambiguatesRecoveredOverloads();
@@ -3247,6 +3249,163 @@ void CoreTests::cppImportClassifiesMemberOwnershipAndDependencies() {
       });
   QVERIFY(updatedOwned != imported.relationships.cend());
   QVERIFY(updatedOwned->type == RelationshipType::Association);
+}
+
+void CoreTests::cppImportDiscoversMethodBodyDependencies_data() {
+  QTest::addColumn<bool>("withCompilationDatabase");
+  QTest::newRow("source folders") << false;
+  QTest::newRow("compilation database") << true;
+}
+
+void CoreTests::cppImportDiscoversMethodBodyDependencies() {
+  if (!CppImportService::available())
+    QSKIP("This build was configured without libclang");
+  QFETCH(bool, withCompilationDatabase);
+  QTemporaryDir sourceDirectory;
+  QVERIFY(sourceDirectory.isValid());
+  const QString headerPath = sourceDirectory.filePath(QStringLiteral("body.h"));
+  const QString cppPath = sourceDirectory.filePath(QStringLiteral("body.cpp"));
+  QByteArray header("namespace body {\n"
+                    "struct InlineOnly {};\n"
+                    "struct ImplementationOnly {};\n"
+                    "struct PointerOnly {};\n"
+                    "struct StaticOnly { static void touch(); };\n"
+                    "struct FactoryOnly {}; FactoryOnly make();\n"
+                    "struct LambdaOnly {};\n"
+                    "struct MemberPart {};\n"
+                    "struct SignaturePart {};\n"
+                    "struct Unrelated {};\n"
+                    "struct Consumer {\n"
+                    "  MemberPart member;\n"
+                    "  void work();\n"
+                    "  void inlineWork() { InlineOnly value; }\n"
+                    "  SignaturePart echo(SignaturePart);\n"
+                    "};\n"
+                    "}\n");
+  QByteArray implementation(
+      "#include \"body.h\"\n"
+      "namespace body {\n"
+      "void Consumer::work() {\n"
+      "  ImplementationOnly local;\n"
+      "  PointerOnly *pointer = nullptr;\n"
+      "  StaticOnly::touch();\n"
+      "  auto result = make();\n"
+      "  auto callback = [] { LambdaOnly value; };\n"
+      "  InlineOnly repeated;\n"
+      "  MemberPart part;\n"
+      "  SignaturePart argument;\n"
+      "  struct LocalClass { void ignored() { Unrelated value; } };\n"
+      "}\n"
+      "void freeFunction() { Unrelated value; }\n"
+      "}\n");
+  writeTestFile(headerPath, header);
+  writeTestFile(cppPath, implementation);
+  if (withCompilationDatabase) {
+    writeTestFile(
+        sourceDirectory.filePath(QStringLiteral("compile_commands.json")),
+        QJsonDocument(QJsonArray{QJsonObject{
+                          {QStringLiteral("directory"), sourceDirectory.path()},
+                          {QStringLiteral("file"), cppPath},
+                          {QStringLiteral("arguments"),
+                           QJsonArray{QStringLiteral("clang++"),
+                                      QStringLiteral("-std=c++20"), cppPath}}}})
+            .toJson());
+  }
+  const auto scan = [&](const ProjectData &project) {
+    return CppImportService::preview(sourceDirectory.path(), project.elements,
+                                     project.relationships);
+  };
+  ProjectData project = createStarterProject();
+  const auto preview = scan(project);
+  QVERIFY(preview.ok);
+  const auto relationTo = [](const CppImportPreview &result,
+                             const QString &target) {
+    return std::find_if(
+        result.relationships.cbegin(), result.relationships.cend(),
+        [&](const CppSourceRelationship &r) {
+          return r.sourceName == QStringLiteral("body::Consumer") &&
+                 r.targetName == target;
+        });
+  };
+  for (const QString &name :
+       {QStringLiteral("InlineOnly"), QStringLiteral("ImplementationOnly"),
+        QStringLiteral("PointerOnly"), QStringLiteral("StaticOnly"),
+        QStringLiteral("FactoryOnly"), QStringLiteral("LambdaOnly")}) {
+    const auto relation = relationTo(preview, QStringLiteral("body::") + name);
+    QVERIFY2(relation != preview.relationships.cend(), qPrintable(name));
+    QVERIFY(relation->relationshipType == RelationshipType::Dependency);
+    QCOMPARE(relation->evidenceKind, QStringLiteral("body"));
+    QCOMPARE(relation->filePath,
+             name == QStringLiteral("InlineOnly") ? headerPath : cppPath);
+    QVERIFY(relation->line > 0);
+    QVERIFY(relation->sourceRole.isEmpty());
+  }
+  QCOMPARE(
+      relationTo(preview, QStringLiteral("body::ImplementationOnly"))->line, 4);
+  const auto member = relationTo(preview, QStringLiteral("body::MemberPart"));
+  const auto parameter =
+      relationTo(preview, QStringLiteral("body::SignaturePart"));
+  QVERIFY(member != preview.relationships.cend());
+  QVERIFY(parameter != preview.relationships.cend());
+  QVERIFY(member->relationshipType == RelationshipType::Composition);
+  QCOMPARE(parameter->evidenceKind, QStringLiteral("signature"));
+  QVERIFY(relationTo(preview, QStringLiteral("body::Unrelated")) ==
+          preview.relationships.cend());
+  QCOMPARE(std::count_if(
+               preview.relationships.cbegin(), preview.relationships.cend(),
+               [](const CppSourceRelationship &r) {
+                 return r.sourceName == QStringLiteral("body::Consumer") &&
+                        r.targetName == QStringLiteral("body::InlineOnly");
+               }),
+           1);
+  QVERIFY(CppImportService::apply(project, preview) > 0);
+  const auto unchanged = scan(project);
+  QVERIFY(unchanged.ok);
+  QCOMPARE(unchanged.applicableCount(), 0);
+  QCOMPARE(unchanged.conflictCount(), 0);
+
+  // A declaration added to the public signature reuses the body dependency,
+  // rather than making a second relation with a new model identity.
+  const QString symbol =
+      relationTo(preview, QStringLiteral("body::ImplementationOnly"))->symbolId;
+  const auto imported =
+      std::find_if(project.relationships.cbegin(), project.relationships.cend(),
+                   [&](const Relationship &r) {
+                     return r.extra.value(QStringLiteral("sourceBinding"))
+                                .toObject()
+                                .value(QStringLiteral("symbolId"))
+                                .toString() == symbol;
+                   });
+  QVERIFY(imported != project.relationships.cend());
+  const QString relationId = imported->id;
+  header.replace("  void work();",
+                 "  void work();\n  ImplementationOnly get();");
+  writeTestFile(headerPath, header);
+  const auto signature = scan(project);
+  QVERIFY(signature.ok);
+  const auto updated = std::find_if(signature.relationshipItems.cbegin(),
+                                    signature.relationshipItems.cend(),
+                                    [&](const CppRelationshipImportItem &item) {
+                                      return item.source.symbolId == symbol;
+                                    });
+  QVERIFY(updated != signature.relationshipItems.cend());
+  QCOMPARE(updated->existingRelationshipId, relationId);
+  QCOMPARE(updated->source.evidenceKind, QStringLiteral("signature"));
+  CppImportService::apply(project, signature);
+
+  implementation.replace("  PointerOnly *pointer = nullptr;\n", "");
+  writeTestFile(cppPath, implementation);
+  const auto missing = scan(project);
+  QVERIFY(missing.ok);
+  QVERIFY(std::any_of(
+      missing.relationshipItems.cbegin(), missing.relationshipItems.cend(),
+      [](const CppRelationshipImportItem &item) {
+        return item.source.targetName == QStringLiteral("body::PointerOnly") &&
+               item.action == CppImportAction::MissingSource;
+      }));
+  QTemporaryDir saved;
+  QVERIFY(ProjectSerializer::save(saved.path(), project).ok);
+  QVERIFY(ProjectSerializer::load(saved.path()).ok);
 }
 
 void CoreTests::cppImportCreatesNestedTypeContainment() {

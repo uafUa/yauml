@@ -1,56 +1,62 @@
 # Current development handover
 
-Last refreshed: 2026-11-12
+Last refreshed: 2026-11-18
 
-This revision prepares yauml **v0.13.0** on the stable Windows x64 channel.
-Check the [GitHub release](https://github.com/uafUa/yauml/releases/tag/v0.13.0)
-and the tag workflow for actual publication and deployment status. The stable
+This revision prepares **v0.14.0** for the stable Windows x64 channel. Check
+the [release](https://github.com/uafUa/yauml/releases/tag/v0.14.0) and tag workflow
+for actual publication and update-site deployment status. Read the stable
 [development context](development-context.md) and [agent protocol](../AGENTS.md)
-explain how to continue on another machine.
+before continuing. Do not commit the local `tst/` project.
 
 ## Delivered in this slice
 
-- **Activity diagrams** support manual workflow authoring with UML action and
-  control nodes, editable flow guards, Shift-drag with destination creation,
-  mixed selection, group arrangement, undo/redo, and PNG/PDF export. See
-  [activity diagrams](activity-diagrams.md).
-- Class-diagram connectors can create their destination on drop, with a
-  relationship-type picker. The edge toolbox supports click-to-place as well
-  as drag-to-place. Diagram menus show creation actions first.
-- Sequence diagrams render wide labels in bounded atlas tiles, fit combined
-  fragments around complete self-message loops, and put the fragment heading
-  above the message label. Pointer hit tests use the arrow or the visible
-  label. Stored message coordinates and ranges are unchanged.
-- The Windows installer and portable ZIP bundle the sequence authoring skill,
-  interchange format, and standalone example. Installer verification targets
-  its temporary install instead of replacing an existing copy.
-- The repo includes its stable context, rolling handover, Windows and WSL
-  runbook, PR-first submission policy, and LF canonical EOL policy.
+- Class-diagram **Ctrl+A** or **Select all by type…** opens a modal selector.
+  Choose everything, entities (all or a type), or relationships (all or a
+  relationship type). The captured scope is the selected container, the common
+  owner of selected presentations, or the diagram root. Selection is one level
+  deep unless **Include nested contents** is checked. A relationship requires
+  both endpoint presentations in scope. Diagram filters still apply. Enter
+  accepts and Escape cancels. Sequence/activity Ctrl+A is unchanged.
+- Libclang parses method bodies and records `body` evidence for type usage in
+  inline/out-of-line methods, local variables, expressions, static calls, and
+  lambdas. The semantic method owner is the dependency source. Free-function
+  and function-local class bodies are not attributed to that outer class.
+  Signature evidence takes priority, and structural member/inheritance
+  relations suppress redundant dependencies. Body/signature changes reuse the
+  existing endpoint-pair identity and user-authority policy.
+- **Clear bend points** applies to every selected connector as one route-delta
+  undo command, without changing routing mode, endpoints, or semantic
+  relationships. Selection containing connectors without bends is allowed.
 
-## Compatibility
-
-Project schema 13 adds the diagram-local activity graph. Existing projects
-migrate in memory without altering class or sequence diagram records. Saving
-writes schema 13; those saves cannot be opened in yauml 0.12.0 or older. There
-is no change to the sequence interchange format.
+Durable behavior is recorded in
+[ADR 005](adr/005-cpp-import-authority.md) and the
+[productization plan](productization-plan.md).
 
 ## Validation baseline
 
-- MSVC 2022 x64 Release, Qt 6.11.1, libclang required:
-  `cmake --build build-release --config Release --parallel -- /v:quiet` and
-  `ctest --test-dir build-release -C Release --output-on-failure --timeout 60`
-  passed all 11 tests for the bumped version.
-- Local Markdown link targets, Windows/WSL 2 Git status, index EOL counts,
-  and both diff checks were verified. Two existing CRLF worktree SVGs match
-  their LF index blobs after canonical conversion. No mass normalization.
-- The release workflow gates publication on a clean Windows Server 2022 build
-  with Qt 6.10.3, CTest, portable package checks, and IFW installer lifecycle
-  verification. See [release instructions](releasing.md).
+MSVC 2022 x64 Release, Qt 6.11.1, libclang required:
 
-## Resume guidance
+```powershell
+cmake --build build-release --config Release --parallel -- /v:quiet
+ctest --test-dir build-release -C Release --output-on-failure --timeout 60
+```
 
-No next feature has been selected. For activity-diagram work, choose a real
-workflow before extending the baseline to partitions, object flows, source
-links, interchange, or SVG/Draw.io export. Sequence import and editing
-guidance is in the [interchange specification](sequence-diagram-import.md).
-The installer remains unsigned. Do not commit the local `tst/` project.
+All 11 CTest entries passed. Focused tests cover dialog acceptance/cancellation,
+container and recursive scopes, typed/filter-aware selection, multi-connector
+clear with undo/redo, and body dependencies in both source-folder and
+compilation-database modes. Import tests also cover deduplication, repeat sync,
+body-to-signature identity, source locations, missing-source reporting, and
+persistence. Git diff checks pass. No user project data was edited during
+validation. Local Markdown links resolve, and Windows/WSL Git status and diff
+checks agree. The release workflow must also pass its clean Windows build,
+CTest, portable-package checks, and installer lifecycle tests before publishing.
+
+## Compatibility and resume
+
+The application is 0.14.0 and project schema stays at 13. New body evidence
+uses the existing extensible binding metadata; no migration is needed. A fresh
+C++ scan/synchronization is required to discover these additional dependencies.
+Full body parsing may take longer and expose additional parser diagnostics;
+best-effort include/define limitations still apply.
+
+No next slice is selected. Await user feedback. The installer remains unsigned.

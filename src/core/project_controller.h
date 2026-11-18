@@ -491,6 +491,8 @@ public:
                                             int index);
   Q_INVOKABLE void clearConnectorBendPoints(const QString &diagramId,
                                             const QString &connectorId);
+  void clearConnectorsBendPoints(const QString &diagramId,
+                                 const QStringList &connectorIds);
   Q_INVOKABLE void setConnectorAnnotationPlacement(const QString &diagramId,
                                                    const QString &connectorId,
                                                    const QString &annotationKey,

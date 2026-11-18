@@ -6294,13 +6294,29 @@ void ProjectController::removeConnectorBendPoint(const QString &diagramId,
 
 void ProjectController::clearConnectorBendPoints(const QString &diagramId,
                                                  const QString &connectorId) {
+  clearConnectorsBendPoints(diagramId, {connectorId});
+}
+
+void ProjectController::clearConnectorsBendPoints(
+    const QString &diagramId, const QStringList &connectorIds) {
   const auto *diagram = findDiagram(m_data, diagramId);
-  const auto *connector =
-      diagram ? findConnector(*diagram, connectorId) : nullptr;
-  if (!connector || connector->bendPoints.isEmpty())
+  if (!diagram || connectorIds.isEmpty())
     return;
-  updateConnectorBendPoints(diagramId, connectorId, {},
-                            QStringLiteral("Clear connector bend points"));
+  const QSet<QString> requested(connectorIds.cbegin(), connectorIds.cend());
+  QList<ConnectorRouteChange> changes;
+  for (const auto &connector : diagram->connectors) {
+    if (requested.contains(connector.id) && !connector.bendPoints.isEmpty())
+      changes.append({connector.id,
+                      connector.routing,
+                      connector.routing,
+                      connector.bendPoints,
+                      {}});
+  }
+  if (changes.isEmpty())
+    return;
+  pushCommand(std::make_unique<UpdateConnectorRoutesCommand>(
+      this, diagramId, std::move(changes), requested.size() > 1,
+      QStringLiteral("Clear connector bend points")));
 }
 
 void ProjectController::setConnectorAnnotationPlacement(

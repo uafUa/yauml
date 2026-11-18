@@ -122,6 +122,12 @@ Menu {
         onTriggered: root.displayOptionsRequested()
     }
     MenuItem {
+        text: qsTr("Select all by type…")
+        visible: root.structuralDiagram
+        height: visible ? implicitHeight : 0
+        onTriggered: root.canvas.requestSelectAll()
+    }
+    MenuItem {
         text: root.canvasAvailable && root.canvas.filterActive
               ? qsTr("Edit active filter…") : qsTr("Filter items…")
         visible: root.structuralDiagram
