@@ -118,6 +118,8 @@ private slots:
   void cppImportAssignsLocalStereotypeToImplementationTypes();
   void cppInterfacePatternClassifiesRealization();
   void cppImportClassifiesMemberOwnershipAndDependencies();
+  void cppImportConnectsTemplateDeclarations_data();
+  void cppImportConnectsTemplateDeclarations();
   void cppImportDiscoversMethodBodyDependencies_data();
   void cppImportDiscoversMethodBodyDependencies();
   void cppImportCreatesNestedTypeContainment();
@@ -3249,6 +3251,260 @@ void CoreTests::cppImportClassifiesMemberOwnershipAndDependencies() {
       });
   QVERIFY(updatedOwned != imported.relationships.cend());
   QVERIFY(updatedOwned->type == RelationshipType::Association);
+}
+
+void CoreTests::cppImportConnectsTemplateDeclarations_data() {
+  QTest::addColumn<bool>("withCompilationDatabase");
+  QTest::newRow("source folders") << false;
+  QTest::newRow("compilation database") << true;
+}
+
+void CoreTests::cppImportConnectsTemplateDeclarations() {
+  if (!CppImportService::available())
+    QSKIP("This build was configured without libclang");
+  QFETCH(bool, withCompilationDatabase);
+  QTemporaryDir sources;
+  QVERIFY(sources.isValid());
+  const QString path = sources.filePath(QStringLiteral("templates.cpp"));
+  QByteArray code(
+      "namespace templ {\n"
+      "class Arg {};\n"
+      "template<int N> class Number {};\n"
+      "template<class T> class Typed {};\n"
+      "template<class T, int N> class Mixed {};\n"
+      "template<int N = 4> class Defaulted {};\n"
+      "template<class... Ts> class Pack {};\n"
+      "template<class T> class Partial {};\n"
+      "template<class T> class Partial<T*> {};\n"
+      "using Alias = Number<4>;\n"
+      "template<int N> using AliasTemplate = Number<N>;\n"
+      "template<int N> class Dependent { Number<N> number; };\n"
+      "template<class T> class DependentType { Typed<T> value; };\n"
+      "class Value {\n"
+      "  Number<4> number;\n"
+      "  Typed<Arg> typed;\n"
+      "  Mixed<Arg, 7> mixed;\n"
+      "  Defaulted<> defaults;\n"
+      "  Pack<> empty;\n"
+      "  Partial<Arg*> partial;\n"
+      "  Alias alias;\n"
+      "  AliasTemplate<9> aliasTemplate;\n"
+      "};\n"
+      "class Indirect { Number<4> *pointer; Typed<Arg> &reference; };\n"
+      "class Array { Number<4> values[3]; };\n"
+      "class Body { public: void run() { Number<4> n; Typed<Arg> t; } };\n"
+      "class Signature { Number<4> make(Typed<Arg> value); };\n"
+      "class Derived : public Number<4> {};\n"
+      "}\n");
+  writeTestFile(path, code);
+  if (withCompilationDatabase) {
+    writeTestFile(
+        sources.filePath(QStringLiteral("compile_commands.json")),
+        QJsonDocument(QJsonArray{QJsonObject{
+                          {QStringLiteral("directory"), sources.path()},
+                          {QStringLiteral("file"), path},
+                          {QStringLiteral("arguments"),
+                           QJsonArray{QStringLiteral("clang++"),
+                                      QStringLiteral("-std=c++20"), path}}}})
+            .toJson());
+  }
+  ProjectController controller;
+  const auto scan = [&] {
+    return CppImportService::preview(sources.path(), controller.data().elements,
+                                     controller.data().relationships);
+  };
+  const auto preview = scan();
+  QVERIFY(preview.ok);
+  QCOMPARE(preview.usedCompilationDatabase, withCompilationDatabase);
+  const auto relation = [](const CppImportPreview &result,
+                           const QString &source, const QString &target,
+                           const QString &role = {}) {
+    return std::find_if(
+        result.relationships.cbegin(), result.relationships.cend(),
+        [&](const CppSourceRelationship &r) {
+          return r.sourceName == QStringLiteral("templ::") + source &&
+                 r.targetName == QStringLiteral("templ::") + target &&
+                 r.sourceRole == role;
+        });
+  };
+  const auto verify = [&](const QString &source, const QString &target,
+                          RelationshipType type, const QString &role,
+                          const QString &multiplicity) {
+    const auto found = relation(preview, source, target, role);
+    QVERIFY2(
+        found != preview.relationships.cend(),
+        qPrintable(source + QStringLiteral(" -> ") + target + u':' + role));
+    QVERIFY(found->relationshipType == type);
+    QCOMPARE(found->sourceMultiplicity, multiplicity);
+    QCOMPARE(found->filePath, path);
+    QVERIFY(found->line > 0);
+  };
+  verify(QStringLiteral("Value"), QStringLiteral("Number"),
+         RelationshipType::Composition, QStringLiteral("number"),
+         QStringLiteral("1"));
+  verify(QStringLiteral("Value"), QStringLiteral("Number"),
+         RelationshipType::Composition, QStringLiteral("alias"),
+         QStringLiteral("1"));
+  verify(QStringLiteral("Value"), QStringLiteral("Number"),
+         RelationshipType::Composition, QStringLiteral("aliasTemplate"),
+         QStringLiteral("1"));
+  verify(QStringLiteral("Value"), QStringLiteral("Typed"),
+         RelationshipType::Composition, QStringLiteral("typed"),
+         QStringLiteral("1"));
+  verify(QStringLiteral("Value"), QStringLiteral("Mixed"),
+         RelationshipType::Composition, QStringLiteral("mixed"),
+         QStringLiteral("1"));
+  verify(QStringLiteral("Value"), QStringLiteral("Defaulted"),
+         RelationshipType::Composition, QStringLiteral("defaults"),
+         QStringLiteral("1"));
+  verify(QStringLiteral("Value"), QStringLiteral("Pack"),
+         RelationshipType::Composition, QStringLiteral("empty"),
+         QStringLiteral("1"));
+  verify(QStringLiteral("Value"), QStringLiteral("Partial"),
+         RelationshipType::Composition, QStringLiteral("partial"),
+         QStringLiteral("1"));
+  verify(QStringLiteral("Dependent"), QStringLiteral("Number"),
+         RelationshipType::Composition, QStringLiteral("number"),
+         QStringLiteral("1"));
+  verify(QStringLiteral("DependentType"), QStringLiteral("Typed"),
+         RelationshipType::Composition, QStringLiteral("value"),
+         QStringLiteral("1"));
+  verify(QStringLiteral("Indirect"), QStringLiteral("Number"),
+         RelationshipType::Aggregation, QStringLiteral("pointer"),
+         QStringLiteral("0..1"));
+  verify(QStringLiteral("Indirect"), QStringLiteral("Typed"),
+         RelationshipType::Aggregation, QStringLiteral("reference"),
+         QStringLiteral("1"));
+  verify(QStringLiteral("Array"), QStringLiteral("Number"),
+         RelationshipType::Composition, QStringLiteral("values"),
+         QStringLiteral("3"));
+  for (const QString &source :
+       {QStringLiteral("Body"), QStringLiteral("Signature")}) {
+    for (const QString &target :
+         {QStringLiteral("Number"), QStringLiteral("Typed")}) {
+      verify(source, target, RelationshipType::Dependency, {}, {});
+      QCOMPARE(std::count_if(
+                   preview.relationships.cbegin(), preview.relationships.cend(),
+                   [&](const CppSourceRelationship &r) {
+                     return r.sourceName ==
+                                QStringLiteral("templ::") + source &&
+                            r.targetName == QStringLiteral("templ::") + target;
+                   }),
+               1);
+    }
+  }
+  verify(QStringLiteral("Derived"), QStringLiteral("Number"),
+         RelationshipType::Generalization, {}, {});
+  verify(QStringLiteral("Value"), QStringLiteral("Arg"),
+         RelationshipType::Association, QStringLiteral("typed"),
+         QStringLiteral("1"));
+  verify(QStringLiteral("Value"), QStringLiteral("Arg"),
+         RelationshipType::Association, QStringLiteral("mixed"),
+         QStringLiteral("1"));
+
+  const auto templateSymbol = std::find_if(
+      preview.symbols.cbegin(), preview.symbols.cend(),
+      [](const CppSourceSymbol &symbol) {
+        return symbol.qualifiedName == QStringLiteral("templ::Number");
+      });
+  QVERIFY(templateSymbol != preview.symbols.cend());
+  QCOMPARE(relation(preview, QStringLiteral("Value"), QStringLiteral("Number"),
+                    QStringLiteral("number"))
+               ->targetSymbolId,
+           templateSymbol->symbolId);
+
+  // Simulate an older import which had only the argument-type relationships.
+  // Adding template endpoints must not replace or duplicate those records.
+  auto legacyDiscovery = preview;
+  legacyDiscovery.relationships.removeIf([](const CppSourceRelationship &r) {
+    return r.targetName != QStringLiteral("templ::Arg");
+  });
+  ProjectData legacy = createStarterProject();
+  const auto legacyPlan = CppImportService::replan(legacyDiscovery, {}, {});
+  QVERIFY(CppImportService::apply(legacy, legacyPlan) > 0);
+  const auto upgrade =
+      CppImportService::replan(preview, legacy.elements, legacy.relationships);
+  QVERIFY(upgrade.ok);
+  for (const auto &old : legacy.relationships) {
+    const auto retained = std::find_if(
+        upgrade.relationshipItems.cbegin(), upgrade.relationshipItems.cend(),
+        [&](const CppRelationshipImportItem &item) {
+          return item.existingRelationshipId == old.id;
+        });
+    QVERIFY(retained != upgrade.relationshipItems.cend());
+    QVERIFY(retained->action == CppImportAction::Unchanged);
+    QCOMPARE(retained->desiredRelationship.id, old.id);
+  }
+
+  const ProjectData before = controller.data();
+  QCOMPARE(controller.applyCppImportPlan(preview), preview.applicableCount());
+  const ProjectData imported = controller.data();
+  controller.undo();
+  QCOMPARE(controller.data(), before);
+  controller.redo();
+  QCOMPARE(controller.data(), imported);
+  const auto repeat = scan();
+  QVERIFY(repeat.ok);
+  QCOMPARE(repeat.applicableCount(), 0);
+  QCOMPARE(repeat.conflictCount(), 0);
+  QCOMPARE(repeat.missingSourceCount(), 0);
+
+  // Existing argument relations retain their identities and ownership rules.
+  // A configured policy classifies the argument, not the wrapper object itself.
+  CppImportOptions options;
+  options.memberTypeRules.append({QStringLiteral("templ::Typed"),
+                                  RelationshipType::Aggregation,
+                                  QStringLiteral("0..1"), 1});
+  const auto configured = CppImportService::preview(
+      sources.path(), imported.elements, imported.relationships, options);
+  QVERIFY(configured.ok);
+  const auto own = relation(configured, QStringLiteral("Value"),
+                            QStringLiteral("Typed"), QStringLiteral("typed"));
+  const auto argument =
+      relation(configured, QStringLiteral("Value"), QStringLiteral("Arg"),
+               QStringLiteral("typed"));
+  QVERIFY(own != configured.relationships.cend());
+  QVERIFY(argument != configured.relationships.cend());
+  QVERIFY(own->relationshipType == RelationshipType::Composition);
+  QCOMPARE(own->sourceMultiplicity, QStringLiteral("1"));
+  QVERIFY(argument->relationshipType == RelationshipType::Aggregation);
+  QCOMPARE(argument->sourceMultiplicity, QStringLiteral("0..1"));
+  QCOMPARE(argument->symbolId,
+           relation(preview, QStringLiteral("Value"), QStringLiteral("Arg"),
+                    QStringLiteral("typed"))
+               ->symbolId);
+
+  const auto originalItem = std::find_if(
+      repeat.relationshipItems.cbegin(), repeat.relationshipItems.cend(),
+      [](const CppRelationshipImportItem &item) {
+        return item.source.sourceName == QStringLiteral("templ::Value") &&
+               item.source.targetName == QStringLiteral("templ::Number") &&
+               item.source.sourceRole == QStringLiteral("number");
+      });
+  QVERIFY(originalItem != repeat.relationshipItems.cend());
+  const QString originalId = originalItem->existingRelationshipId;
+  QVERIFY(!originalId.isEmpty());
+  code.replace("  Number<4> number;", "  Number<11> number;");
+  writeTestFile(path, code);
+  const auto changed = scan();
+  QVERIFY(changed.ok);
+  const auto changedItem = std::find_if(
+      changed.relationshipItems.cbegin(), changed.relationshipItems.cend(),
+      [&](const CppRelationshipImportItem &item) {
+        return item.source.symbolId == originalItem->source.symbolId;
+      });
+  QVERIFY(changedItem != changed.relationshipItems.cend());
+  QVERIFY(changedItem->action == CppImportAction::Unchanged);
+  QCOMPARE(changedItem->existingRelationshipId, originalId);
+  controller.applyCppImportPlan(changed);
+  QCOMPARE(controller.data().relationships.size(),
+           imported.relationships.size());
+  QTemporaryDir saved;
+  QVERIFY(saved.isValid());
+  QVERIFY(ProjectSerializer::save(saved.path(), controller.data()).ok);
+  const auto reloaded = ProjectSerializer::load(saved.path());
+  QVERIFY(reloaded.ok);
+  QVERIFY(findRelationship(reloaded.project, originalId));
 }
 
 void CoreTests::cppImportDiscoversMethodBodyDependencies_data() {

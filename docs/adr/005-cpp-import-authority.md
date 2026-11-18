@@ -102,6 +102,17 @@ evidence is a member, operation signature, or method body. Preference-driven or
 source-driven reclassification updates the existing relationship through the
 same baseline and conflict rules.
 
+A use of an imported class template creates a relationship to that template's
+primary declaration independently of whether its arguments are types, values,
+or an empty pack. Clang specialization identity is mapped back to the template
+declaration, including uses through aliases and partial specializations. A
+by-value field owns one template object; a numeric template argument does not
+itself define the multiplicity of this relationship. Array bounds still do.
+Existing traversal into type arguments is retained separately, with the
+configured wrapper rules applied only to those contained types. An outer
+pointer or container can still classify ownership of the template object.
+Template base classes use the same declaration identity for inheritance.
+
 When a bound declaration or relationship disappears from discovery, it is
 reported but not deleted unless a unique, high-confidence rename/move match is
 available. This prevents incomplete best-effort parsing or a partial

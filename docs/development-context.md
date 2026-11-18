@@ -19,7 +19,7 @@ capability ledger is [`productization-plan.md`](productization-plan.md).
 
 ## Current baseline
 
-- Application version: `0.14.0` in `CMakeLists.txt`.
+- Application version: `0.14.1` in `CMakeLists.txt`.
 - Project schema: `13` in `src/core/project_schema_version.h`.
 - Primary platform: Windows x64, MSVC 2022, Qt 6.
 - C++ baseline: C++20.
